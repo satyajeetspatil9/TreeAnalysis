@@ -1,0 +1,24 @@
+-- =============================================================================
+-- README: Apply migrations in Supabase SQL Editor in this order:
+-- 001_tree_positions.sql
+-- 002_sensors_weather_recommendations.sql
+-- 003_rls_policies.sql
+-- 004_triggers_and_views.sql
+-- 005_extended_rls.sql
+-- 006_lot_rows.sql — many rows per lot (L01 spans R01–R08)
+-- 007_tree_varieties.sql — configurable varieties per farm
+-- 008_fix_irrigation_rls.sql — irrigation RLS fixes
+-- 009_farm_soil_lab_reports.sql — farm-wide lab micronutrients
+-- 010_fix_soil_observations_rls.sql — soil sensor reading RLS
+-- 011_soil_lab_nutrients_update.sql — remove Ca/Mg, add Cu to lab reports
+-- 012_fix_products_rls.sql — products + inventory RLS for Add Product / Purchase
+-- 013_fix_inventory_stock_trigger.sql — purchase → current stock sync trigger
+-- 020_fix_tree_cost_rls.sql — read expense_allocations for Cost tab
+-- 021_fix_harvest_rls.sql — harvest_events RLS
+-- 022_spray_event_delete.sql — spray edit/delete + stock/expense reversal
+-- 023_fix_tree_growth_rls.sql — tree growth measurements RLS
+-- 027_fix_disease_observations_rls.sql — disease observations RLS (Tree Dashboard → Disease)
+-- 028_products_active_column.sql — products.active default for Spray / Inventory lists
+-- 029_fix_photos_rls.sql — photos RLS + tree-photos storage bucket
+-- 030_fix_photos_storage_rls.sql — run this if Add Photo still fails after 029
+-- =============================================================================

@@ -1,0 +1,287 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import { supabase } from '../supabaseClient';
+import { TREE_STATUS } from '../utils/schema';
+import {
+  LOT_SELECT,
+  buildPositionCode,
+  formatLotPath,
+  getLotRowNames,
+  getLotSectionName,
+  lotMatchesPositionCode,
+  parsePositionCode,
+} from '../utils/positionCode';
+import {
+  Box, TextField, Button, Typography, CircularProgress, Alert,
+  MenuItem, Select, InputLabel, FormControl,
+} from '@mui/material';
+import VarietySelect from './VarietySelect';
+import { parseTreeGps } from '../utils/treeGps';
+
+function AddTreeForm({ onSuccess }) {
+  const [variety, setVariety] = useState('');
+  const [plantingDate, setPlantingDate] = useState('');
+  const [status, setStatus] = useState('Active');
+  const [latitude, setLatitude] = useState('');
+  const [longitude, setLongitude] = useState('');
+  const [locating, setLocating] = useState(false);
+  const [lots, setLots] = useState([]);
+  const [selectedLot, setSelectedLot] = useState('');
+  const [selectedRow, setSelectedRow] = useState('');
+  const [treeNumber, setTreeNumber] = useState('01');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [success, setSuccess] = useState(false);
+
+  useEffect(() => {
+    const fetchLots = async () => {
+      let { data, error } = await supabase.from('lots').select(LOT_SELECT);
+      if (error) {
+        const legacy = await supabase
+          .from('lots')
+          .select('id, name, row_id, rows ( name, sections ( name ) )');
+        data = legacy.data;
+      }
+      setLots((data || []).sort((a, b) => formatLotPath(a).localeCompare(formatLotPath(b))));
+    };
+    fetchLots();
+  }, []);
+
+  const selectedLotRecord = lots.find((l) => String(l.id) === selectedLot);
+  const rowOptions = useMemo(() => getLotRowNames(selectedLotRecord), [selectedLotRecord]);
+
+  useEffect(() => {
+    if (rowOptions.length === 1) setSelectedRow(rowOptions[0]);
+    else if (!rowOptions.includes(selectedRow)) setSelectedRow('');
+  }, [rowOptions, selectedRow]);
+
+  const positionCode = useMemo(() => {
+    if (!selectedLotRecord || !selectedRow || !treeNumber) return '';
+    return buildPositionCode({
+      section: getLotSectionName(selectedLotRecord),
+      row: selectedRow,
+      lot: selectedLotRecord.name,
+      tree: treeNumber,
+    });
+  }, [selectedLotRecord, selectedRow, treeNumber]);
+
+  const captureLocation = () => {
+    if (!navigator.geolocation) {
+      setError('Geolocation is not supported in this browser.');
+      return;
+    }
+    setLocating(true);
+    setError(null);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setLatitude(String(pos.coords.latitude));
+        setLongitude(String(pos.coords.longitude));
+        setLocating(false);
+      },
+      (err) => {
+        setError(err.message || 'Could not get GPS location.');
+        setLocating(false);
+      },
+      { enableHighAccuracy: true, timeout: 15000 }
+    );
+  };
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    setLoading(true);
+    setError(null);
+    setSuccess(false);
+
+    if (!variety || !plantingDate || !selectedLotRecord || !selectedRow || !positionCode) {
+      setError('Select lot, row, tree number, variety, and planting date.');
+      setLoading(false);
+      return;
+    }
+
+    if (!parsePositionCode(positionCode)) {
+      setError('Invalid position code format. Expected like A-R01-L01-T01.');
+      setLoading(false);
+      return;
+    }
+
+    if (!lotMatchesPositionCode(selectedLotRecord, positionCode)) {
+      setError('Selected lot/row does not match the generated position code.');
+      setLoading(false);
+      return;
+    }
+
+    const gps = parseTreeGps(latitude, longitude);
+    if (gps.error) {
+      setError(gps.error);
+      setLoading(false);
+      return;
+    }
+
+    try {
+      const lotId = selectedLotRecord.id;
+
+      const { data: existingPosition } = await supabase
+        .from('tree_positions')
+        .select('id, trees(id, status)')
+        .eq('position_code', positionCode)
+        .maybeSingle();
+
+      if (existingPosition?.trees?.some((t) => t.status === 'Active')) {
+        throw new Error(`Position ${positionCode} already has an active tree. Remove or replace it first.`);
+      }
+
+      let positionId = existingPosition?.id;
+
+      if (!positionId) {
+        const { data: newPosition, error: posError } = await supabase
+          .from('tree_positions')
+          .insert([{
+            position_code: positionCode,
+            lot_id: lotId,
+            latitude: gps.latitude,
+            longitude: gps.longitude,
+          }])
+          .select()
+          .single();
+        if (posError) throw posError;
+        positionId = newPosition.id;
+      } else {
+        const { error: gpsError } = await supabase
+          .from('tree_positions')
+          .update({ latitude: gps.latitude, longitude: gps.longitude })
+          .eq('id', positionId);
+        if (gpsError) throw gpsError;
+      }
+
+      const { error: treeError } = await supabase.from('trees').insert([
+        {
+          position_id: positionId,
+          variety,
+          planting_date: plantingDate,
+          status,
+        },
+      ]);
+
+      if (treeError) throw treeError;
+
+      setSuccess(true);
+      setVariety('');
+      setPlantingDate('');
+      setStatus('Active');
+      setSelectedLot('');
+      setSelectedRow('');
+      setTreeNumber('01');
+      setLatitude('');
+      setLongitude('');
+      onSuccess?.();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Box component="form" onSubmit={handleSubmit} sx={{ mt: 2, p: 3, borderRadius: 2, border: 1, borderColor: 'divider', bgcolor: 'background.paper' }}>
+      <Typography variant="h6" gutterBottom>Add New Tree</Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+        Pick lot and row (e.g. L01 on R03), then tree number. GPS coordinates are required for each tree position.
+      </Typography>
+
+      <FormControl fullWidth margin="normal" required>
+        <InputLabel>Lot</InputLabel>
+        <Select
+          value={selectedLot}
+          label="Lot"
+          onChange={(e) => {
+            setSelectedLot(e.target.value);
+            setSelectedRow('');
+          }}
+        >
+          {lots.map((lot) => (
+            <MenuItem key={lot.id} value={String(lot.id)}>
+              {formatLotPath(lot)}
+            </MenuItem>
+          ))}
+        </Select>
+      </FormControl>
+
+      <FormControl fullWidth margin="normal" required disabled={!selectedLotRecord}>
+        <InputLabel>Row</InputLabel>
+        <Select value={selectedRow} label="Row" onChange={(e) => setSelectedRow(e.target.value)}>
+          {rowOptions.map((row) => (
+            <MenuItem key={row} value={row}>{row}</MenuItem>
+          ))}
+        </Select>
+      </FormControl>
+
+      <TextField
+        label="Tree number"
+        fullWidth
+        margin="normal"
+        value={treeNumber}
+        onChange={(e) => setTreeNumber(e.target.value.replace(/\D/g, '').slice(0, 2))}
+        helperText="01 becomes T01 in the position code"
+        required
+      />
+
+      <TextField
+        label="Position code"
+        fullWidth
+        margin="normal"
+        value={positionCode}
+        InputProps={{ readOnly: true }}
+        helperText="Auto-generated from lot, row, and tree number"
+      />
+
+      <VarietySelect value={variety} onChange={setVariety} required />
+      <TextField label="Planting Date" type="date" fullWidth margin="normal" InputLabelProps={{ shrink: true }} value={plantingDate} onChange={(e) => setPlantingDate(e.target.value)} required />
+
+      <Typography variant="subtitle2" sx={{ mt: 2, mb: 1 }}>GPS location (required)</Typography>
+      <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 1 }}>
+        <Button variant="outlined" size="small" onClick={captureLocation} disabled={locating}>
+          {locating ? 'Getting location…' : 'Use my current location'}
+        </Button>
+      </Box>
+      <TextField
+        label="Latitude"
+        type="number"
+        fullWidth
+        margin="normal"
+        required
+        inputProps={{ step: 'any', min: -90, max: 90 }}
+        value={latitude}
+        onChange={(e) => setLatitude(e.target.value)}
+        helperText="Decimal degrees, e.g. 16.12345"
+      />
+      <TextField
+        label="Longitude"
+        type="number"
+        fullWidth
+        margin="normal"
+        required
+        inputProps={{ step: 'any', min: -180, max: 180 }}
+        value={longitude}
+        onChange={(e) => setLongitude(e.target.value)}
+        helperText="Decimal degrees, e.g. 73.12345"
+      />
+
+      <FormControl fullWidth margin="normal">
+        <InputLabel>Status</InputLabel>
+        <Select value={status} label="Status" onChange={(e) => setStatus(e.target.value)}>
+          {TREE_STATUS.map((value) => (
+            <MenuItem key={value} value={value}>{value}</MenuItem>
+          ))}
+        </Select>
+      </FormControl>
+
+      {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
+      {success && <Alert severity="success" sx={{ mt: 2 }}>Tree added successfully!</Alert>}
+
+      <Button type="submit" variant="contained" fullWidth sx={{ mt: 3 }} disabled={loading || !positionCode || !latitude || !longitude}>
+        {loading ? <CircularProgress size={24} /> : 'Add Tree'}
+      </Button>
+    </Box>
+  );
+}
+
+export default AddTreeForm;

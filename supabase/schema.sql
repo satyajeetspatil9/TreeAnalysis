@@ -1,0 +1,3 @@
+-- Source-of-truth schema (already applied in Supabase)
+-- See user-provided DDL for farms through harvest_events.
+-- Application code references this schema via src/utils/schema.js
