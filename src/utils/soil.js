@@ -296,6 +296,44 @@ export function getLowNutrientsFromObservation(observation) {
   return lows;
 }
 
+export function getLowNutrientsFromLabReport(report) {
+  const lows = [];
+
+  LAB_NUTRIENT_FIELDS.forEach(({ key, label, unit, standardKey }) => {
+    const standard = getSoilStandard(standardKey);
+    const value = report?.[key];
+    const evaluation = evaluateSoilStandard(standard, value);
+    if (evaluation.status !== 'low') return;
+
+    lows.push({
+      key,
+      label: label || standard?.label || key,
+      unit: unit || standard?.unit,
+      value,
+      decimals: 2,
+      rangeLabel: standard?.rangeLabel,
+    });
+  });
+
+  return lows;
+}
+
+/** Latest farm lab report deficiencies (reports should be sorted newest first). */
+export function buildFarmLabNutrientDeficiencyReport(labReports) {
+  const latest = (labReports || [])[0];
+  if (!latest) return null;
+
+  const lowNutrients = getLowNutrientsFromLabReport(latest);
+  if (!lowNutrients.length) return null;
+
+  return {
+    reportId: latest.id,
+    sampleDate: latest.sample_date,
+    labName: latest.lab_name,
+    lowNutrients,
+  };
+}
+
 export function buildTreeNutrientDeficiencyReport(observations) {
   const latestByTree = getLatestObservationByTree(observations);
 
