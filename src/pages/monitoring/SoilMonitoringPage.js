@@ -27,13 +27,14 @@ import {
   rlsHint,
   buildTreeNutrientDeficiencyReport,
   buildFarmLabNutrientDeficiencyReport,
+  evaluateSoilStandard,
   getLatestObservationByTree,
 } from '../../utils/soil';
 import { refreshSoilNutrientAlerts } from '../../utils/soilAlerts';
 import { SoilStandardsReference } from '../../components/soil/SoilNutrientDisplay';
 
 function SoilMonitoringPage() {
-  const { farm } = useFarm();
+  const { farm, loading: farmLoading } = useFarm();
   const [observations, setObservations] = useState([]);
   const [sensorObservations, setSensorObservations] = useState([]);
   const [labReports, setLabReports] = useState([]);
@@ -61,13 +62,18 @@ function SoilMonitoringPage() {
     await refreshSoilNutrientAlerts(supabase);
 
     if (farm?.id) {
-      const { data: labData } = await supabase
+      const { data: labData, error: labError } = await supabase
         .from('farm_soil_lab_reports')
         .select('*')
         .eq('farm_id', farm.id)
         .order('sample_date', { ascending: false })
         .limit(20);
-      setLabReports(labData || []);
+      if (labError) {
+        setMessage({ type: 'error', text: rlsHint(labError.message, '009_farm_soil_lab_reports.sql') });
+        setLabReports([]);
+      } else {
+        setLabReports(labData || []);
+      }
     } else {
       setLabReports([]);
     }
@@ -82,8 +88,9 @@ function SoilMonitoringPage() {
   }, [farm?.id]);
 
   useEffect(() => {
+    if (farmLoading) return;
     load();
-  }, [load]);
+  }, [load, farmLoading]);
 
   const nutrientDeficiencies = useMemo(
     () => buildTreeNutrientDeficiencyReport(sensorObservations)
@@ -466,9 +473,19 @@ function SoilMonitoringPage() {
               <TableRow key={r.id}>
                 <TableCell>{formatDate(r.sample_date)}</TableCell>
                 <TableCell>{r.lab_name || '—'}</TableCell>
-                {LAB_NUTRIENT_FIELDS.map(({ key }) => (
-                  <TableCell key={key}>{r[key] != null ? formatNumber(r[key], 2) : '—'}</TableCell>
-                ))}
+                {LAB_NUTRIENT_FIELDS.map(({ key, standardKey }) => {
+                  const standard = getSoilStandard(standardKey);
+                  const value = r[key];
+                  const status = evaluateSoilStandard(standard, value).status;
+                  return (
+                    <TableCell
+                      key={key}
+                      sx={status === 'low' ? { color: 'warning.light', fontWeight: 600 } : undefined}
+                    >
+                      {value != null ? formatNumber(value, 2) : '—'}
+                    </TableCell>
+                  );
+                })}
                 <TableCell align="right">
                   <IconButton size="small" aria-label="Edit lab report" onClick={() => openEditLabReport(r)}>
                     <EditIcon fontSize="small" />

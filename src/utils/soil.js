@@ -90,7 +90,12 @@ export function evaluateSoilStandard(standard, value) {
     if (standard.idealMin != null && v >= standard.idealMin) {
       return { status: 'good', label: 'Good' };
     }
-    if (v >= standard.min) return { status: 'ok', label: 'OK' };
+    // Targets like "> 10 ppm" mean the minimum itself is still deficient.
+    if (standard.idealMin != null) {
+      if (v >= standard.min) return { status: 'ok', label: 'OK' };
+    } else if (v > standard.min) {
+      return { status: 'ok', label: 'OK' };
+    }
     return { status: 'low', label: 'Low' };
   }
 
@@ -309,7 +314,7 @@ export function getLowNutrientsFromLabReport(report) {
       key,
       label: label || standard?.label || key,
       unit: unit || standard?.unit,
-      value,
+      value: Number(value),
       decimals: 2,
       rangeLabel: standard?.rangeLabel,
     });
@@ -318,18 +323,48 @@ export function getLowNutrientsFromLabReport(report) {
   return lows;
 }
 
-/** Latest farm lab report deficiencies (reports should be sorted newest first). */
-export function buildFarmLabNutrientDeficiencyReport(labReports) {
-  const latest = (labReports || [])[0];
-  if (!latest) return null;
+/** Newest non-null value per lab nutrient across all farm reports. */
+export function getMergedLatestLabNutrients(labReports) {
+  const sorted = [...(labReports || [])].sort((a, b) =>
+    String(b.sample_date || '').localeCompare(String(a.sample_date || '')),
+  );
 
-  const lowNutrients = getLowNutrientsFromLabReport(latest);
+  const values = {};
+  let reportId = null;
+  let sampleDate = null;
+  let labName = null;
+
+  sorted.forEach((report) => {
+    if (!reportId) {
+      reportId = report.id;
+      sampleDate = report.sample_date;
+      labName = report.lab_name;
+    }
+
+    LAB_NUTRIENT_FIELDS.forEach(({ key }) => {
+      if (values[key] == null && report[key] != null && report[key] !== '') {
+        values[key] = Number(report[key]);
+      }
+    });
+  });
+
+  if (!Object.keys(values).length) return null;
+
+  return { reportId, sampleDate, labName, values };
+}
+
+/** Latest farm lab report deficiencies (uses merged values from all reports). */
+export function buildFarmLabNutrientDeficiencyReport(labReports) {
+  const merged = getMergedLatestLabNutrients(labReports);
+  if (!merged) return null;
+
+  const lowNutrients = getLowNutrientsFromLabReport(merged.values);
   if (!lowNutrients.length) return null;
 
   return {
-    reportId: latest.id,
-    sampleDate: latest.sample_date,
-    labName: latest.lab_name,
+    reportId: merged.reportId,
+    sampleDate: merged.sampleDate,
+    labName: merged.labName,
     lowNutrients,
   };
 }
