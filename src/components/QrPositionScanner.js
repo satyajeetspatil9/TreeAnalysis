@@ -1,55 +1,95 @@
-import React, { useEffect, useId, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Dialog, DialogTitle, DialogContent, DialogActions, Button, Alert, Typography, Box,
 } from '@mui/material';
 import { Html5Qrcode } from 'html5-qrcode';
 
+const SCANNER_ELEMENT_ID = 'tree-qr-scanner-view';
+
+async function stopScannerInstance(scanner) {
+  if (!scanner) return;
+  try {
+    if (scanner.isScanning) {
+      await scanner.stop();
+    }
+  } catch (_) {
+    // Camera may already be stopped.
+  }
+  try {
+    scanner.clear();
+  } catch (_) {
+    // Ignore cleanup errors.
+  }
+}
+
 function QrPositionScanner({ open, onClose, onScan }) {
-  const regionId = useId().replace(/:/g, '');
   const scannerRef = useRef(null);
   const onScanRef = useRef(onScan);
   const [error, setError] = useState(null);
-  const [scanning, setScanning] = useState(false);
+  const [starting, setStarting] = useState(false);
 
   useEffect(() => {
     onScanRef.current = onScan;
   }, [onScan]);
 
-  useEffect(() => {
-    if (!open) return undefined;
+  const stopScanner = useCallback(async () => {
+    const scanner = scannerRef.current;
+    scannerRef.current = null;
+    await stopScannerInstance(scanner);
+  }, []);
 
-    let cancelled = false;
-    const scanner = new Html5Qrcode(regionId);
-    scannerRef.current = scanner;
+  const startScanner = useCallback(async () => {
     setError(null);
-    setScanning(true);
+    setStarting(true);
 
-    scanner.start(
-      { facingMode: 'environment' },
-      { fps: 10, qrbox: { width: 250, height: 250 } },
-      (decodedText) => {
-        if (cancelled) return;
-        onScanRef.current(decodedText);
-      },
-      () => {},
-    ).catch((err) => {
-      if (cancelled) return;
-      setError(err?.message || 'Could not access the camera. Allow camera permission and try again.');
-      setScanning(false);
-    });
+    if (!document.getElementById(SCANNER_ELEMENT_ID)) {
+      setError('Scanner could not start. Please try again.');
+      setStarting(false);
+      return;
+    }
 
-    return () => {
-      cancelled = true;
-      setScanning(false);
-      const active = scannerRef.current;
+    await stopScanner();
+
+    try {
+      const scanner = new Html5Qrcode(SCANNER_ELEMENT_ID);
+      scannerRef.current = scanner;
+
+      await scanner.start(
+        { facingMode: 'environment' },
+        { fps: 10, qrbox: { width: 250, height: 250 } },
+        (decodedText) => {
+          onScanRef.current(decodedText);
+        },
+        () => {},
+      );
+    } catch (err) {
       scannerRef.current = null;
-      if (!active) return;
-      active.stop().then(() => active.clear()).catch(() => active.clear());
-    };
-  }, [open, regionId]);
+      setError(err?.message || 'Could not access the camera. Allow camera permission and try again.');
+    } finally {
+      setStarting(false);
+    }
+  }, [stopScanner]);
+
+  const handleClose = useCallback(() => {
+    stopScanner().finally(onClose);
+  }, [onClose, stopScanner]);
+
+  useEffect(() => () => {
+    stopScanner();
+  }, [stopScanner]);
 
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
+    <Dialog
+      open={open}
+      onClose={handleClose}
+      maxWidth="sm"
+      fullWidth
+      keepMounted
+      TransitionProps={{
+        onEntered: startScanner,
+        onExited: stopScanner,
+      }}
+    >
       <DialogTitle>Scan tree QR code</DialogTitle>
       <DialogContent>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
@@ -57,24 +97,32 @@ function QrPositionScanner({ open, onClose, onScan }) {
         </Typography>
         {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
         <Box
-          id={regionId}
+          id={SCANNER_ELEMENT_ID}
           sx={{
             width: '100%',
             minHeight: 280,
             overflow: 'hidden',
             borderRadius: 2,
             bgcolor: 'background.default',
-            '& video': { borderRadius: 2 },
+            '& video': {
+              borderRadius: 2,
+              width: '100% !important',
+              height: 'auto !important',
+              objectFit: 'cover',
+            },
+            '& #qr-shaded-region': {
+              borderRadius: 2,
+            },
           }}
         />
-        {scanning && !error && (
+        {starting && !error && (
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
-            Scanning…
+            Starting camera…
           </Typography>
         )}
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose}>Cancel</Button>
+        <Button type="button" onClick={handleClose}>Cancel</Button>
       </DialogActions>
     </Dialog>
   );

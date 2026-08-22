@@ -224,6 +224,7 @@ function AddTreeForm({ onSuccess }) {
       </Typography>
 
       <Button
+        type="button"
         variant="outlined"
         startIcon={<QrCodeScannerIcon />}
         onClick={() => setScannerOpen(true)}
