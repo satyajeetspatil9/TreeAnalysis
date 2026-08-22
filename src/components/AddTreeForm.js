@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { supabase } from '../supabaseClient';
 import { TREE_STATUS } from '../utils/schema';
 import {
@@ -50,7 +50,6 @@ function AddTreeForm({ onSuccess }) {
   const [error, setError] = useState(null);
   const [gpsWarning, setGpsWarning] = useState(null);
   const [success, setSuccess] = useState(false);
-  const pendingLocationRef = useRef(null);
 
   useEffect(() => {
     if (varieties.length > 0) {
@@ -132,34 +131,35 @@ function AddTreeForm({ onSuccess }) {
       setLocating(false);
     });
 
-    pendingLocationRef.current = promise;
     return promise;
   }, []);
 
   const openScanner = () => {
     setError(null);
     setGpsWarning(null);
-    requestLocation();
     setScannerOpen(true);
   };
 
-  const handleQrScan = useCallback(async (rawText) => {
-    if (!applyPositionCode(rawText)) return;
-
-    const locPromise = pendingLocationRef.current || requestLocation();
+  const handleQrScan = useCallback((rawText) => {
+    if (!applyPositionCode(rawText)) {
+      return false;
+    }
 
     setScannerOpen(false);
     setVariety(resolveDefaultVariety(varieties));
     setPlantingDate(DEFAULT_PLANTING_DATE);
 
-    const gps = await locPromise;
-    pendingLocationRef.current = null;
+    window.setTimeout(() => {
+      requestLocation().then((gps) => {
+        if (gps.error) {
+          setGpsWarning(`Position filled from QR. ${gps.error}`);
+        } else {
+          setGpsWarning(null);
+        }
+      });
+    }, 0);
 
-    if (gps.error) {
-      setGpsWarning(`Position filled from QR. ${gps.error}`);
-    } else {
-      setGpsWarning(null);
-    }
+    return true;
   }, [applyPositionCode, requestLocation, varieties]);
 
   const handleCaptureLocationClick = async () => {
@@ -269,7 +269,7 @@ function AddTreeForm({ onSuccess }) {
     <Box component="form" onSubmit={handleSubmit} sx={{ mt: 2, p: 3, borderRadius: 2, border: 1, borderColor: 'divider', bgcolor: 'background.paper' }}>
       <Typography variant="h6" gutterBottom>Add New Tree</Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Pick lot and row manually, or tap Scan QR code — allow location when prompted — to fill position, variety (Alphonso), planting date, and GPS automatically.
+        Tap Scan QR code to fill position, variety (Alphonso), planting date, and GPS. Allow camera when prompted.
         GPS coordinates are required for each tree position.
       </Typography>
 
