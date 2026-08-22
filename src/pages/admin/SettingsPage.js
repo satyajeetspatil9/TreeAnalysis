@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Link as RouterLink } from 'react-router-dom';
 import {
   Box, Typography, Paper, Grid, TextField, Button, FormControl, InputLabel, Select, MenuItem,
@@ -44,15 +44,15 @@ function SettingsPage() {
     }
   }, [farm]);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     if (!farm) return;
     const { data: s } = await supabase.from('sensors').select('*').eq('farm_id', farm.id);
     const { data: w } = await supabase.from('weather_observations').select('*').eq('farm_id', farm.id).order('observed_at', { ascending: false }).limit(10);
     setSensors(s || []);
     setWeather(w || []);
-  };
+  }, [farm]);
 
-  useEffect(() => { load(); }, [farm]);
+  useEffect(() => { load(); }, [load]);
 
   const addSensor = async () => {
     if (!farm || !sensorForm.device_code) return;

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from '../supabaseClient';
 import { useFarm } from '../hooks/useFarm';
 import {
@@ -161,7 +161,10 @@ function FarmSetup() {
     setOpen((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
-  const farmBlocks = farmDetail ? getBlocksForFarm(farmDetail) : [];
+  const farmBlocks = useMemo(
+    () => (farmDetail ? getBlocksForFarm(farmDetail) : []),
+    [farmDetail],
+  );
   const currentBlock = farmBlocks.find((b) => String(b.id) === selectedBlock);
   const blockRows = currentBlock?.rows || [];
   const blockLots = currentBlock?.lots || [];

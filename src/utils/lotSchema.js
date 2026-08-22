@@ -229,7 +229,6 @@ export async function hasMultiRowLotsSupport() {
 /** Load farm → phases → sections with rows and lots (works before and after migration 006). */
 async function fetchLotsForLayout(sectionIds, rowIds) {
   const selectWithBoundary = 'id, name, section_id, row_id, boundary, lot_rows ( row_id, rows ( id, name ) )';
-  const selectWithoutBoundary = 'id, name, section_id, row_id, lot_rows ( row_id, rows ( id, name ) )';
   const selectLegacy = 'id, name, row_id';
 
   async function queryLots(select, filter) {

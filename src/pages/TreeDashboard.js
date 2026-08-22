@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import {
   Box, Typography, Tabs, Tab, Paper, CircularProgress, Alert, Button, Chip,
@@ -33,7 +33,7 @@ function TreeDashboard() {
   const [error, setError] = useState(null);
   const [showReplace, setShowReplace] = useState(false);
 
-  const fetchTree = async () => {
+  const fetchTree = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -47,11 +47,11 @@ function TreeDashboard() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [treeId]);
 
   useEffect(() => {
     fetchTree();
-  }, [treeId]);
+  }, [fetchTree]);
 
   if (loading) {
     return (

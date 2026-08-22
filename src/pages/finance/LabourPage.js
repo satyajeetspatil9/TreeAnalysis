@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Box, Paper, Table, TableBody, TableCell, TableHead, TableRow,
   Button, TextField, Grid, FormControl, InputLabel, Select, MenuItem, Alert, Typography,
@@ -58,7 +58,7 @@ function LabourPage() {
     notes: '',
   });
 
-  const load = async () => {
+  const load = useCallback(async () => {
     if (!farm) {
       setRecords([]);
       setZones([]);
@@ -85,11 +85,11 @@ function LabourPage() {
       .select('id, tree_positions(position_code)')
       .eq('status', 'Active');
     setTrees(t || []);
-  };
+  }, [farm]);
 
   useEffect(() => {
     load();
-  }, [farm]);
+  }, [load]);
 
   const formTotal = useMemo(() => calcLabourAmount(form), [form]);
   const formWageBreakdown = useMemo(() => {
