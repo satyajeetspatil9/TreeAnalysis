@@ -27,11 +27,21 @@ import {
   rlsHint,
   buildTreeNutrientDeficiencyReport,
   buildFarmLabNutrientDeficiencyReport,
-  evaluateSoilStandard,
   getLatestObservationByTree,
+  soilReadingCellSx,
 } from '../../utils/soil';
 import { refreshSoilNutrientAlerts } from '../../utils/soilAlerts';
 import { SoilStandardsReference } from '../../components/soil/SoilNutrientDisplay';
+
+const SENSOR_TABLE_FIELDS = SENSOR_READING_FIELDS.filter(({ key }) =>
+  ['moisture_percent', 'ph', 'ec', 'nitrogen', 'phosphorus', 'potassium'].includes(key),
+);
+
+function formatSensorTableValue(field, value) {
+  if (value == null) return '—';
+  if (field.key === 'moisture_percent') return `${formatNumber(value, field.decimals ?? 0)}%`;
+  return formatNumber(value, field.decimals ?? 2);
+}
 
 function SoilMonitoringPage() {
   const { farm, loading: farmLoading } = useFarm();
@@ -418,12 +428,9 @@ function SoilMonitoringPage() {
             <TableRow>
               <TableCell>Date</TableCell>
               <TableCell>Tree</TableCell>
-              <TableCell>Moisture</TableCell>
-              <TableCell>pH</TableCell>
-              <TableCell>EC</TableCell>
-              <TableCell>N</TableCell>
-              <TableCell>P</TableCell>
-              <TableCell>K</TableCell>
+              {SENSOR_TABLE_FIELDS.map(({ key, label, unit }) => (
+                <TableCell key={key}>{unit ? `${label} (${unit})` : label}</TableCell>
+              ))}
               <TableCell align="right">Actions</TableCell>
             </TableRow>
           </TableHead>
@@ -432,12 +439,14 @@ function SoilMonitoringPage() {
               <TableRow key={o.id}>
                 <TableCell>{formatDate(o.observed_at)}</TableCell>
                 <TableCell>{getTreeDisplayId(o.trees || {})}</TableCell>
-                <TableCell>{o.moisture_percent != null ? `${formatNumber(o.moisture_percent, 0)}%` : '—'}</TableCell>
-                <TableCell>{o.ph ?? '—'}</TableCell>
-                <TableCell>{o.ec ?? '—'}</TableCell>
-                <TableCell>{o.nitrogen ?? '—'}</TableCell>
-                <TableCell>{o.phosphorus ?? '—'}</TableCell>
-                <TableCell>{o.potassium ?? '—'}</TableCell>
+                {SENSOR_TABLE_FIELDS.map((field) => (
+                  <TableCell
+                    key={field.key}
+                    sx={soilReadingCellSx(field.standardKey, o[field.key])}
+                  >
+                    {formatSensorTableValue(field, o[field.key])}
+                  </TableCell>
+                ))}
                 <TableCell align="right">
                   <IconButton size="small" aria-label="Edit reading" onClick={() => openEditObservation(o)}>
                     <EditIcon fontSize="small" />
@@ -474,13 +483,11 @@ function SoilMonitoringPage() {
                 <TableCell>{formatDate(r.sample_date)}</TableCell>
                 <TableCell>{r.lab_name || '—'}</TableCell>
                 {LAB_NUTRIENT_FIELDS.map(({ key, standardKey }) => {
-                  const standard = getSoilStandard(standardKey);
                   const value = r[key];
-                  const status = evaluateSoilStandard(standard, value).status;
                   return (
                     <TableCell
                       key={key}
-                      sx={status === 'low' ? { color: 'warning.light', fontWeight: 600 } : undefined}
+                      sx={soilReadingCellSx(standardKey, value)}
                     >
                       {value != null ? formatNumber(value, 2) : '—'}
                     </TableCell>

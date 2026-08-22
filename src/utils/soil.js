@@ -121,6 +121,15 @@ export function soilStatusColor(status) {
   return 'text.secondary';
 }
 
+/** MUI sx for soil monitoring tables — highlights out-of-range values. */
+export function soilReadingCellSx(standardKey, value) {
+  if (value == null || value === '') return undefined;
+  const status = evaluateSoilStandard(getSoilStandard(standardKey), value).status;
+  if (status === 'low') return { color: 'warning.light', fontWeight: 600 };
+  if (status === 'high') return { color: 'error.light', fontWeight: 600 };
+  return undefined;
+}
+
 export function soilStatusChipSx(status) {
   return {
     height: 28,
