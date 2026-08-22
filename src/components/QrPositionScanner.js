@@ -93,7 +93,8 @@ function QrPositionScanner({ open, onClose, onScan }) {
       <DialogTitle>Scan tree QR code</DialogTitle>
       <DialogContent>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Point the camera at the tree tag. The position code (e.g. A-R01-L01-T01) will fill in automatically.
+          Allow location access when prompted, then point the camera at the tree tag.
+          Position, variety, planting date, and GPS will fill in after the scan.
         </Typography>
         {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
         <Box
