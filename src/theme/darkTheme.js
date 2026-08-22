@@ -33,6 +33,7 @@ export const darkTheme = createTheme({
   },
   typography: {
     fontFamily: '"Roboto", "Helvetica", "Arial", sans-serif',
+    fontSize: 15,
     h4: { fontWeight: 700, letterSpacing: '-0.02em' },
     h5: { fontWeight: 700 },
     h6: { fontWeight: 600 },
@@ -43,6 +44,7 @@ export const darkTheme = createTheme({
     MuiCssBaseline: {
       styleOverrides: {
         body: {
+          fontSize: '15px',
           scrollbarColor: '#333 #0a0a0a',
         },
         '#root': {
@@ -101,21 +103,67 @@ export const darkTheme = createTheme({
     },
     MuiTableCell: {
       styleOverrides: {
+        root: {
+          fontSize: '0.9375rem',
+        },
         head: {
           fontWeight: 600,
+          fontSize: '0.9375rem',
           color: alpha('#ffffff', 0.7),
           backgroundColor: alpha('#ffffff', 0.03),
         },
       },
     },
+    MuiInputBase: {
+      styleOverrides: {
+        root: {
+          fontSize: '0.9375rem',
+        },
+        input: {
+          fontSize: '0.9375rem',
+        },
+      },
+    },
+    MuiInputLabel: {
+      styleOverrides: {
+        root: {
+          fontSize: '0.9375rem',
+        },
+      },
+    },
+    MuiMenuItem: {
+      styleOverrides: {
+        root: {
+          fontSize: '0.9375rem',
+        },
+      },
+    },
+    MuiListItemText: {
+      styleOverrides: {
+        primary: {
+          fontSize: '0.9375rem',
+        },
+        secondary: {
+          fontSize: '0.8125rem',
+        },
+      },
+    },
+    MuiTab: {
+      styleOverrides: {
+        root: {
+          fontSize: '0.9375rem',
+        },
+      },
+    },
     MuiChip: {
       styleOverrides: {
-        root: { fontWeight: 500 },
+        root: { fontWeight: 500, fontSize: '0.8125rem' },
+        label: { fontSize: '0.8125rem' },
       },
     },
     MuiAlert: {
       styleOverrides: {
-        root: { borderRadius: 10 },
+        root: { borderRadius: 10, fontSize: '0.9375rem' },
       },
     },
   },

@@ -9,7 +9,7 @@ function PageHeader({ title, subtitle, section, action, breadcrumbs = [] }) {
       {breadcrumbs.length > 0 && (
         <Breadcrumbs
           separator={<NavigateNextIcon fontSize="small" />}
-          sx={{ mb: 1, '& .MuiBreadcrumbs-li': { fontSize: '0.8125rem' } }}
+          sx={{ mb: 1, '& .MuiBreadcrumbs-li': { fontSize: '0.875rem' } }}
         >
           {breadcrumbs.map((crumb) => (
             crumb.to ? (
