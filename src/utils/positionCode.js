@@ -17,6 +17,29 @@ export function parsePositionCode(code) {
   };
 }
 
+/** Extract A-R01-L01-T01 from plain text, URLs, or labels in a QR scan. */
+export function extractPositionCodeFromScan(rawText) {
+  if (!rawText) return null;
+
+  const text = String(rawText).trim();
+  const direct = parsePositionCode(text);
+  if (direct) return buildPositionCode(direct);
+
+  const embedded = text.toUpperCase().match(/([AB]-R\d{2}-L\d{2}-T\d{2})/);
+  if (embedded) {
+    const parsed = parsePositionCode(embedded[1]);
+    if (parsed) return buildPositionCode(parsed);
+  }
+
+  return null;
+}
+
+export function findLotForPositionCode(lots, code) {
+  const parsed = parsePositionCode(code);
+  if (!parsed) return null;
+  return (lots || []).find((lot) => lotMatchesPositionCode(lot, code)) || null;
+}
+
 export function buildPositionCode({ section, row, lot, tree }) {
   const s = String(section || '').trim().toUpperCase();
   const r = normalizeRow(row);

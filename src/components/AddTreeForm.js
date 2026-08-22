@@ -1,9 +1,11 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { supabase } from '../supabaseClient';
 import { TREE_STATUS } from '../utils/schema';
 import {
   LOT_SELECT,
   buildPositionCode,
+  extractPositionCodeFromScan,
+  findLotForPositionCode,
   formatLotPath,
   getLotRowNames,
   getLotSectionName,
@@ -14,7 +16,9 @@ import {
   Box, TextField, Button, Typography, CircularProgress, Alert,
   MenuItem, Select, InputLabel, FormControl,
 } from '@mui/material';
+import QrCodeScannerIcon from '@mui/icons-material/QrCodeScanner';
 import VarietySelect from './VarietySelect';
+import QrPositionScanner from './QrPositionScanner';
 import { parseTreeGps } from '../utils/treeGps';
 
 function AddTreeForm({ onSuccess }) {
@@ -28,14 +32,16 @@ function AddTreeForm({ onSuccess }) {
   const [selectedLot, setSelectedLot] = useState('');
   const [selectedRow, setSelectedRow] = useState('');
   const [treeNumber, setTreeNumber] = useState('01');
+  const [scannedCode, setScannedCode] = useState('');
+  const [scannerOpen, setScannerOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(false);
 
   useEffect(() => {
     const fetchLots = async () => {
-      let { data, error } = await supabase.from('lots').select(LOT_SELECT);
-      if (error) {
+      let { data, error: fetchError } = await supabase.from('lots').select(LOT_SELECT);
+      if (fetchError) {
         const legacy = await supabase
           .from('lots')
           .select('id, name, row_id, rows ( name, sections ( name ) )');
@@ -64,6 +70,34 @@ function AddTreeForm({ onSuccess }) {
     });
   }, [selectedLotRecord, selectedRow, treeNumber]);
 
+  const applyPositionCode = useCallback((code) => {
+    const normalized = extractPositionCodeFromScan(code);
+    if (!normalized) {
+      setError('QR code does not contain a valid position code (e.g. A-R01-L01-T01).');
+      return false;
+    }
+
+    const parsed = parsePositionCode(normalized);
+    const lot = findLotForPositionCode(lots, normalized);
+    if (!lot) {
+      setError(`No matching lot for ${normalized}. Add the lot in Farm Setup first.`);
+      return false;
+    }
+
+    setSelectedLot(String(lot.id));
+    setSelectedRow(parsed.row);
+    setTreeNumber(parsed.tree.replace(/^T/i, ''));
+    setScannedCode(normalized);
+    setError(null);
+    return true;
+  }, [lots]);
+
+  const handleQrScan = useCallback((rawText) => {
+    if (applyPositionCode(rawText)) {
+      setScannerOpen(false);
+    }
+  }, [applyPositionCode]);
+
   const captureLocation = () => {
     if (!navigator.geolocation) {
       setError('Geolocation is not supported in this browser.');
@@ -81,7 +115,7 @@ function AddTreeForm({ onSuccess }) {
         setError(err.message || 'Could not get GPS location.');
         setLocating(false);
       },
-      { enableHighAccuracy: true, timeout: 15000 }
+      { enableHighAccuracy: true, timeout: 15000 },
     );
   };
 
@@ -170,6 +204,7 @@ function AddTreeForm({ onSuccess }) {
       setSelectedLot('');
       setSelectedRow('');
       setTreeNumber('01');
+      setScannedCode('');
       setLatitude('');
       setLongitude('');
       onSuccess?.();
@@ -184,8 +219,18 @@ function AddTreeForm({ onSuccess }) {
     <Box component="form" onSubmit={handleSubmit} sx={{ mt: 2, p: 3, borderRadius: 2, border: 1, borderColor: 'divider', bgcolor: 'background.paper' }}>
       <Typography variant="h6" gutterBottom>Add New Tree</Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Pick lot and row (e.g. L01 on R03), then tree number. GPS coordinates are required for each tree position.
+        Pick lot and row manually, or scan the tree tag QR code to fill the position code automatically.
+        GPS coordinates are required for each tree position.
       </Typography>
+
+      <Button
+        variant="outlined"
+        startIcon={<QrCodeScannerIcon />}
+        onClick={() => setScannerOpen(true)}
+        sx={{ mb: 1 }}
+      >
+        Scan QR code
+      </Button>
 
       <FormControl fullWidth margin="normal" required>
         <InputLabel>Lot</InputLabel>
@@ -195,6 +240,7 @@ function AddTreeForm({ onSuccess }) {
           onChange={(e) => {
             setSelectedLot(e.target.value);
             setSelectedRow('');
+            setScannedCode('');
           }}
         >
           {lots.map((lot) => (
@@ -219,7 +265,10 @@ function AddTreeForm({ onSuccess }) {
         fullWidth
         margin="normal"
         value={treeNumber}
-        onChange={(e) => setTreeNumber(e.target.value.replace(/\D/g, '').slice(0, 2))}
+        onChange={(e) => {
+          setTreeNumber(e.target.value.replace(/\D/g, '').slice(0, 2));
+          setScannedCode('');
+        }}
         helperText="01 becomes T01 in the position code"
         required
       />
@@ -230,7 +279,11 @@ function AddTreeForm({ onSuccess }) {
         margin="normal"
         value={positionCode}
         InputProps={{ readOnly: true }}
-        helperText="Auto-generated from lot, row, and tree number"
+        helperText={
+          scannedCode
+            ? `Filled from QR scan: ${scannedCode}`
+            : 'Auto-generated from lot, row, and tree number'
+        }
       />
 
       <VarietySelect value={variety} onChange={setVariety} required />
@@ -280,6 +333,12 @@ function AddTreeForm({ onSuccess }) {
       <Button type="submit" variant="contained" fullWidth sx={{ mt: 3 }} disabled={loading || !positionCode || !latitude || !longitude}>
         {loading ? <CircularProgress size={24} /> : 'Add Tree'}
       </Button>
+
+      <QrPositionScanner
+        open={scannerOpen}
+        onClose={() => setScannerOpen(false)}
+        onScan={handleQrScan}
+      />
     </Box>
   );
 }
