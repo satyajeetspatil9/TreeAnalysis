@@ -20,10 +20,22 @@ import QrCodeScannerIcon from '@mui/icons-material/QrCodeScanner';
 import VarietySelect from './VarietySelect';
 import QrPositionScanner from './QrPositionScanner';
 import { parseTreeGps } from '../utils/treeGps';
+import { useTreeVarieties } from '../hooks/useTreeVarieties';
+
+const DEFAULT_PLANTING_DATE = '2026-08-08';
+const DEFAULT_VARIETY_NAME = 'Alphonso';
+
+function resolveDefaultVariety(varieties) {
+  const names = (varieties || []).map((v) => v.name);
+  const match = names.find((n) => n.toLowerCase() === DEFAULT_VARIETY_NAME.toLowerCase())
+    || names.find((n) => n.toLowerCase() === 'alphanso');
+  return match || DEFAULT_VARIETY_NAME;
+}
 
 function AddTreeForm({ onSuccess }) {
-  const [variety, setVariety] = useState('');
-  const [plantingDate, setPlantingDate] = useState('');
+  const { varieties } = useTreeVarieties();
+  const [variety, setVariety] = useState(DEFAULT_VARIETY_NAME);
+  const [plantingDate, setPlantingDate] = useState(DEFAULT_PLANTING_DATE);
   const [status, setStatus] = useState('Active');
   const [latitude, setLatitude] = useState('');
   const [longitude, setLongitude] = useState('');
@@ -37,6 +49,18 @@ function AddTreeForm({ onSuccess }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(false);
+
+  useEffect(() => {
+    if (varieties.length > 0) {
+      setVariety((current) => {
+        const resolved = resolveDefaultVariety(varieties);
+        if (!current || current === DEFAULT_VARIETY_NAME || current.toLowerCase() === 'alphanso') {
+          return resolved;
+        }
+        return current;
+      });
+    }
+  }, [varieties]);
 
   useEffect(() => {
     const fetchLots = async () => {
@@ -92,31 +116,46 @@ function AddTreeForm({ onSuccess }) {
     return true;
   }, [lots]);
 
-  const handleQrScan = useCallback((rawText) => {
-    if (applyPositionCode(rawText)) {
-      setScannerOpen(false);
-    }
-  }, [applyPositionCode]);
-
-  const captureLocation = () => {
+  const captureLocation = useCallback(() => new Promise((resolve) => {
     if (!navigator.geolocation) {
-      setError('Geolocation is not supported in this browser.');
+      resolve({ error: 'Geolocation is not supported in this browser.' });
       return;
     }
     setLocating(true);
-    setError(null);
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         setLatitude(String(pos.coords.latitude));
         setLongitude(String(pos.coords.longitude));
         setLocating(false);
+        resolve({ error: null });
       },
       (err) => {
-        setError(err.message || 'Could not get GPS location.');
         setLocating(false);
+        resolve({ error: err.message || 'Could not get GPS location.' });
       },
       { enableHighAccuracy: true, timeout: 15000 },
     );
+  }), []);
+
+  const handleQrScan = useCallback(async (rawText) => {
+    if (!applyPositionCode(rawText)) return;
+
+    setScannerOpen(false);
+    setVariety(resolveDefaultVariety(varieties));
+    setPlantingDate(DEFAULT_PLANTING_DATE);
+
+    const gps = await captureLocation();
+    if (gps.error) {
+      setError(`Position filled from QR. ${gps.error} You can enter coordinates manually or tap "Use my current location".`);
+    } else {
+      setError(null);
+    }
+  }, [applyPositionCode, captureLocation, varieties]);
+
+  const handleCaptureLocationClick = async () => {
+    setError(null);
+    const gps = await captureLocation();
+    if (gps.error) setError(gps.error);
   };
 
   const handleSubmit = async (event) => {
@@ -198,8 +237,8 @@ function AddTreeForm({ onSuccess }) {
       if (treeError) throw treeError;
 
       setSuccess(true);
-      setVariety('');
-      setPlantingDate('');
+      setVariety(resolveDefaultVariety(varieties));
+      setPlantingDate(DEFAULT_PLANTING_DATE);
       setStatus('Active');
       setSelectedLot('');
       setSelectedRow('');
@@ -219,7 +258,7 @@ function AddTreeForm({ onSuccess }) {
     <Box component="form" onSubmit={handleSubmit} sx={{ mt: 2, p: 3, borderRadius: 2, border: 1, borderColor: 'divider', bgcolor: 'background.paper' }}>
       <Typography variant="h6" gutterBottom>Add New Tree</Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Pick lot and row manually, or scan the tree tag QR code to fill the position code automatically.
+        Pick lot and row manually, or scan the tree tag QR code to fill position, variety (Alphonso), planting date, and GPS automatically.
         GPS coordinates are required for each tree position.
       </Typography>
 
@@ -292,7 +331,7 @@ function AddTreeForm({ onSuccess }) {
 
       <Typography variant="subtitle2" sx={{ mt: 2, mb: 1 }}>GPS location (required)</Typography>
       <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 1 }}>
-        <Button variant="outlined" size="small" onClick={captureLocation} disabled={locating}>
+        <Button type="button" variant="outlined" size="small" onClick={handleCaptureLocationClick} disabled={locating}>
           {locating ? 'Getting location…' : 'Use my current location'}
         </Button>
       </Box>
