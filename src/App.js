@@ -7,6 +7,7 @@ import Auth from './components/Auth';
 import AppLayout from './layout/AppLayout';
 import PublicAddTreePage from './pages/PublicAddTreePage';
 import PublicAddSoilReportPage from './pages/PublicAddSoilReportPage';
+import PublicAddGrowthPage from './pages/PublicAddGrowthPage';
 import FarmDashboard from './pages/FarmDashboard';
 import FarmMapPage from './pages/FarmMapPage';
 import TreesPage from './pages/TreesPage';
@@ -90,6 +91,7 @@ function AppRoutes() {
     <Routes>
       <Route path="/add-tree" element={<PublicAddTreePage />} />
       <Route path="/add-soil-report" element={<PublicAddSoilReportPage />} />
+      <Route path="/add-growth" element={<PublicAddGrowthPage />} />
       <Route path="*" element={<ProtectedApp />} />
     </Routes>
   );
