@@ -24,4 +24,5 @@
 -- 031_farm_ingest_keys.sql — ESP32 7-in-1 sensor ingest API keys
 -- 032_create_ingest_key_helper.sql — create ingest keys in SQL Editor without frontend
 -- 033_rename_sensor_method_7in1.sql — update legacy 8-in-1 method labels in soil_observations
+-- 034_lot_ids_for_farm.sql — public add-tree bootstrap helper
 -- =============================================================================

@@ -5,6 +5,7 @@ import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { FarmProvider } from './contexts/FarmContext';
 import Auth from './components/Auth';
 import AppLayout from './layout/AppLayout';
+import PublicAddTreePage from './pages/PublicAddTreePage';
 import FarmDashboard from './pages/FarmDashboard';
 import FarmMapPage from './pages/FarmMapPage';
 import TreesPage from './pages/TreesPage';
@@ -29,7 +30,7 @@ import HarvestPage from './pages/production/HarvestPage';
 import RevenuePage from './pages/production/RevenuePage';
 import SettingsPage from './pages/admin/SettingsPage';
 
-function AppRoutes() {
+function ProtectedApp() {
   const { session, loading } = useAuth();
 
   if (loading) {
@@ -47,39 +48,48 @@ function AppRoutes() {
   return (
     <FarmProvider>
       <Routes>
-      <Route path="/" element={<AppLayout />}>
-        <Route index element={<FarmDashboard />} />
-        <Route path="orchard/map" element={<FarmMapPage />} />
-        <Route path="orchard/trees" element={<TreesPage />} />
-        <Route path="orchard/setup" element={<FarmSetup />} />
-        <Route path="orchard/soil-report" element={<AddSoilReportPage />} />
-        <Route path="orchard/soil-zones" element={<Navigate to="/" replace />} />
-        <Route path="tree/:treeId" element={<TreeDashboard />} />
-        <Route path="irrigation/zones" element={<IrrigationZonesPage />} />
-        <Route path="irrigation/events" element={<IrrigationEventsPage />} />
-        <Route path="irrigation/fertigation" element={<FertigationPage />} />
-        <Route path="inputs/add-product" element={<AddProductPage />} />
-        <Route path="inputs/inventory" element={<InventoryPage />} />
-        <Route path="inputs/spray" element={<SprayPage />} />
-        <Route path="inputs/soil-application" element={<SoilApplicationPage />} />
-        <Route path="inputs/optimizer" element={<Navigate to="/inputs/inventory" replace />} />
-        <Route path="monitoring/soil" element={<SoilMonitoringPage />} />
-        <Route path="monitoring/satellite" element={<Navigate to="/monitoring/soil" replace />} />
-        <Route path="monitoring/disease" element={<DiseaseDashboardPage />} />
-        <Route path="monitoring/growth" element={<GrowthComparisonPage />} />
-        <Route path="monitoring/alerts" element={<AlertsPage />} />
-        <Route path="finance/expenses" element={<ExpensesPage />} />
-        <Route path="finance/labour" element={<LabourPage />} />
-        <Route path="finance/costs" element={<CostAnalysisPage />} />
-        <Route path="production/flowering" element={<Navigate to="/production/harvest" replace />} />
-        <Route path="production/fruit-set" element={<Navigate to="/production/harvest" replace />} />
-        <Route path="production/harvest" element={<HarvestPage />} />
-        <Route path="production/revenue" element={<RevenuePage />} />
-        <Route path="admin/settings" element={<SettingsPage />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Route>
-    </Routes>
+        <Route path="/" element={<AppLayout />}>
+          <Route index element={<FarmDashboard />} />
+          <Route path="orchard/map" element={<FarmMapPage />} />
+          <Route path="orchard/trees" element={<TreesPage />} />
+          <Route path="orchard/setup" element={<FarmSetup />} />
+          <Route path="orchard/soil-report" element={<AddSoilReportPage />} />
+          <Route path="orchard/soil-zones" element={<Navigate to="/" replace />} />
+          <Route path="tree/:treeId" element={<TreeDashboard />} />
+          <Route path="irrigation/zones" element={<IrrigationZonesPage />} />
+          <Route path="irrigation/events" element={<IrrigationEventsPage />} />
+          <Route path="irrigation/fertigation" element={<FertigationPage />} />
+          <Route path="inputs/add-product" element={<AddProductPage />} />
+          <Route path="inputs/inventory" element={<InventoryPage />} />
+          <Route path="inputs/spray" element={<SprayPage />} />
+          <Route path="inputs/soil-application" element={<SoilApplicationPage />} />
+          <Route path="inputs/optimizer" element={<Navigate to="/inputs/inventory" replace />} />
+          <Route path="monitoring/soil" element={<SoilMonitoringPage />} />
+          <Route path="monitoring/satellite" element={<Navigate to="/monitoring/soil" replace />} />
+          <Route path="monitoring/disease" element={<DiseaseDashboardPage />} />
+          <Route path="monitoring/growth" element={<GrowthComparisonPage />} />
+          <Route path="monitoring/alerts" element={<AlertsPage />} />
+          <Route path="finance/expenses" element={<ExpensesPage />} />
+          <Route path="finance/labour" element={<LabourPage />} />
+          <Route path="finance/costs" element={<CostAnalysisPage />} />
+          <Route path="production/flowering" element={<Navigate to="/production/harvest" replace />} />
+          <Route path="production/fruit-set" element={<Navigate to="/production/harvest" replace />} />
+          <Route path="production/harvest" element={<HarvestPage />} />
+          <Route path="production/revenue" element={<RevenuePage />} />
+          <Route path="admin/settings" element={<SettingsPage />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Route>
+      </Routes>
     </FarmProvider>
+  );
+}
+
+function AppRoutes() {
+  return (
+    <Routes>
+      <Route path="/add-tree" element={<PublicAddTreePage />} />
+      <Route path="*" element={<ProtectedApp />} />
+    </Routes>
   );
 }
 

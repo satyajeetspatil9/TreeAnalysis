@@ -2,3 +2,6 @@
 
 [functions.ingest-sensor-reading]
 verify_jwt = false
+
+[functions.public-add-tree]
+verify_jwt = false
