@@ -53,17 +53,61 @@ async function resolveFarmFromKey(supabase: ReturnType<typeof createClient>, api
   return { keyRow };
 }
 
+async function fetchLotsForFarm(supabase: ReturnType<typeof createClient>, farmId: number) {
+  const lotMap = new Map<number, Record<string, unknown>>();
+
+  const { data: phases, error: phasesError } = await supabase
+    .from('phases')
+    .select('id')
+    .eq('farm_id', farmId);
+  if (phasesError) throw new Error(phasesError.message);
+
+  const phaseIds = (phases || []).map((p) => p.id);
+  if (phaseIds.length === 0) return [];
+
+  const { data: sections, error: sectionsError } = await supabase
+    .from('sections')
+    .select('id')
+    .in('phase_id', phaseIds);
+  if (sectionsError) throw new Error(sectionsError.message);
+
+  const sectionIds = (sections || []).map((s) => s.id);
+  if (sectionIds.length === 0) return [];
+
+  const { data: sectionLots, error: lotsError } = await supabase
+    .from('lots')
+    .select(LOT_SELECT)
+    .in('section_id', sectionIds);
+  if (lotsError) throw new Error(lotsError.message);
+  (sectionLots || []).forEach((lot) => lotMap.set(lot.id, lot));
+
+  const { data: rows, error: rowsError } = await supabase
+    .from('rows')
+    .select('id')
+    .in('section_id', sectionIds);
+  if (rowsError) throw new Error(rowsError.message);
+
+  const rowIds = (rows || []).map((r) => r.id);
+  if (rowIds.length > 0) {
+    const { data: rowLots, error: legacyError } = await supabase
+      .from('lots')
+      .select('id, name, row_id, rows ( name, sections ( name ) )')
+      .in('row_id', rowIds);
+    if (legacyError) throw new Error(legacyError.message);
+    (rowLots || []).forEach((lot) => lotMap.set(lot.id, lot));
+  }
+
+  return Array.from(lotMap.values());
+}
+
 async function loadBootstrap(supabase: ReturnType<typeof createClient>, farmId: number) {
   const { data: farm } = await supabase.from('farms').select('id, name').eq('id', farmId).maybeSingle();
-  const { data: lotIds, error: lotIdsError } = await supabase.rpc('lot_ids_for_farm', { p_farm_id: farmId });
-  if (lotIdsError) return { error: lotIdsError.message };
 
-  const ids = (lotIds as number[] | null) || [];
   let lots: unknown[] = [];
-  if (ids.length > 0) {
-    const { data, error } = await supabase.from('lots').select(LOT_SELECT).in('id', ids);
-    if (error) return { error: error.message };
-    lots = data || [];
+  try {
+    lots = await fetchLotsForFarm(supabase, farmId);
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : 'Failed to load lots' };
   }
 
   const { data: varieties, error: varietiesError } = await supabase
@@ -149,11 +193,17 @@ Deno.serve(async (req) => {
     return jsonResponse({ error: 'latitude and longitude are required' }, 400);
   }
 
-  const { data: lotFarmId, error: lotFarmError } = await supabase.rpc('farm_id_for_lot', { p_lot_id: lotId });
-  if (lotFarmError) {
-    return jsonResponse({ error: lotFarmError.message }, 500);
+  let farmLots: Record<string, unknown>[] = [];
+  try {
+    farmLots = await fetchLotsForFarm(supabase, keyRow.farm_id);
+  } catch (err) {
+    return jsonResponse({
+      error: err instanceof Error ? err.message : 'Failed to validate lot',
+    }, 500);
   }
-  if (lotFarmId !== keyRow.farm_id) {
+
+  const allowedLotIds = new Set(farmLots.map((lot) => Number(lot.id)));
+  if (!allowedLotIds.has(lotId)) {
     return jsonResponse({ error: 'Selected lot does not belong to this farm' }, 403);
   }
 
