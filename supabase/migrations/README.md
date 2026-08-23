@@ -21,4 +21,7 @@
 -- 028_products_active_column.sql — products.active default for Spray / Inventory lists
 -- 029_fix_photos_rls.sql — photos RLS + tree-photos storage bucket
 -- 030_fix_photos_storage_rls.sql — run this if Add Photo still fails after 029
+-- 031_farm_ingest_keys.sql — ESP32 7-in-1 sensor ingest API keys
+-- 032_create_ingest_key_helper.sql — create ingest keys in SQL Editor without frontend
+-- 033_rename_sensor_method_7in1.sql — update legacy 8-in-1 method labels in soil_observations
 -- =============================================================================

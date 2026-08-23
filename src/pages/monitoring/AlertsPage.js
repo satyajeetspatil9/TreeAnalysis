@@ -63,7 +63,7 @@ function AlertsPage() {
       <PageHeader
         section="Monitoring"
         title="Alerts"
-        subtitle="Open issues across the orchard, including nutrients below required levels from soil sensors."
+        subtitle="Open issues across the orchard, including nutrients below required levels from 7-in-1 soil sensors."
       />
       {message && <Alert severity={message.type} sx={{ mb: 2 }} onClose={() => setMessage(null)}>{message.text}</Alert>}
 

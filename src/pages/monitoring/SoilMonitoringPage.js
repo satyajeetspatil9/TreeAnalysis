@@ -254,7 +254,7 @@ function SoilMonitoringPage() {
       <PageHeader
         section="Monitoring"
         title="Soil"
-        subtitle="Review sensor readings and lab reports. Add new entries under Farm Setting → Add Soil Report."
+        subtitle="Review 7-in-1 sensor readings and lab reports. Add new entries under Farm Setting → Add Soil Report."
       />
 
       {message && <Alert severity={message.type} sx={{ mb: 2 }} onClose={() => setMessage(null)}>{message.text}</Alert>}
@@ -306,7 +306,7 @@ function SoilMonitoringPage() {
           Nutrients Below Required
         </Typography>
         <Typography variant="body1" sx={{ mb: 2, color: 'text.primary' }}>
-          Compares each tree&apos;s latest 8-in-1 sensor reading and your farm&apos;s latest lab report
+          Compares each tree&apos;s latest 7-in-1 sensor reading and your farm&apos;s latest lab report
           against required ranges. Trees below required levels are added to Monitoring → Alerts automatically.
         </Typography>
         {treesWithRecentReadings === 0 && labReports.length === 0 ? (
@@ -422,7 +422,7 @@ function SoilMonitoringPage() {
       </Paper>
 
       <Paper sx={{ p: 2, mb: 3 }} variant="outlined">
-        <Typography variant="h6" gutterBottom>Recent Sensor Readings</Typography>
+        <Typography variant="h6" gutterBottom>Recent 7-in-1 Sensor Readings</Typography>
         <Table size="small">
           <TableHead>
             <TableRow>

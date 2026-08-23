@@ -3,12 +3,20 @@ import { Link as RouterLink } from 'react-router-dom';
 import {
   Box, Typography, Paper, Grid, TextField, Button, FormControl, InputLabel, Select, MenuItem,
   Alert, Divider, Table, TableBody, TableCell, TableHead, TableRow,
+  Dialog, DialogTitle, DialogContent, DialogActions, DialogContentText,
 } from '@mui/material';
 import { supabase } from '../../supabaseClient';
 import { useAuth } from '../../contexts/AuthContext';
 import { useFarm } from '../../hooks/useFarm';
 import { useTreeVarieties } from '../../hooks/useTreeVarieties';
 import { formatDate, formatNumber } from '../../utils/formatters';
+import {
+  buildIngestSampleJson,
+  generateIngestKey,
+  getIngestFunctionUrl,
+  hashIngestKey,
+  ingestKeyPrefix,
+} from '../../utils/ingestApiKeys';
 
 const emptyFarmForm = {
   name: '',
@@ -27,8 +35,12 @@ function SettingsPage() {
   const [newVariety, setNewVariety] = useState('');
   const [sensors, setSensors] = useState([]);
   const [weather, setWeather] = useState([]);
-  const [sensorForm, setSensorForm] = useState({ device_code: '', sensor_type: 'SOIL_8IN1', manufacturer: 'ESP32' });
+  const [sensorForm, setSensorForm] = useState({ device_code: '', sensor_type: 'SOIL_7IN1', manufacturer: 'ESP32' });
   const [weatherForm, setWeatherForm] = useState({ temperature_c: '', humidity_percent: '', rainfall_mm: '' });
+  const [ingestKeys, setIngestKeys] = useState([]);
+  const [ingestKeyLabel, setIngestKeyLabel] = useState('ESP32');
+  const [newIngestKey, setNewIngestKey] = useState(null);
+  const [generatingKey, setGeneratingKey] = useState(false);
 
   useEffect(() => {
     if (farm) {
@@ -48,8 +60,14 @@ function SettingsPage() {
     if (!farm) return;
     const { data: s } = await supabase.from('sensors').select('*').eq('farm_id', farm.id);
     const { data: w } = await supabase.from('weather_observations').select('*').eq('farm_id', farm.id).order('observed_at', { ascending: false }).limit(10);
+    const { data: keys } = await supabase
+      .from('farm_ingest_keys')
+      .select('id, label, key_prefix, created_at, last_used_at, revoked_at')
+      .eq('farm_id', farm.id)
+      .order('created_at', { ascending: false });
     setSensors(s || []);
     setWeather(w || []);
+    setIngestKeys(keys || []);
   }, [farm]);
 
   useEffect(() => { load(); }, [load]);
@@ -59,6 +77,49 @@ function SettingsPage() {
     const { error } = await supabase.from('sensors').insert([{ farm_id: farm.id, ...sensorForm }]);
     if (error) setMessage({ type: 'error', text: error.message });
     else { setMessage({ type: 'success', text: 'Sensor registered.' }); load(); }
+  };
+
+  const generateIngestApiKey = async () => {
+    if (!farm) return;
+    setGeneratingKey(true);
+    setMessage(null);
+
+    const fullKey = generateIngestKey();
+    const keyHash = await hashIngestKey(fullKey);
+
+    const { error } = await supabase.from('farm_ingest_keys').insert([{
+      farm_id: farm.id,
+      label: ingestKeyLabel.trim() || 'ESP32',
+      key_prefix: ingestKeyPrefix(fullKey),
+      key_hash: keyHash,
+    }]);
+
+    setGeneratingKey(false);
+
+    if (error) {
+      const hint = error.message.includes('farm_ingest_keys')
+        ? `${error.message} Run migration 031_farm_ingest_keys.sql in Supabase SQL Editor.`
+        : error.message;
+      setMessage({ type: 'error', text: hint });
+      return;
+    }
+
+    setNewIngestKey(fullKey);
+    setIngestKeyLabel('ESP32');
+    await load();
+    setMessage({ type: 'success', text: 'Ingest API key created. Copy it now — it will not be shown again.' });
+  };
+
+  const revokeIngestKey = async (id) => {
+    const { error } = await supabase
+      .from('farm_ingest_keys')
+      .update({ revoked_at: new Date().toISOString() })
+      .eq('id', id);
+    if (error) setMessage({ type: 'error', text: error.message });
+    else {
+      await load();
+      setMessage({ type: 'success', text: 'Ingest API key revoked.' });
+    }
   };
 
   const addWeather = async () => {
@@ -298,6 +359,77 @@ function SettingsPage() {
       )}
 
       <Paper sx={{ p: 3, mb: 3 }} variant="outlined">
+        <Typography variant="h6" gutterBottom>7-in-1 sensor ingest (ESP32)</Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          Generate an API key for your ESP32 or field app to POST 7-in-1 readings by tree position code
+          (e.g. A-R01-L01-T01). Deploy the Supabase edge function and run migration 031 first.
+        </Typography>
+        <Alert severity="info" sx={{ mb: 2 }}>
+          POST URL: <strong>{getIngestFunctionUrl() || '(set REACT_APP_SUPABASE_URL)'}</strong>
+          <br />
+          Header: <strong>Authorization: Bearer &lt;your-ingest-key&gt;</strong>
+        </Alert>
+        <Grid container spacing={2} alignItems="center">
+          <Grid item xs={12} md={8}>
+            <TextField
+              label="Key label"
+              fullWidth
+              value={ingestKeyLabel}
+              onChange={(e) => setIngestKeyLabel(e.target.value)}
+              placeholder="ESP32 row A"
+              disabled={!farm}
+            />
+          </Grid>
+          <Grid item xs={12} md={4}>
+            <Button variant="contained" onClick={generateIngestApiKey} disabled={!farm || generatingKey}>
+              {generatingKey ? 'Generating…' : 'Generate ingest key'}
+            </Button>
+          </Grid>
+        </Grid>
+        <Table size="small" sx={{ mt: 2 }}>
+          <TableHead>
+            <TableRow>
+              <TableCell>Label</TableCell>
+              <TableCell>Key prefix</TableCell>
+              <TableCell>Created</TableCell>
+              <TableCell>Last used</TableCell>
+              <TableCell>Status</TableCell>
+              <TableCell align="right">Actions</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {ingestKeys.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={6}>No ingest keys yet.</TableCell>
+              </TableRow>
+            ) : (
+              ingestKeys.map((key) => (
+                <TableRow key={key.id}>
+                  <TableCell>{key.label}</TableCell>
+                  <TableCell>{key.key_prefix}…</TableCell>
+                  <TableCell>{formatDate(key.created_at)}</TableCell>
+                  <TableCell>{key.last_used_at ? formatDate(key.last_used_at) : '—'}</TableCell>
+                  <TableCell>{key.revoked_at ? 'Revoked' : 'Active'}</TableCell>
+                  <TableCell align="right">
+                    {!key.revoked_at && (
+                      <Button size="small" color="error" onClick={() => revokeIngestKey(key.id)}>
+                        Revoke
+                      </Button>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </Table>
+        <Typography variant="caption" color="text.secondary" component="pre" sx={{ mt: 2, display: 'block', whiteSpace: 'pre-wrap' }}>
+          Sample JSON body:
+          {'\n'}
+          {buildIngestSampleJson()}
+        </Typography>
+      </Paper>
+
+      <Paper sx={{ p: 3, mb: 3 }} variant="outlined">
         <Typography variant="h6" gutterBottom>Sensors</Typography>
         <Grid container spacing={2}>
           <Grid item xs={12} md={4}><TextField label="Device code" fullWidth value={sensorForm.device_code} onChange={(e) => setSensorForm({ ...sensorForm, device_code: e.target.value })} /></Grid>
@@ -329,6 +461,32 @@ function SettingsPage() {
       </Paper>
 
       <Button variant="outlined" color="error" onClick={signOut}>Sign Out</Button>
+
+      <Dialog open={Boolean(newIngestKey)} onClose={() => setNewIngestKey(null)} maxWidth="sm" fullWidth>
+        <DialogTitle>Copy your ingest API key</DialogTitle>
+        <DialogContent>
+          <DialogContentText sx={{ mb: 2 }}>
+            Store this key on your ESP32. It will not be shown again.
+          </DialogContentText>
+          <TextField
+            fullWidth
+            multiline
+            minRows={2}
+            value={newIngestKey || ''}
+            InputProps={{ readOnly: true }}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => {
+              if (newIngestKey) navigator.clipboard?.writeText(newIngestKey);
+            }}
+          >
+            Copy
+          </Button>
+          <Button variant="contained" onClick={() => setNewIngestKey(null)}>Done</Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

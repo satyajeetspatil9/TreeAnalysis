@@ -1,0 +1,4 @@
+# Supabase local/dev config. Deploy with: supabase functions deploy ingest-sensor-reading
+
+[functions.ingest-sensor-reading]
+verify_jwt = false

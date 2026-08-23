@@ -19,6 +19,7 @@ import {
   buildSensorUpdatePayload,
   observationToForm,
   getSoilStandard,
+  formatSensorMethodLabel,
   rlsHint,
 } from '../../utils/soil';
 import { refreshSoilNutrientAlerts } from '../../utils/soilAlerts';
@@ -151,10 +152,10 @@ function SoilTab({ tree }) {
 
       <Paper sx={{ p: 3, mb: 3 }} variant="outlined">
         <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', gap: 1 }}>
-          <Typography variant="h6">8-in-1 Sensor — This Tree</Typography>
+          <Typography variant="h6">7-in-1 Sensor — This Tree</Typography>
           {current && (
             <Chip
-              label={`Last reading: ${formatDate(current.observed_at)} · ${current.method || current.source || 'Manual'}`}
+              label={`Last reading: ${formatDate(current.observed_at)} · ${formatSensorMethodLabel(current.method) || current.source || 'Manual'}`}
               size="small"
             />
           )}

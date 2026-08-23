@@ -31,3 +31,6 @@ yarn-error.log*
 # Cursor / local assets
 .cursor/
 assets/
+
+# Supabase CLI temp
+supabase/.temp/

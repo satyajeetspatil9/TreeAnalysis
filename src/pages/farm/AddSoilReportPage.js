@@ -68,7 +68,7 @@ function AddSoilReportPage() {
       return;
     }
 
-    setMessage({ type: 'success', text: '8-in-1 sensor reading saved.' });
+    setMessage({ type: 'success', text: '7-in-1 sensor reading saved.' });
     setSensorForm(emptySensorForm());
     await refreshSoilNutrientAlerts(supabase);
   };
@@ -110,7 +110,7 @@ function AddSoilReportPage() {
       <PageHeader
         section="Farm Setting"
         title="Add Soil Report"
-        subtitle="Record per-tree 8-in-1 sensor readings and farm-wide laboratory micronutrients."
+        subtitle="Record per-tree 7-in-1 sensor readings and farm-wide laboratory micronutrients."
       />
 
       {message && <Alert severity={message.type} sx={{ mb: 2 }} onClose={() => setMessage(null)}>{message.text}</Alert>}
@@ -129,9 +129,9 @@ function AddSoilReportPage() {
       </Paper>
 
       <Paper sx={{ p: 3, mb: 3 }} variant="outlined">
-        <Typography variant="h6" gutterBottom>8-in-1 Sensor — Per Tree</Typography>
+        <Typography variant="h6" gutterBottom>7-in-1 Sensor — Per Tree</Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Monthly field tests with your 8-in-1 sensor. Each reading is stored against one tree.
+          Monthly field tests with your 7-in-1 sensor. Each reading is stored against one tree.
           View and edit past readings under Monitoring → Soil.
         </Typography>
         <Grid container spacing={2}>

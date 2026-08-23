@@ -161,7 +161,13 @@ export function soilStatusBadgeSx(status) {
 }
 
 export const SENSOR_SOURCE = 'SENSOR';
-export const SENSOR_METHOD = '8-in-1 sensor';
+export const SENSOR_METHOD = '7-in-1 sensor';
+export const LEGACY_SENSOR_METHOD = '8-in-1 sensor';
+
+export function formatSensorMethodLabel(method) {
+  if (!method || method === LEGACY_SENSOR_METHOD) return SENSOR_METHOD;
+  return method;
+}
 
 export function emptySensorForm() {
   return {

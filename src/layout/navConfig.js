@@ -87,7 +87,7 @@ export const navSections = [
       { label: 'Trees', path: '/orchard/trees', icon: ForestIcon, description: 'Add and manage trees' },
       { label: 'Zones', path: '/irrigation/zones', icon: OpacityIcon, description: 'Drip lines and valves' },
       { label: 'Add Product', path: '/inputs/add-product', icon: PostAddIcon, description: 'Define products and nutrients' },
-      { label: 'Add Soil Report', path: '/orchard/soil-report', icon: BiotechIcon, description: 'Sensor readings and lab reports' },
+      { label: 'Add Soil Report', path: '/orchard/soil-report', icon: BiotechIcon, description: '7-in-1 sensor readings and lab reports' },
     ],
   },
   {
