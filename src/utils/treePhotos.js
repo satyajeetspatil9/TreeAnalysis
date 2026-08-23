@@ -1,4 +1,5 @@
 export const TREE_PHOTOS_BUCKET = 'tree-photos';
+export const TREE_PHOTO_TYPE_FULL = 'TREE';
 
 export function photosRlsHint(message) {
   if (!message) return message;
@@ -38,6 +39,33 @@ function inferImageContentType(file) {
   if (extension === 'gif') return 'image/gif';
   if (extension === 'heic' || extension === 'heif') return 'image/heic';
   return 'image/jpeg';
+}
+
+export function plantingDateToTakenAt(plantingDate) {
+  return new Date(plantingDate).toISOString();
+}
+
+export function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || '');
+      const base64 = result.includes(',') ? result.split(',')[1] : result;
+      resolve(base64);
+    };
+    reader.onerror = () => reject(new Error('Could not read photo file.'));
+    reader.readAsDataURL(file);
+  });
+}
+
+export async function saveTreePhotoFromFile(supabase, treeId, file, plantingDate) {
+  const photoUrl = await uploadTreePhotoFile(supabase, treeId, file);
+  await insertTreePhoto(supabase, treeId, {
+    photo_url: photoUrl,
+    photo_type: TREE_PHOTO_TYPE_FULL,
+    description: null,
+    taken_at: plantingDateToTakenAt(plantingDate),
+  });
 }
 
 export async function uploadTreePhotoFile(supabase, treeId, file) {

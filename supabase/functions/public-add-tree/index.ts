@@ -227,6 +227,75 @@ function parseNumber(value: unknown) {
   return Number.isFinite(num) ? num : null;
 }
 
+const TREE_PHOTOS_BUCKET = 'tree-photos';
+const MAX_PHOTO_BYTES = 10 * 1024 * 1024;
+
+function plantingDateToTakenAt(plantingDate: string) {
+  return new Date(plantingDate).toISOString();
+}
+
+function parsePhotoPayload(body: Record<string, unknown>) {
+  const raw = body.photo_base64;
+  if (!raw || typeof raw !== 'string') return { photo: null as null };
+
+  let base64 = raw.trim();
+  let contentType = String(body.photo_content_type || 'image/jpeg');
+
+  const dataUrlMatch = base64.match(/^data:(image\/[\w+.-]+);base64,(.+)$/);
+  if (dataUrlMatch) {
+    contentType = dataUrlMatch[1];
+    base64 = dataUrlMatch[2];
+  }
+
+  if (!contentType.startsWith('image/')) {
+    return { error: 'photo_content_type must be an image type' };
+  }
+
+  try {
+    const binary = atob(base64);
+    if (binary.length > MAX_PHOTO_BYTES) {
+      return { error: 'Photo exceeds 10 MB limit' };
+    }
+    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+    return { photo: { bytes, contentType } };
+  } catch {
+    return { error: 'Invalid photo_base64' };
+  }
+}
+
+async function saveTreePhoto(
+  supabase: ReturnType<typeof createClient>,
+  treeId: number,
+  photo: { bytes: Uint8Array; contentType: string },
+  takenAt: string,
+) {
+  const ext = photo.contentType.includes('png') ? 'png'
+    : photo.contentType.includes('webp') ? 'webp'
+    : photo.contentType.includes('gif') ? 'gif'
+    : 'jpg';
+  const path = `${treeId}/${Date.now()}-add-tree.${ext}`;
+
+  const { error: uploadError } = await supabase.storage
+    .from(TREE_PHOTOS_BUCKET)
+    .upload(path, photo.bytes, { contentType: photo.contentType, upsert: false });
+  if (uploadError) return { error: uploadError.message };
+
+  const { data: urlData } = supabase.storage.from(TREE_PHOTOS_BUCKET).getPublicUrl(path);
+  const photoUrl = urlData?.publicUrl;
+  if (!photoUrl) return { error: 'Upload succeeded but public URL was not returned' };
+
+  const { error: insertError } = await supabase.from('photos').insert([{
+    tree_id: treeId,
+    photo_url: photoUrl,
+    photo_type: 'TREE',
+    description: null,
+    taken_at: takenAt,
+  }]);
+  if (insertError) return { error: insertError.message };
+
+  return { photo_url: photoUrl };
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: corsHeaders });
@@ -304,6 +373,13 @@ Deno.serve(async (req) => {
     return jsonResponse({ error: 'latitude and longitude are required' }, 400);
   }
 
+  const photoPayload = parsePhotoPayload(body);
+  if ('error' in photoPayload && photoPayload.error) {
+    return jsonResponse({ error: photoPayload.error }, 400);
+  }
+  const optionalPhoto = photoPayload.photo;
+  const takenAt = plantingDateToTakenAt(plantingDate);
+
   let farmLots: Record<string, unknown>[] = [];
   try {
     farmLots = await fetchLotsForFarm(supabase, keyRow.farm_id);
@@ -349,12 +425,22 @@ Deno.serve(async (req) => {
       .update({ last_used_at: new Date().toISOString() })
       .eq('id', keyRow.id);
 
+    let photoSaved = false;
+    if (optionalPhoto) {
+      const photoResult = await saveTreePhoto(supabase, activeTree.id, optionalPhoto, takenAt);
+      if ('error' in photoResult && photoResult.error) {
+        return jsonResponse({ error: photoResult.error }, 500);
+      }
+      photoSaved = true;
+    }
+
     return jsonResponse({
       ok: true,
       updated: true,
       tree_id: activeTree.id,
       position_code: positionCode,
       position_id: existingPosition.id,
+      photo_saved: photoSaved,
     });
   }
 
@@ -399,10 +485,20 @@ Deno.serve(async (req) => {
     .update({ last_used_at: new Date().toISOString() })
     .eq('id', keyRow.id);
 
+  let photoSaved = false;
+  if (optionalPhoto && tree?.id) {
+    const photoResult = await saveTreePhoto(supabase, tree.id, optionalPhoto, takenAt);
+    if ('error' in photoResult && photoResult.error) {
+      return jsonResponse({ error: photoResult.error }, 500);
+    }
+    photoSaved = true;
+  }
+
   return jsonResponse({
     ok: true,
     tree_id: tree?.id,
     position_code: positionCode,
     position_id: positionId,
+    photo_saved: photoSaved,
   });
 });

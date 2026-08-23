@@ -17,12 +17,14 @@ import {
   MenuItem, Select, InputLabel, FormControl,
 } from '@mui/material';
 import QrCodeScannerIcon from '@mui/icons-material/QrCodeScanner';
+import PhotoCameraIcon from '@mui/icons-material/PhotoCamera';
 import VarietySelect from './VarietySelect';
 import QrPositionScanner from './QrPositionScanner';
 import { captureDeviceGps, parseTreeGps } from '../utils/treeGps';
 import { useTreeVarieties } from '../hooks/useTreeVarieties';
 import { fetchPublicAddTreeBootstrap, fetchPublicTreeByPosition, submitPublicAddTree } from '../utils/publicAddTreeApi';
 import { fetchTreeByPositionCode, getTreeGps } from '../utils/schema';
+import { fileToBase64, saveTreePhotoFromFile } from '../utils/treePhotos';
 
 const DEFAULT_PLANTING_DATE = '2026-08-08';
 const DEFAULT_VARIETY_NAME = 'Alphonso';
@@ -36,6 +38,7 @@ function resolveDefaultVariety(varieties) {
 
 function AddTreeForm({ onSuccess, publicAccessKey = '' }) {
   const isPublic = Boolean(publicAccessKey);
+  const photoInputRef = React.useRef(null);
   const { varieties: hookVarieties } = useTreeVarieties();
   const [publicVarieties, setPublicVarieties] = useState([]);
   const [bootstrapLoading, setBootstrapLoading] = useState(isPublic);
@@ -59,7 +62,10 @@ function AddTreeForm({ onSuccess, publicAccessKey = '' }) {
   const [gpsWarning, setGpsWarning] = useState(null);
   const [success, setSuccess] = useState(false);
   const [successWasUpdate, setSuccessWasUpdate] = useState(false);
+  const [successPhotoSaved, setSuccessPhotoSaved] = useState(false);
   const [existingTreeId, setExistingTreeId] = useState(null);
+  const [photoFile, setPhotoFile] = useState(null);
+  const [photoPreviewUrl, setPhotoPreviewUrl] = useState('');
 
   useEffect(() => {
     if (varieties.length > 0) {
@@ -72,6 +78,17 @@ function AddTreeForm({ onSuccess, publicAccessKey = '' }) {
       });
     }
   }, [varieties]);
+
+  useEffect(() => () => {
+    if (photoPreviewUrl) URL.revokeObjectURL(photoPreviewUrl);
+  }, [photoPreviewUrl]);
+
+  const clearPhoto = useCallback(() => {
+    if (photoPreviewUrl) URL.revokeObjectURL(photoPreviewUrl);
+    setPhotoFile(null);
+    setPhotoPreviewUrl('');
+    if (photoInputRef.current) photoInputRef.current.value = '';
+  }, [photoPreviewUrl]);
 
   useEffect(() => {
     if (!isPublic) return undefined;
@@ -249,11 +266,27 @@ function AddTreeForm({ onSuccess, publicAccessKey = '' }) {
     if (gps.error) setGpsWarning(gps.error);
   };
 
+  const handlePhotoChange = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      setError('Please choose an image file for the tree photo.');
+      return;
+    }
+
+    if (photoPreviewUrl) URL.revokeObjectURL(photoPreviewUrl);
+    setPhotoFile(file);
+    setPhotoPreviewUrl(URL.createObjectURL(file));
+    setError(null);
+  };
+
   const handleSubmit = async (event) => {
     event.preventDefault();
     setLoading(true);
     setError(null);
     setSuccess(false);
+    setSuccessPhotoSaved(false);
 
     if (!variety || !plantingDate || !selectedLotRecord || !selectedRow || !positionCode) {
       setError(isPublic ? 'Scan the tree QR code first.' : 'Select lot, row, tree number, variety, and planting date.');
@@ -283,9 +316,11 @@ function AddTreeForm({ onSuccess, publicAccessKey = '' }) {
     try {
       const lotId = selectedLotRecord.id;
       let wasUpdate = Boolean(existingTreeId);
+      let treeId = existingTreeId;
+      let photoSaved = false;
 
       if (isPublic) {
-        await submitPublicAddTree(publicAccessKey, {
+        const payload = {
           position_code: positionCode,
           lot_id: lotId,
           variety,
@@ -293,7 +328,17 @@ function AddTreeForm({ onSuccess, publicAccessKey = '' }) {
           status,
           latitude: gps.latitude,
           longitude: gps.longitude,
-        });
+        };
+
+        if (photoFile) {
+          payload.photo_base64 = await fileToBase64(photoFile);
+          payload.photo_content_type = photoFile.type || 'image/jpeg';
+        }
+
+        const result = await submitPublicAddTree(publicAccessKey, payload);
+        treeId = result.tree_id;
+        photoSaved = Boolean(result.photo_saved);
+        wasUpdate = Boolean(result.updated) || wasUpdate;
       } else {
         const { data: existingPosition } = await supabase
           .from('tree_positions')
@@ -326,6 +371,7 @@ function AddTreeForm({ onSuccess, publicAccessKey = '' }) {
             .eq('id', activeTree.id);
           if (treeError) throw treeError;
           setExistingTreeId(activeTree.id);
+          treeId = activeTree.id;
         } else {
           if (!positionId) {
             const { data: newPosition, error: posError } = await supabase
@@ -348,22 +394,29 @@ function AddTreeForm({ onSuccess, publicAccessKey = '' }) {
             if (gpsError) throw gpsError;
           }
 
-          const { error: treeError } = await supabase.from('trees').insert([
+          const { data: newTree, error: treeError } = await supabase.from('trees').insert([
             {
               position_id: positionId,
               variety,
               planting_date: plantingDate,
               status,
             },
-          ]);
+          ]).select('id').single();
 
           if (treeError) throw treeError;
           setExistingTreeId(null);
+          treeId = newTree.id;
+        }
+
+        if (photoFile && treeId) {
+          await saveTreePhotoFromFile(supabase, treeId, photoFile, plantingDate);
+          photoSaved = true;
         }
       }
 
       setSuccessWasUpdate(wasUpdate);
       setSuccess(true);
+      setSuccessPhotoSaved(photoSaved);
       setVariety(resolveDefaultVariety(varieties));
       setPlantingDate(DEFAULT_PLANTING_DATE);
       setStatus('Active');
@@ -374,6 +427,7 @@ function AddTreeForm({ onSuccess, publicAccessKey = '' }) {
       setLatitude('');
       setLongitude('');
       setExistingTreeId(null);
+      clearPhoto();
       onSuccess?.();
     } catch (err) {
       setError(err.message);
@@ -521,6 +575,42 @@ function AddTreeForm({ onSuccess, publicAccessKey = '' }) {
       />
       <TextField label="Planting Date" type="date" fullWidth margin="normal" InputLabelProps={{ shrink: true }} value={plantingDate} onChange={(e) => setPlantingDate(e.target.value)} required />
 
+      <Typography variant="subtitle2" sx={{ mt: 2, mb: 1 }}>Tree photo (optional)</Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+        Saved as Full Tree photo with the planting date above.
+      </Typography>
+      <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 1 }}>
+        <Button
+          type="button"
+          variant="outlined"
+          startIcon={<PhotoCameraIcon />}
+          onClick={() => photoInputRef.current?.click()}
+        >
+          Take photo
+        </Button>
+        {photoFile && (
+          <Button type="button" variant="text" onClick={clearPhoto}>
+            Remove photo
+          </Button>
+        )}
+      </Box>
+      <input
+        ref={photoInputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        hidden
+        onChange={handlePhotoChange}
+      />
+      {photoPreviewUrl && (
+        <Box
+          component="img"
+          src={photoPreviewUrl}
+          alt="Tree preview"
+          sx={{ width: '100%', maxWidth: 320, height: 200, objectFit: 'cover', borderRadius: 1, mb: 2 }}
+        />
+      )}
+
       {!isPublic && (
         <>
       <Typography variant="subtitle2" sx={{ mt: 2, mb: 1 }}>GPS location (required)</Typography>
@@ -568,6 +658,7 @@ function AddTreeForm({ onSuccess, publicAccessKey = '' }) {
       {success && (
         <Alert severity="success" sx={{ mt: 2 }}>
           {successWasUpdate ? 'Tree updated successfully!' : 'Tree added successfully!'}
+          {successPhotoSaved && ' Full Tree photo saved to the tree dashboard.'}
         </Alert>
       )}
 
