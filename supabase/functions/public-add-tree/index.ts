@@ -53,6 +53,29 @@ async function resolveFarmFromKey(supabase: ReturnType<typeof createClient>, api
   return { keyRow };
 }
 
+async function attachLegacyRowLinks(
+  supabase: ReturnType<typeof createClient>,
+  lot: Record<string, unknown>,
+) {
+  const rowId = lot.row_id as number | null | undefined;
+  if (!rowId || (Array.isArray(lot.lot_rows) && lot.lot_rows.length > 0)) {
+    return lot;
+  }
+
+  const { data: rowData } = await supabase
+    .from('rows')
+    .select('id, name, sections ( name )')
+    .eq('id', rowId)
+    .maybeSingle();
+
+  if (!rowData) return lot;
+
+  return {
+    ...lot,
+    lot_rows: [{ row_id: rowId, rows: rowData }],
+  };
+}
+
 async function fetchLotsForFarm(supabase: ReturnType<typeof createClient>, farmId: number) {
   const lotMap = new Map<number, Record<string, unknown>>();
 
@@ -79,7 +102,9 @@ async function fetchLotsForFarm(supabase: ReturnType<typeof createClient>, farmI
     .select(LOT_SELECT)
     .in('section_id', sectionIds);
   if (lotsError) throw new Error(lotsError.message);
-  (sectionLots || []).forEach((lot) => lotMap.set(lot.id, lot));
+  for (const lot of sectionLots || []) {
+    lotMap.set(lot.id, await attachLegacyRowLinks(supabase, lot));
+  }
 
   const { data: rows, error: rowsError } = await supabase
     .from('rows')
@@ -89,12 +114,36 @@ async function fetchLotsForFarm(supabase: ReturnType<typeof createClient>, farmI
 
   const rowIds = (rows || []).map((r) => r.id);
   if (rowIds.length > 0) {
-    const { data: rowLots, error: legacyError } = await supabase
+    const { data: lotRowLinks, error: linkError } = await supabase
+      .from('lot_rows')
+      .select('lot_id')
+      .in('row_id', rowIds);
+    if (linkError) throw new Error(linkError.message);
+
+    const linkedLotIds = [...new Set((lotRowLinks || []).map((link) => link.lot_id))]
+      .filter((id) => !lotMap.has(id));
+
+    if (linkedLotIds.length > 0) {
+      const { data: linkedLots, error: linkedLotsError } = await supabase
+        .from('lots')
+        .select(LOT_SELECT)
+        .in('id', linkedLotIds);
+      if (linkedLotsError) throw new Error(linkedLotsError.message);
+      for (const lot of linkedLots || []) {
+        lotMap.set(lot.id, await attachLegacyRowLinks(supabase, lot));
+      }
+    }
+
+    const { data: legacyLots, error: legacyError } = await supabase
       .from('lots')
-      .select('id, name, row_id, rows ( name, sections ( name ) )')
+      .select('id, name, row_id, section_id, sections ( name )')
       .in('row_id', rowIds);
     if (legacyError) throw new Error(legacyError.message);
-    (rowLots || []).forEach((lot) => lotMap.set(lot.id, lot));
+
+    for (const lot of legacyLots || []) {
+      if (lotMap.has(lot.id)) continue;
+      lotMap.set(lot.id, await attachLegacyRowLinks(supabase, lot));
+    }
   }
 
   return Array.from(lotMap.values());
