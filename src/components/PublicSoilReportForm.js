@@ -142,27 +142,42 @@ function PublicSoilReportForm({ publicAccessKey }) {
             </Typography>
           </Box>
 
-          <Typography variant="subtitle2" sx={{ mb: 1 }}>
+          <Typography variant="subtitle2" sx={{ mb: 1.5 }}>
             7-in-1 sensor readings
           </Typography>
           <Grid container spacing={1.5} sx={{ mb: 2 }}>
-            {SENSOR_READING_FIELDS.map(({ key, standardKey }) => {
-              const standard = standardKey ? getSoilStandard(standardKey) : null;
-              const field = SENSOR_READING_FIELDS.find((item) => item.key === key);
+            {SENSOR_READING_FIELDS.map((field) => {
+              const standard = field.standardKey ? getSoilStandard(field.standardKey) : null;
               return (
-                <Grid item xs={6} sm={4} key={key}>
-                  <Box sx={{ p: 1.5, borderRadius: 1, bgcolor: 'action.hover' }}>
-                    <Typography variant="caption" color="text.secondary" display="block">
+                <Grid item xs={6} sm={4} md={3} key={field.key} sx={{ display: 'flex' }}>
+                  <Box
+                    sx={{
+                      p: 1.5,
+                      borderRadius: 1,
+                      bgcolor: 'action.hover',
+                      width: '100%',
+                      minHeight: 104,
+                      display: 'flex',
+                      flexDirection: 'column',
+                    }}
+                  >
+                    <Typography
+                      variant="caption"
+                      color="text.secondary"
+                      sx={{ minHeight: 32, lineHeight: 1.25, display: 'block' }}
+                    >
                       {fieldLabelWithUnit(field)}
                     </Typography>
-                    <Typography variant="body1" fontWeight={600}>
-                      {readings[key] ?? '—'}
+                    <Typography variant="h6" fontWeight={600} sx={{ my: 0.5, lineHeight: 1.2 }}>
+                      {readings[field.key] ?? '—'}
                     </Typography>
-                    {standard?.rangeLabel && (
-                      <Typography variant="caption" color="text.secondary">
-                        Target: {standard.rangeLabel}
-                      </Typography>
-                    )}
+                    <Typography
+                      variant="caption"
+                      color="text.secondary"
+                      sx={{ minHeight: 32, lineHeight: 1.25, display: 'block', mt: 'auto' }}
+                    >
+                      {standard?.rangeLabel ? `Target: ${standard.rangeLabel}` : '\u00A0'}
+                    </Typography>
                   </Box>
                 </Grid>
               );

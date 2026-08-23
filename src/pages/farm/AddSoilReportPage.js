@@ -135,7 +135,7 @@ function AddSoilReportPage() {
           View and edit past readings under Monitoring → Soil.
         </Typography>
         <Grid container spacing={2}>
-          <Grid item xs={12} md={4}>
+          <Grid item xs={12} sm={6} md={4}>
             <FormControl fullWidth required>
               <InputLabel>Tree</InputLabel>
               <Select
@@ -149,7 +149,7 @@ function AddSoilReportPage() {
               </Select>
             </FormControl>
           </Grid>
-          <Grid item xs={12} md={4}>
+          <Grid item xs={12} sm={6} md={4}>
             <TextField
               label="Reading date"
               type="date"
@@ -159,14 +159,17 @@ function AddSoilReportPage() {
               onChange={(e) => setSensorForm({ ...sensorForm, observed_at: e.target.value })}
             />
           </Grid>
+        </Grid>
+        <Grid container spacing={2} sx={{ mt: 0 }}>
           {SENSOR_READING_FIELDS.map(({ key, label, unit, standardKey }) => (
-            <Grid item xs={6} md={2} key={key}>
+            <Grid item xs={6} sm={4} md={3} key={key}>
               <TextField
                 label={unit ? `${label} (${unit})` : label}
                 fullWidth
                 value={sensorForm[key]}
                 onChange={(e) => setSensorForm({ ...sensorForm, [key]: e.target.value })}
-                helperText={standardKey ? `Target: ${getSoilStandard(standardKey)?.rangeLabel || ''}` : undefined}
+                helperText={standardKey ? `Target: ${getSoilStandard(standardKey)?.rangeLabel || ''}` : ' '}
+                FormHelperTextProps={{ sx: { minHeight: 32, m: 0, mt: 0.5 } }}
               />
             </Grid>
           ))}
