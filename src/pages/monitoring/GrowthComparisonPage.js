@@ -1,7 +1,26 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Box, Typography, Paper, Table, TableBody, TableCell, TableHead, TableRow, Grid,
+  Alert,
+  Box,
+  Button,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
+  Grid,
+  IconButton,
+  Paper,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableRow,
+  TextField,
+  Typography,
 } from '@mui/material';
+import EditIcon from '@mui/icons-material/Edit';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import {
   CartesianGrid,
   Line,
@@ -15,6 +34,15 @@ import {
 import { supabase } from '../../supabaseClient';
 import PageHeader from '../../components/common/PageHeader';
 import { formatDate, formatNumber, getTreeDisplayId } from '../../utils/formatters';
+import {
+  GROWTH_MEASUREMENT_FIELDS,
+  buildGrowthUpdatePayload,
+  emptyGrowthForm,
+  growthRlsHint,
+  hasGrowthMeasurement,
+  pickLatestGrowthByTree,
+  recordToGrowthForm,
+} from '../../utils/treeGrowth';
 
 function computeAverages(records) {
   const heightValues = records
@@ -46,6 +74,14 @@ function sortRecords(records) {
   return records.slice().sort((a, b) =>
     getTreeDisplayId(a.trees || {}).localeCompare(getTreeDisplayId(b.trees || {}))
   );
+}
+
+function sortAllRecords(records) {
+  return records.slice().sort((a, b) => {
+    const dateDiff = new Date(b.measurement_date) - new Date(a.measurement_date);
+    if (dateDiff !== 0) return dateDiff;
+    return getTreeDisplayId(a.trees || {}).localeCompare(getTreeDisplayId(b.trees || {}));
+  });
 }
 
 function HeightTooltip({ active, payload, average }) {
@@ -81,45 +117,116 @@ function TrunkTooltip({ active, payload, average }) {
 }
 
 function GrowthComparisonPage() {
-  const [records, setRecords] = useState([]);
+  const [allRecords, setAllRecords] = useState([]);
+  const [message, setMessage] = useState(null);
+  const [editingRecord, setEditingRecord] = useState(null);
+  const [editForm, setEditForm] = useState(emptyGrowthForm());
+  const [deletingRecord, setDeletingRecord] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
-  useEffect(() => {
-    async function load() {
-      const { data: latest } = await supabase
-        .from('tree_growth')
-        .select('*, trees(tree_positions(position_code), variety)')
-        .order('measurement_date', { ascending: false });
+  const loadRecords = useCallback(async () => {
+    const { data, error } = await supabase
+      .from('tree_growth')
+      .select('*, trees(tree_positions(position_code), variety)')
+      .order('measurement_date', { ascending: false });
 
-      const byTree = {};
-      (latest || []).forEach((r) => {
-        if (!byTree[r.tree_id]) byTree[r.tree_id] = r;
-      });
-      setRecords(Object.values(byTree));
+    if (error) {
+      setMessage({ type: 'error', text: growthRlsHint(error.message) });
+      setAllRecords([]);
+      return;
     }
-    load();
+
+    setAllRecords(data || []);
   }, []);
 
-  const averages = useMemo(() => computeAverages(records), [records]);
+  useEffect(() => {
+    loadRecords();
+  }, [loadRecords]);
+
+  const latestRecords = useMemo(() => pickLatestGrowthByTree(allRecords), [allRecords]);
+  const averages = useMemo(() => computeAverages(latestRecords), [latestRecords]);
 
   const heightChartData = useMemo(
-    () => sortRecords(records)
+    () => sortRecords(latestRecords)
       .filter((r) => r.height_cm != null && r.height_cm !== '')
       .map((r) => ({
         tree: getTreeDisplayId(r.trees || {}),
         height: Number(r.height_cm),
       })),
-    [records]
+    [latestRecords]
   );
 
   const trunkChartData = useMemo(
-    () => sortRecords(records)
+    () => sortRecords(latestRecords)
       .filter((r) => r.trunk_diameter_mm != null && r.trunk_diameter_mm !== '')
       .map((r) => ({
         tree: getTreeDisplayId(r.trees || {}),
         trunk: Number(r.trunk_diameter_mm),
       })),
-    [records]
+    [latestRecords]
   );
+
+  const openEditRecord = (record) => {
+    setEditingRecord(record);
+    setEditForm(recordToGrowthForm(record));
+  };
+
+  const closeEditRecord = () => {
+    setEditingRecord(null);
+    setEditForm(emptyGrowthForm());
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingRecord) return;
+
+    if (!editForm.measurement_date) {
+      setMessage({ type: 'error', text: 'Measurement date is required.' });
+      return;
+    }
+    if (!hasGrowthMeasurement(editForm)) {
+      setMessage({ type: 'error', text: 'Enter at least one measurement value.' });
+      return;
+    }
+
+    setSaving(true);
+    const payload = buildGrowthUpdatePayload(editForm);
+    const { error } = await supabase
+      .from('tree_growth')
+      .update(payload)
+      .eq('id', editingRecord.id);
+    setSaving(false);
+
+    if (error) {
+      setMessage({ type: 'error', text: growthRlsHint(error.message) });
+      return;
+    }
+
+    setMessage({ type: 'success', text: 'Growth measurement updated.' });
+    closeEditRecord();
+    loadRecords();
+  };
+
+  const handleDelete = async () => {
+    if (!deletingRecord) return;
+
+    setDeleting(true);
+    const { error } = await supabase
+      .from('tree_growth')
+      .delete()
+      .eq('id', deletingRecord.id);
+    setDeleting(false);
+
+    if (error) {
+      setMessage({ type: 'error', text: growthRlsHint(error.message) });
+      return;
+    }
+
+    setMessage({ type: 'success', text: 'Growth measurement deleted.' });
+    if (editingRecord?.id === deletingRecord.id) closeEditRecord();
+    setDeletingRecord(null);
+    loadRecords();
+  };
 
   const xAxisProps = {
     dataKey: 'tree',
@@ -134,8 +241,14 @@ function GrowthComparisonPage() {
     <Box>
       <PageHeader
         title="Growth Comparison"
-        subtitle="Latest measurement per tree compared with orchard averages."
+        subtitle="Charts compare the latest measurement per tree. Edit or delete any recorded measurement below."
       />
+
+      {message && (
+        <Alert severity={message.type} sx={{ mb: 2 }} onClose={() => setMessage(null)}>
+          {message.text}
+        </Alert>
+      )}
 
       <Paper sx={{ p: 2, mb: 2 }} variant="outlined">
         <Grid container spacing={2}>
@@ -164,7 +277,7 @@ function GrowthComparisonPage() {
         </Grid>
       </Paper>
 
-      {records.length > 0 && (
+      {latestRecords.length > 0 && (
         <Grid container spacing={2} sx={{ mb: 3 }}>
           <Grid item xs={12} lg={6}>
             <Paper sx={{ p: 2 }} variant="outlined">
@@ -238,6 +351,9 @@ function GrowthComparisonPage() {
       )}
 
       <Paper variant="outlined">
+        <Box sx={{ p: 2, pb: 0 }}>
+          <Typography variant="h6" gutterBottom>All Growth Measurements</Typography>
+        </Box>
         <Table size="small">
           <TableHead>
             <TableRow>
@@ -245,22 +361,27 @@ function GrowthComparisonPage() {
               <TableCell>Date</TableCell>
               <TableCell>Height (cm)</TableCell>
               <TableCell>Trunk (mm)</TableCell>
+              <TableCell>Canopy N-S (cm)</TableCell>
+              <TableCell>Canopy E-W (cm)</TableCell>
               <TableCell>vs Avg Height</TableCell>
               <TableCell>vs Avg Trunk</TableCell>
+              <TableCell align="right">Actions</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
-            {records.length === 0 ? (
+            {allRecords.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={6} align="center">No growth measurements recorded yet.</TableCell>
+                <TableCell colSpan={9} align="center">No growth measurements recorded yet.</TableCell>
               </TableRow>
             ) : (
-              sortRecords(records).map((r) => (
+              sortAllRecords(allRecords).map((r) => (
                 <TableRow key={r.id}>
                   <TableCell>{getTreeDisplayId(r.trees || {})}</TableCell>
                   <TableCell>{formatDate(r.measurement_date)}</TableCell>
                   <TableCell>{formatNumber(r.height_cm, 1)}</TableCell>
                   <TableCell>{formatNumber(r.trunk_diameter_mm, 1)}</TableCell>
+                  <TableCell>{formatNumber(r.canopy_ns_cm, 1)}</TableCell>
+                  <TableCell>{formatNumber(r.canopy_ew_cm, 1)}</TableCell>
                   <TableCell>
                     {diffFromAverage(r.height_cm, averages.height)}
                     {r.height_cm != null && averages.height != null ? ' cm' : ''}
@@ -269,12 +390,79 @@ function GrowthComparisonPage() {
                     {diffFromAverage(r.trunk_diameter_mm, averages.trunk)}
                     {r.trunk_diameter_mm != null && averages.trunk != null ? ' mm' : ''}
                   </TableCell>
+                  <TableCell align="right">
+                    <IconButton size="small" aria-label="Edit measurement" onClick={() => openEditRecord(r)}>
+                      <EditIcon fontSize="small" />
+                    </IconButton>
+                    <IconButton size="small" aria-label="Delete measurement" onClick={() => setDeletingRecord(r)}>
+                      <DeleteOutlineIcon fontSize="small" />
+                    </IconButton>
+                  </TableCell>
                 </TableRow>
               ))
             )}
           </TableBody>
         </Table>
       </Paper>
+
+      <Dialog open={Boolean(editingRecord)} onClose={closeEditRecord} maxWidth="md" fullWidth>
+        <DialogTitle>Edit Growth Measurement</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            {editingRecord ? getTreeDisplayId(editingRecord.trees || {}) : ''}
+          </Typography>
+          <Grid container spacing={2} sx={{ mt: 0.5 }}>
+            {GROWTH_MEASUREMENT_FIELDS.map(({ key, label, unit }) => (
+              <Grid item xs={6} sm={6} md={3} key={key}>
+                <TextField
+                  label={unit ? `${label} (${unit})` : label}
+                  fullWidth
+                  type="number"
+                  inputProps={{ min: 0, step: 'any' }}
+                  value={editForm[key]}
+                  onChange={(e) => setEditForm({ ...editForm, [key]: e.target.value })}
+                />
+              </Grid>
+            ))}
+            <Grid item xs={12} sm={6} md={3}>
+              <TextField
+                label="Measurement date"
+                type="date"
+                fullWidth
+                required
+                InputLabelProps={{ shrink: true }}
+                value={editForm.measurement_date}
+                onChange={(e) => setEditForm({ ...editForm, measurement_date: e.target.value })}
+              />
+            </Grid>
+          </Grid>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={closeEditRecord}>Cancel</Button>
+          <Button variant="contained" onClick={handleSaveEdit} disabled={saving}>
+            {saving ? 'Saving…' : 'Save changes'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={Boolean(deletingRecord)} onClose={() => setDeletingRecord(null)}>
+        <DialogTitle>Delete Growth Measurement?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            Delete the measurement for{' '}
+            <strong>{deletingRecord ? getTreeDisplayId(deletingRecord.trees || {}) : ''}</strong>
+            {' '}on{' '}
+            <strong>{deletingRecord ? formatDate(deletingRecord.measurement_date) : ''}</strong>?
+            This cannot be undone.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeletingRecord(null)}>Cancel</Button>
+          <Button color="error" variant="contained" onClick={handleDelete} disabled={deleting}>
+            {deleting ? 'Deleting…' : 'Delete'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }
