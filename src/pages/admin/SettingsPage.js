@@ -18,6 +18,7 @@ import {
   ingestKeyPrefix,
 } from '../../utils/ingestApiKeys';
 import { buildPublicAddTreePageUrl } from '../../utils/publicAddTreeApi';
+import { buildPublicSoilReportPageUrl } from '../../utils/publicSoilReportApi';
 
 const emptyFarmForm = {
   name: '',
@@ -360,9 +361,9 @@ function SettingsPage() {
       )}
 
       <Paper sx={{ p: 3, mb: 3 }} variant="outlined">
-        <Typography variant="h6" gutterBottom>Field access key (ESP32 + public Add Tree)</Typography>
+        <Typography variant="h6" gutterBottom>Field access key (ESP32 + public pages)</Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          One key for ESP32 sensor POSTs and the public Add Tree page (no login). Share the Add Tree link with field staff.
+          One key for ESP32 sensor POSTs, public Add Tree, and public Add Soil Report (no login).
         </Typography>
         <Alert severity="info" sx={{ mb: 2 }}>
           Sensor POST: <strong>{getIngestFunctionUrl() || '(set REACT_APP_SUPABASE_URL)'}</strong>
@@ -370,6 +371,8 @@ function SettingsPage() {
           Header: <strong>x-api-key: ta_…</strong>
           <br />
           Public Add Tree: <strong>{typeof window !== 'undefined' ? `${window.location.origin}/add-tree?key=ta_…` : '/add-tree?key=ta_…'}</strong>
+          <br />
+          Public Add Soil Report: <strong>{typeof window !== 'undefined' ? `${window.location.origin}/add-soil-report?key=ta_…` : '/add-soil-report?key=ta_…'}</strong>
         </Alert>
         <Grid container spacing={2} alignItems="center">
           <Grid item xs={12} md={8}>
@@ -468,7 +471,7 @@ function SettingsPage() {
         <DialogTitle>Copy your ingest API key</DialogTitle>
         <DialogContent>
           <DialogContentText sx={{ mb: 2 }}>
-            Store this key on your ESP32 or share the Add Tree link below. Shown once only.
+            Store this key on your ESP32 or share the public links below. Shown once only.
           </DialogContentText>
           <TextField
             fullWidth
@@ -484,6 +487,15 @@ function SettingsPage() {
             minRows={2}
             label="Public Add Tree link"
             value={newIngestKey ? buildPublicAddTreePageUrl(newIngestKey) : ''}
+            InputProps={{ readOnly: true }}
+            sx={{ mb: 2 }}
+          />
+          <TextField
+            fullWidth
+            multiline
+            minRows={2}
+            label="Public Add Soil Report link"
+            value={newIngestKey ? buildPublicSoilReportPageUrl(newIngestKey) : ''}
             InputProps={{ readOnly: true }}
           />
         </DialogContent>

@@ -6,6 +6,7 @@ import { FarmProvider } from './contexts/FarmContext';
 import Auth from './components/Auth';
 import AppLayout from './layout/AppLayout';
 import PublicAddTreePage from './pages/PublicAddTreePage';
+import PublicAddSoilReportPage from './pages/PublicAddSoilReportPage';
 import FarmDashboard from './pages/FarmDashboard';
 import FarmMapPage from './pages/FarmMapPage';
 import TreesPage from './pages/TreesPage';
@@ -88,6 +89,7 @@ function AppRoutes() {
   return (
     <Routes>
       <Route path="/add-tree" element={<PublicAddTreePage />} />
+      <Route path="/add-soil-report" element={<PublicAddSoilReportPage />} />
       <Route path="*" element={<ProtectedApp />} />
     </Routes>
   );
