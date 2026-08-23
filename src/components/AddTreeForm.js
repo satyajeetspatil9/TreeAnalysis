@@ -21,7 +21,8 @@ import VarietySelect from './VarietySelect';
 import QrPositionScanner from './QrPositionScanner';
 import { captureDeviceGps, parseTreeGps } from '../utils/treeGps';
 import { useTreeVarieties } from '../hooks/useTreeVarieties';
-import { fetchPublicAddTreeBootstrap, submitPublicAddTree } from '../utils/publicAddTreeApi';
+import { fetchPublicAddTreeBootstrap, fetchPublicTreeByPosition, submitPublicAddTree } from '../utils/publicAddTreeApi';
+import { fetchTreeByPositionCode, getTreeGps } from '../utils/schema';
 
 const DEFAULT_PLANTING_DATE = '2026-08-08';
 const DEFAULT_VARIETY_NAME = 'Alphonso';
@@ -57,6 +58,8 @@ function AddTreeForm({ onSuccess, publicAccessKey = '' }) {
   const [error, setError] = useState(null);
   const [gpsWarning, setGpsWarning] = useState(null);
   const [success, setSuccess] = useState(false);
+  const [successWasUpdate, setSuccessWasUpdate] = useState(false);
+  const [existingTreeId, setExistingTreeId] = useState(null);
 
   useEffect(() => {
     if (varieties.length > 0) {
@@ -151,6 +154,45 @@ function AddTreeForm({ onSuccess, publicAccessKey = '' }) {
     return true;
   }, [lots]);
 
+  const loadExistingTreeForPosition = useCallback(async (code) => {
+    try {
+      if (isPublic) {
+        const data = await fetchPublicTreeByPosition(publicAccessKey, code);
+        const existing = data.existing;
+        if (existing) {
+          setExistingTreeId(existing.tree_id);
+          setVariety(existing.variety || resolveDefaultVariety(varieties));
+          setPlantingDate(existing.planting_date || DEFAULT_PLANTING_DATE);
+          if (existing.latitude != null) setLatitude(String(existing.latitude));
+          if (existing.longitude != null) setLongitude(String(existing.longitude));
+          return true;
+        }
+      } else {
+        const tree = await fetchTreeByPositionCode(supabase, code);
+        if (tree?.status === 'Active') {
+          setExistingTreeId(tree.id);
+          setVariety(tree.variety || resolveDefaultVariety(varieties));
+          setPlantingDate(tree.planting_date || DEFAULT_PLANTING_DATE);
+          setStatus(tree.status || 'Active');
+          const gps = getTreeGps(tree);
+          if (gps) {
+            setLatitude(String(gps.latitude));
+            setLongitude(String(gps.longitude));
+          }
+          return true;
+        }
+      }
+    } catch (err) {
+      setGpsWarning(err.message);
+    }
+
+    setExistingTreeId(null);
+    setVariety(resolveDefaultVariety(varieties));
+    setPlantingDate(DEFAULT_PLANTING_DATE);
+    setStatus('Active');
+    return false;
+  }, [isPublic, publicAccessKey, varieties]);
+
   const requestLocation = useCallback(() => {
     setLocating(true);
     setGpsWarning(null);
@@ -174,27 +216,31 @@ function AddTreeForm({ onSuccess, publicAccessKey = '' }) {
     setScannerOpen(true);
   };
 
-  const handleQrScan = useCallback((rawText) => {
+  const handleQrScan = useCallback(async (rawText) => {
     if (!applyPositionCode(rawText)) {
       return false;
     }
 
     setScannerOpen(false);
-    setVariety(resolveDefaultVariety(varieties));
-    setPlantingDate(DEFAULT_PLANTING_DATE);
+    const normalized = extractPositionCodeFromScan(rawText);
+    const hasExisting = await loadExistingTreeForPosition(normalized);
 
     window.setTimeout(() => {
       requestLocation().then((gps) => {
         if (gps.error) {
-          setGpsWarning(`Position filled from QR. ${gps.error}`);
+          setGpsWarning(
+            hasExisting
+              ? `Existing tree loaded. ${gps.error}`
+              : `Position filled from QR. ${gps.error}`,
+          );
         } else {
-          setGpsWarning(null);
+          setGpsWarning(hasExisting ? 'Existing tree found — saving will update details.' : null);
         }
       });
     }, 0);
 
     return true;
-  }, [applyPositionCode, requestLocation, varieties]);
+  }, [applyPositionCode, loadExistingTreeForPosition, requestLocation]);
 
   const handleCaptureLocationClick = async () => {
     setError(null);
@@ -236,6 +282,7 @@ function AddTreeForm({ onSuccess, publicAccessKey = '' }) {
 
     try {
       const lotId = selectedLotRecord.id;
+      let wasUpdate = Boolean(existingTreeId);
 
       if (isPublic) {
         await submitPublicAddTree(publicAccessKey, {
@@ -254,45 +301,68 @@ function AddTreeForm({ onSuccess, publicAccessKey = '' }) {
           .eq('position_code', positionCode)
           .maybeSingle();
 
-        if (existingPosition?.trees?.some((t) => t.status === 'Active')) {
-          throw new Error(`Position ${positionCode} already has an active tree. Remove or replace it first.`);
-        }
-
+        const activeTree = existingPosition?.trees?.find((t) => t.status === 'Active');
         let positionId = existingPosition?.id;
 
-        if (!positionId) {
-          const { data: newPosition, error: posError } = await supabase
+        if (activeTree && positionId) {
+          wasUpdate = true;
+          const { error: posError } = await supabase
             .from('tree_positions')
-            .insert([{
-              position_code: positionCode,
-              lot_id: lotId,
+            .update({
               latitude: gps.latitude,
               longitude: gps.longitude,
-            }])
-            .select()
-            .single();
-          if (posError) throw posError;
-          positionId = newPosition.id;
-        } else {
-          const { error: gpsError } = await supabase
-            .from('tree_positions')
-            .update({ latitude: gps.latitude, longitude: gps.longitude })
+              lot_id: lotId,
+            })
             .eq('id', positionId);
-          if (gpsError) throw gpsError;
+          if (posError) throw posError;
+
+          const { error: treeError } = await supabase
+            .from('trees')
+            .update({
+              variety,
+              planting_date: plantingDate,
+              status,
+            })
+            .eq('id', activeTree.id);
+          if (treeError) throw treeError;
+          setExistingTreeId(activeTree.id);
+        } else {
+          if (!positionId) {
+            const { data: newPosition, error: posError } = await supabase
+              .from('tree_positions')
+              .insert([{
+                position_code: positionCode,
+                lot_id: lotId,
+                latitude: gps.latitude,
+                longitude: gps.longitude,
+              }])
+              .select()
+              .single();
+            if (posError) throw posError;
+            positionId = newPosition.id;
+          } else {
+            const { error: gpsError } = await supabase
+              .from('tree_positions')
+              .update({ latitude: gps.latitude, longitude: gps.longitude, lot_id: lotId })
+              .eq('id', positionId);
+            if (gpsError) throw gpsError;
+          }
+
+          const { error: treeError } = await supabase.from('trees').insert([
+            {
+              position_id: positionId,
+              variety,
+              planting_date: plantingDate,
+              status,
+            },
+          ]);
+
+          if (treeError) throw treeError;
+          setExistingTreeId(null);
         }
-
-        const { error: treeError } = await supabase.from('trees').insert([
-          {
-            position_id: positionId,
-            variety,
-            planting_date: plantingDate,
-            status,
-          },
-        ]);
-
-        if (treeError) throw treeError;
       }
 
+      setSuccessWasUpdate(wasUpdate);
       setSuccess(true);
       setVariety(resolveDefaultVariety(varieties));
       setPlantingDate(DEFAULT_PLANTING_DATE);
@@ -303,6 +373,7 @@ function AddTreeForm({ onSuccess, publicAccessKey = '' }) {
       setScannedCode('');
       setLatitude('');
       setLongitude('');
+      setExistingTreeId(null);
       onSuccess?.();
     } catch (err) {
       setError(err.message);
@@ -494,10 +565,14 @@ function AddTreeForm({ onSuccess, publicAccessKey = '' }) {
 
       {gpsWarning && <Alert severity="warning" sx={{ mt: 2 }}>{gpsWarning}</Alert>}
       {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
-      {success && <Alert severity="success" sx={{ mt: 2 }}>Tree added successfully!</Alert>}
+      {success && (
+        <Alert severity="success" sx={{ mt: 2 }}>
+          {successWasUpdate ? 'Tree updated successfully!' : 'Tree added successfully!'}
+        </Alert>
+      )}
 
       <Button type="submit" variant="contained" fullWidth sx={{ mt: 3 }} disabled={loading || bootstrapLoading || !positionCode || !latitude || !longitude}>
-        {loading ? <CircularProgress size={24} /> : 'Add Tree'}
+        {loading ? <CircularProgress size={24} /> : (existingTreeId ? 'Update Tree' : 'Add Tree')}
       </Button>
 
       <QrPositionScanner

@@ -24,6 +24,15 @@ export async function fetchPublicAddTreeBootstrap(accessKey) {
   return parseJsonResponse(res);
 }
 
+export async function fetchPublicTreeByPosition(accessKey, positionCode) {
+  const url = new URL(getPublicAddTreeFunctionUrl());
+  url.searchParams.set('position_code', positionCode);
+  const res = await fetch(url.toString(), {
+    headers: { 'x-api-key': accessKey },
+  });
+  return parseJsonResponse(res);
+}
+
 export async function submitPublicAddTree(accessKey, payload) {
   const res = await fetch(getPublicAddTreeFunctionUrl(), {
     method: 'POST',

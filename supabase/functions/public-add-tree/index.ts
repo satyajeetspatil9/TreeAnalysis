@@ -173,6 +173,54 @@ async function loadBootstrap(supabase: ReturnType<typeof createClient>, farmId: 
   };
 }
 
+async function fetchExistingTreeAtPosition(
+  supabase: ReturnType<typeof createClient>,
+  farmId: number,
+  positionCode: string,
+) {
+  const { data: position, error } = await supabase
+    .from('tree_positions')
+    .select('id, lot_id, latitude, longitude, trees(id, status, variety, planting_date)')
+    .eq('position_code', positionCode)
+    .maybeSingle();
+
+  if (error) return { error: error.message };
+  if (!position) return { existing: null };
+
+  let farmLots: Record<string, unknown>[] = [];
+  try {
+    farmLots = await fetchLotsForFarm(supabase, farmId);
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : 'Failed to validate position' };
+  }
+
+  const allowedLotIds = new Set(farmLots.map((lot) => Number(lot.id)));
+  if (!allowedLotIds.has(Number(position.lot_id))) {
+    return { existing: null };
+  }
+
+  const trees = (position.trees || []) as Array<{
+    id: number;
+    status: string;
+    variety: string;
+    planting_date: string;
+  }>;
+  const activeTree = trees.find((t) => t.status === 'Active');
+  if (!activeTree) return { existing: null };
+
+  return {
+    existing: {
+      tree_id: activeTree.id,
+      position_id: position.id,
+      variety: activeTree.variety,
+      planting_date: activeTree.planting_date,
+      status: activeTree.status,
+      latitude: position.latitude,
+      longitude: position.longitude,
+    },
+  };
+}
+
 function parseNumber(value: unknown) {
   if (value === null || value === undefined || value === '') return null;
   const num = Number(value);
@@ -203,6 +251,20 @@ Deno.serve(async (req) => {
   const { keyRow } = resolved as { keyRow: { id: number; farm_id: number } };
 
   if (req.method === 'GET') {
+    const url = new URL(req.url);
+    const positionCode = url.searchParams.get('position_code')?.trim().toUpperCase() || '';
+
+    if (positionCode) {
+      if (!POSITION_CODE_REGEX.test(positionCode)) {
+        return jsonResponse({ error: 'Invalid position_code (expected e.g. A-R01-L01-T01)' }, 400);
+      }
+      const lookup = await fetchExistingTreeAtPosition(supabase, keyRow.farm_id, positionCode);
+      if ('error' in lookup && lookup.error) {
+        return jsonResponse({ error: lookup.error }, 500);
+      }
+      return jsonResponse({ ok: true, existing: lookup.existing ?? null });
+    }
+
     const bootstrap = await loadBootstrap(supabase, keyRow.farm_id);
     if ('error' in bootstrap && bootstrap.error) {
       return jsonResponse({ error: bootstrap.error }, 500);
@@ -258,12 +320,42 @@ Deno.serve(async (req) => {
 
   const { data: existingPosition } = await supabase
     .from('tree_positions')
-    .select('id, trees(id, status)')
+    .select('id, lot_id, trees(id, status, variety, planting_date)')
     .eq('position_code', positionCode)
     .maybeSingle();
 
-  if (existingPosition?.trees?.some((t: { status: string }) => t.status === 'Active')) {
-    return jsonResponse({ error: `Position ${positionCode} already has an active tree` }, 409);
+  const activeTree = (existingPosition?.trees as Array<{ id: number; status: string }> | undefined)
+    ?.find((t) => t.status === 'Active');
+
+  if (activeTree && existingPosition) {
+    if (!allowedLotIds.has(Number(existingPosition.lot_id))) {
+      return jsonResponse({ error: 'Position does not belong to this farm' }, 403);
+    }
+
+    const { error: posError } = await supabase
+      .from('tree_positions')
+      .update({ latitude, longitude, lot_id: lotId })
+      .eq('id', existingPosition.id);
+    if (posError) return jsonResponse({ error: posError.message }, 500);
+
+    const { error: treeError } = await supabase
+      .from('trees')
+      .update({ variety, planting_date: plantingDate, status })
+      .eq('id', activeTree.id);
+    if (treeError) return jsonResponse({ error: treeError.message }, 500);
+
+    await supabase
+      .from('farm_ingest_keys')
+      .update({ last_used_at: new Date().toISOString() })
+      .eq('id', keyRow.id);
+
+    return jsonResponse({
+      ok: true,
+      updated: true,
+      tree_id: activeTree.id,
+      position_code: positionCode,
+      position_id: existingPosition.id,
+    });
   }
 
   let positionId = existingPosition?.id as number | undefined;
