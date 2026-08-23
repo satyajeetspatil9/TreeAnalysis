@@ -2,7 +2,6 @@ import React from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Alert, Box, Container, Typography } from '@mui/material';
 import PublicSoilReportForm from '../components/PublicSoilReportForm';
-import { buildSoilReportCurlExample } from '../utils/publicSoilReportApi';
 
 function PublicAddSoilReportPage() {
   const [searchParams] = useSearchParams();
@@ -28,11 +27,6 @@ function PublicAddSoilReportPage() {
           7-in-1 sensor only. Scan QR, fetch readings, and save — no login required.
         </Typography>
         <PublicSoilReportForm publicAccessKey={accessKey} />
-        <Typography variant="caption" color="text.secondary" component="pre" sx={{ mt: 3, display: 'block', whiteSpace: 'pre-wrap' }}>
-          curl example (Windows):
-          {'\n'}
-          {buildSoilReportCurlExample(accessKey)}
-        </Typography>
       </Container>
     </Box>
   );
