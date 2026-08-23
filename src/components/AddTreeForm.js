@@ -210,7 +210,7 @@ function AddTreeForm({ onSuccess, publicAccessKey = '' }) {
     setSuccess(false);
 
     if (!variety || !plantingDate || !selectedLotRecord || !selectedRow || !positionCode) {
-      setError('Select lot, row, tree number, variety, and planting date.');
+      setError(isPublic ? 'Scan the tree QR code first.' : 'Select lot, row, tree number, variety, and planting date.');
       setLoading(false);
       return;
     }
@@ -325,27 +325,66 @@ function AddTreeForm({ onSuccess, publicAccessKey = '' }) {
 
       {!bootstrapLoading && !bootstrapError && (
         <>
-      <Typography variant="h6" gutterBottom>Add New Tree</Typography>
+      {!isPublic && <Typography variant="h6" gutterBottom>Add New Tree</Typography>}
       {isPublic && farmName && (
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
           Farm: {farmName}
         </Typography>
       )}
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Tap Scan QR code to fill position, variety (Alphonso), planting date, and GPS. Allow camera when prompted.
-        GPS coordinates are required for each tree position.
+        {isPublic
+          ? 'Scan the tree QR tag to fill position and GPS. Confirm variety and planting date, then save.'
+          : 'Tap Scan QR code to fill position, variety (Alphonso), planting date, and GPS. Allow camera when prompted. GPS coordinates are required for each tree position.'}
       </Typography>
 
       <Button
         type="button"
-        variant="outlined"
+        variant={isPublic ? 'contained' : 'outlined'}
         startIcon={<QrCodeScannerIcon />}
         onClick={openScanner}
-        sx={{ mb: 1 }}
+        sx={{ mb: 2 }}
       >
         Scan QR code
       </Button>
 
+      {isPublic ? (
+        <>
+          <Box sx={{ mb: 2, p: 2, borderRadius: 1, bgcolor: 'action.hover' }}>
+            <Typography variant="caption" color="text.secondary" display="block">
+              Position code
+            </Typography>
+            <Typography variant="h5" fontWeight={700} sx={{ mt: 0.5 }}>
+              {positionCode || '—'}
+            </Typography>
+          </Box>
+
+          <Box sx={{ mb: 2, p: 2, borderRadius: 1, bgcolor: 'action.hover' }}>
+            <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.5 }}>
+              GPS location (required)
+            </Typography>
+            <Typography variant="body1" fontWeight={600}>
+              {latitude && longitude
+                ? `Lat ${latitude}, Long ${longitude}`
+                : locating
+                  ? 'Getting location…'
+                  : 'Not captured yet'}
+            </Typography>
+            {!latitude && !longitude && (
+              <Button
+                type="button"
+                variant="outlined"
+                size="small"
+                onClick={handleCaptureLocationClick}
+                disabled={locating}
+                sx={{ mt: 1 }}
+              >
+                {locating ? 'Getting location…' : 'Use my current location'}
+              </Button>
+            )}
+          </Box>
+        </>
+      ) : (
+        <>
       <FormControl fullWidth margin="normal" required>
         <InputLabel>Lot</InputLabel>
         <Select
@@ -399,6 +438,8 @@ function AddTreeForm({ onSuccess, publicAccessKey = '' }) {
             : 'Auto-generated from lot, row, and tree number'
         }
       />
+        </>
+      )}
 
       <VarietySelect
         value={variety}
@@ -409,6 +450,8 @@ function AddTreeForm({ onSuccess, publicAccessKey = '' }) {
       />
       <TextField label="Planting Date" type="date" fullWidth margin="normal" InputLabelProps={{ shrink: true }} value={plantingDate} onChange={(e) => setPlantingDate(e.target.value)} required />
 
+      {!isPublic && (
+        <>
       <Typography variant="subtitle2" sx={{ mt: 2, mb: 1 }}>GPS location (required)</Typography>
       <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 1 }}>
         <Button type="button" variant="outlined" size="small" onClick={handleCaptureLocationClick} disabled={locating}>
@@ -446,6 +489,8 @@ function AddTreeForm({ onSuccess, publicAccessKey = '' }) {
           ))}
         </Select>
       </FormControl>
+        </>
+      )}
 
       {gpsWarning && <Alert severity="warning" sx={{ mt: 2 }}>{gpsWarning}</Alert>}
       {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}

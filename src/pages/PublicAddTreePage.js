@@ -24,7 +24,7 @@ function PublicAddTreePage() {
           Add Tree
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Scan the tree QR tag, confirm details, and save. No login required.
+          Scan the tree QR tag, confirm details, and save.
         </Typography>
         <AddTreeForm publicAccessKey={accessKey} />
       </Container>
