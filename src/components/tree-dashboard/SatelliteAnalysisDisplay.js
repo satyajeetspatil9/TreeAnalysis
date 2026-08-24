@@ -8,6 +8,7 @@ import {
   Paper,
   Typography,
 } from '@mui/material';
+import { alpha, useTheme } from '@mui/material/styles';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import SatelliteAltIcon from '@mui/icons-material/SatelliteAlt';
 import WaterDropOutlinedIcon from '@mui/icons-material/WaterDropOutlined';
@@ -15,17 +16,37 @@ import GrassOutlinedIcon from '@mui/icons-material/GrassOutlined';
 import ScienceOutlinedIcon from '@mui/icons-material/ScienceOutlined';
 import RadarOutlinedIcon from '@mui/icons-material/RadarOutlined';
 import { formatDate, formatNumber } from '../../utils/formatters';
-import { severityChipColor } from '../../utils/gpsSatelliteAnalysis';
 import {
   SATELLITE_INDEX_INFO,
+  actionHintColor,
+  confidenceChipColor,
   friendlyIndexStatus,
   friendlyOverallStatus,
   friendlyReason,
   friendlyStressStatus,
   formatTechnicalIndex,
   overallActionHint,
+  overallStressLevel,
+  reasonChipColor,
+  severityToChipColor,
   stressLevelColor,
+  stressPercentTextColor,
 } from '../../utils/satelliteDisplay';
+
+function overallPanelSx(theme, severity, stressPercentage) {
+  const level = overallStressLevel(severity, stressPercentage);
+  const paletteColor = level === 'critical' || level === 'high'
+    ? theme.palette.error
+    : level === 'moderate'
+      ? theme.palette.warning
+      : theme.palette.success;
+
+  return {
+    bgcolor: alpha(paletteColor.main, 0.14),
+    border: 1,
+    borderColor: alpha(paletteColor.main, 0.45),
+  };
+}
 
 function IndexCard({ icon, title, short, statusRaw, value, hint, technicalKey }) {
   const friendly = friendlyIndexStatus(statusRaw);
@@ -121,6 +142,8 @@ export function SatelliteAnalysisDisplay({
   refreshing = false,
   cacheNote,
 }) {
+  const theme = useTheme();
+
   if (!analysis) return null;
 
   const overall = analysis.overall_condition || {};
@@ -137,6 +160,9 @@ export function SatelliteAnalysisDisplay({
 
   const overallFriendly = friendlyOverallStatus(overall.status, overall.severity);
   const actionHint = overallActionHint(overall.stress_percentage);
+  const severityLabel = overall.severity || overall.status;
+  const showSeverityChip = overall.severity
+    && String(overall.severity).toLowerCase() !== String(overallFriendly.headline).toLowerCase();
 
   return (
     <Box>
@@ -177,18 +203,24 @@ export function SatelliteAnalysisDisplay({
         )}
       </Box>
 
-      <Paper sx={{ p: 2.5, mb: 2, bgcolor: 'action.hover' }}>
+      <Paper sx={{ p: 2.5, mb: 2, ...overallPanelSx(theme, severityLabel, overall.stress_percentage) }}>
         <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, mb: 1 }}>
           <Typography variant="subtitle1" fontWeight={700}>Overall tree signal</Typography>
           <Chip
             label={overallFriendly.headline}
-            color={severityChipColor(overall.severity || overall.status)}
+            color={severityToChipColor(overallFriendly.headline)}
           />
+          {showSeverityChip && (
+            <Chip
+              label={overall.severity}
+              color={severityToChipColor(overall.severity)}
+            />
+          )}
           {quality.confidence && (
             <Chip
               label={`Image quality: ${quality.confidence}`}
               size="small"
-              variant="outlined"
+              color={confidenceChipColor(quality.confidence)}
             />
           )}
         </Box>
@@ -196,7 +228,10 @@ export function SatelliteAnalysisDisplay({
           {overallFriendly.summary}
         </Typography>
         {overall.stress_percentage != null && (
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+          <Typography
+            variant="body2"
+            sx={{ mb: 1, fontWeight: 600, color: stressPercentTextColor(overall.stress_percentage) }}
+          >
             Combined stress estimate: {formatNumber(overall.stress_percentage, 0)}%
             {overall.score != null && overall.max_score != null && (
               <> · Score {overall.score} / {overall.max_score}</>
@@ -204,14 +239,22 @@ export function SatelliteAnalysisDisplay({
           </Typography>
         )}
         {actionHint && (
-          <Typography variant="body2" sx={{ mb: 1, fontWeight: 500 }}>
+          <Typography
+            variant="body2"
+            sx={{ mb: 1, fontWeight: 600, color: actionHintColor(overall.stress_percentage) }}
+          >
             {actionHint}
           </Typography>
         )}
         {Array.isArray(overall.reasons) && overall.reasons.length > 0 && (
           <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
             {overall.reasons.map((reason) => (
-              <Chip key={reason} label={friendlyReason(reason)} size="small" variant="outlined" />
+              <Chip
+                key={reason}
+                label={friendlyReason(reason)}
+                size="small"
+                color={reasonChipColor(reason)}
+              />
             ))}
           </Box>
         )}

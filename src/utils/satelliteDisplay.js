@@ -152,6 +152,14 @@ const STRESS_STATUS_FRIENDLY = {
 };
 
 const OVERALL_STATUS_FRIENDLY = {
+  critical: {
+    headline: 'Critical',
+    summary: 'Multiple severe stress signals — inspect this tree as soon as possible.',
+  },
+  'high stress': {
+    headline: 'High stress',
+    summary: 'Strong stress across several indicators — field visit recommended.',
+  },
   'moderate stress': {
     headline: 'Needs attention',
     summary: 'Some stress signals — worth a field check this week.',
@@ -202,22 +210,102 @@ export function friendlyReason(reason) {
     'Very low vegetation (NDVI)': 'Very thin canopy',
     'Below-normal moisture (NDMI)': 'Below-normal moisture',
     'Low nutrient indicator (NDRE)': 'Low leaf nitrogen signal',
+    'High stress water stress': 'High water stress',
+    'Severe nutrient stress indicator': 'Severe nutrient stress',
+    'Moderate-high radar water-stress indicator': 'Moderate–high radar wetness signal',
+    'Moderate-high radar water-stress indicator radar water-stress indicator': 'Moderate–high radar wetness signal',
   };
   return map[reason] || reason;
 }
 
+/** MUI Chip color: error | warning | success | info | default */
 export function stressLevelColor(label) {
-  const value = normalizeKey(label);
-  if (value.includes('high') || value.includes('severe') || value.includes('very low') || value.includes('very dry')) {
-    return 'error';
-  }
-  if (value.includes('moderate') || value.includes('mild') || value.includes('borderline') || value.includes('fair') || value.includes('low')) {
+  return severityToChipColor(label);
+}
+
+export function severityToChipColor(text) {
+  const value = normalizeKey(text);
+  if (value.includes('moderate-high') || value.includes('moderate–high')) {
     return 'warning';
   }
-  if (value.includes('healthy') || value.includes('good') || value.includes('normal') || value.includes('no stress') || value.includes('ok')) {
+  if (
+    value.includes('critical')
+    || value.includes('severe')
+    || value.includes('very low')
+    || value.includes('very dry')
+    || value.includes('very thin')
+    || value.includes('high stress')
+    || value.includes('high water')
+  ) {
+    return 'error';
+  }
+  if (
+    value.includes('high')
+    || value.includes('dry')
+    || value.includes('attention')
+  ) {
+    return 'error';
+  }
+  if (
+    value.includes('moderate')
+    || value.includes('mild')
+    || value.includes('borderline')
+    || value.includes('fair')
+    || value.includes('low')
+    || value.includes('thin')
+  ) {
+    return 'warning';
+  }
+  if (
+    value.includes('healthy')
+    || value.includes('good')
+    || value.includes('normal')
+    || value.includes('no stress')
+    || value.includes('ok')
+    || value.includes('looking good')
+  ) {
     return 'success';
   }
   return 'default';
+}
+
+export function confidenceChipColor(confidence) {
+  const value = normalizeKey(confidence);
+  if (value.includes('high')) return 'success';
+  if (value.includes('medium') || value.includes('moderate')) return 'warning';
+  if (value.includes('low')) return 'error';
+  return 'info';
+}
+
+export function stressPercentLevel(stressPercentage) {
+  const pct = Number(stressPercentage);
+  if (Number.isNaN(pct)) return 'unknown';
+  if (pct >= 85) return 'critical';
+  if (pct >= 60) return 'high';
+  if (pct >= 35) return 'moderate';
+  return 'low';
+}
+
+export function stressPercentTextColor(stressPercentage) {
+  const level = stressPercentLevel(stressPercentage);
+  if (level === 'critical' || level === 'high') return 'error.main';
+  if (level === 'moderate') return 'warning.main';
+  return 'success.main';
+}
+
+export function overallStressLevel(severity, stressPercentage) {
+  const level = stressPercentLevel(stressPercentage);
+  const severityKey = normalizeKey(severity);
+  if (level === 'critical' || severityKey.includes('critical')) return 'critical';
+  if (level === 'high' || severityKey.includes('high stress') || severityKey.includes('attention')) return 'high';
+  if (level === 'moderate' || severityKey.includes('moderate')) return 'moderate';
+  return 'low';
+}
+
+export function reasonChipColor(rawReason) {
+  const friendly = friendlyReason(rawReason);
+  const combined = `${rawReason} ${friendly}`;
+  return severityToChipColor(combined);
 }
 
 export function formatTechnicalIndex(key, value) {
@@ -237,4 +325,11 @@ export function overallActionHint(stressPercentage) {
   if (pct >= 70) return 'Visit this tree and check irrigation, pests, and recent damage.';
   if (pct >= 45) return 'Schedule a field check when convenient.';
   return 'Routine monitoring is enough unless you see issues on the ground.';
+}
+
+export function actionHintColor(stressPercentage) {
+  const level = stressPercentLevel(stressPercentage);
+  if (level === 'critical' || level === 'high') return 'error.main';
+  if (level === 'moderate') return 'warning.main';
+  return 'text.secondary';
 }
