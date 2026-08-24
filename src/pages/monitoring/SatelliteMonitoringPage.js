@@ -31,8 +31,8 @@ import { alpha } from '@mui/material/styles';
 import { supabase } from '../../supabaseClient';
 import { useFarm } from '../../hooks/useFarm';
 import PageHeader from '../../components/common/PageHeader';
-import { formatDate, formatNumber } from '../../utils/formatters';
-import { getActiveTreeInstance } from '../../utils/schema';
+import { formatDate, formatNumber, getTreeDisplayId } from '../../utils/formatters';
+import { TREE_LIST_SELECT } from '../../utils/schema';
 import { parsePositionCode } from '../../utils/positionCode';
 import {
   EMPTY_TREE_FILTERS,
@@ -90,29 +90,28 @@ function IndicatorChip({ friendly, fallback = '—' }) {
   );
 }
 
-function collectRowPositions(row) {
-  const rowCode = row.name;
-  return (row.lot_rows || []).flatMap((lr) =>
-    (lr.lots?.tree_positions || [])
-      .map((pos) => {
-        const activeTree = getActiveTreeInstance(pos.trees);
-        return activeTree
-          ? {
-            ...pos,
-            activeTree,
-            rowId: row.id,
-            rowCode,
-            sectionName: row.sections?.name,
-          }
-          : null;
-      })
-      .filter(Boolean),
-  );
+function treeToFilterPosition(tree) {
+  const pos = tree.tree_positions;
+  if (!pos?.position_code) return null;
+
+  const sectionName = pos.lots?.sections?.name
+    || pos.lots?.lot_rows?.[0]?.rows?.sections?.name
+    || '';
+
+  return {
+    id: pos.id,
+    position_code: pos.position_code,
+    latitude: pos.latitude,
+    longitude: pos.longitude,
+    activeTree: { variety: tree.variety },
+    sectionName,
+    treeId: tree.id,
+  };
 }
 
 function SatelliteMonitoringPage() {
   const { farm, loading: farmLoading } = useFarm();
-  const [rows, setRows] = useState([]);
+  const [activeTrees, setActiveTrees] = useState([]);
   const [cacheByPositionId, setCacheByPositionId] = useState(new Map());
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -123,7 +122,7 @@ function SatelliteMonitoringPage() {
 
   const load = useCallback(async () => {
     if (!farm?.id) {
-      setRows([]);
+      setActiveTrees([]);
       setCacheByPositionId(new Map());
       setStats(null);
       setLoading(false);
@@ -134,23 +133,11 @@ function SatelliteMonitoringPage() {
     setMessage(null);
 
     try {
-      const [rowsResult, cacheResult, statsResult] = await Promise.all([
+      const [treesResult, cacheResult, statsResult] = await Promise.all([
         supabase
-          .from('rows')
-          .select(`
-            id, name,
-            sections ( name ),
-            lot_rows (
-              lots (
-                id, name,
-                tree_positions (
-                  id, position_code, latitude, longitude,
-                  trees ( id, status, variety, planting_date )
-                )
-              )
-            )
-          `)
-          .order('name'),
+          .from('trees')
+          .select(TREE_LIST_SELECT)
+          .eq('status', 'Active'),
         supabase
           .from('tree_gps_satellite_cache')
           .select('position_id, week_start, fetched_at, analysis, error_message')
@@ -158,7 +145,7 @@ function SatelliteMonitoringPage() {
         fetchGpsSatelliteStats(supabase, farm.id).catch(() => null),
       ]);
 
-      if (rowsResult.error) throw rowsResult.error;
+      if (treesResult.error) throw treesResult.error;
       if (cacheResult.error) {
         if (cacheResult.error.message?.includes('tree_gps_satellite_cache')) {
           setMessage({
@@ -170,12 +157,15 @@ function SatelliteMonitoringPage() {
         }
       }
 
-      setRows(rowsResult.data || []);
+      const sortedTrees = (treesResult.data || []).sort((a, b) =>
+        getTreeDisplayId(a).localeCompare(getTreeDisplayId(b), undefined, { numeric: true }),
+      );
+      setActiveTrees(sortedTrees);
       setCacheByPositionId(new Map((cacheResult.data || []).map((entry) => [entry.position_id, entry])));
       setStats(statsResult);
     } catch (err) {
       setMessage({ type: 'error', text: err.message });
-      setRows([]);
+      setActiveTrees([]);
       setCacheByPositionId(new Map());
       setStats(null);
     } finally {
@@ -189,8 +179,8 @@ function SatelliteMonitoringPage() {
   }, [load, farmLoading]);
 
   const allPositions = useMemo(
-    () => rows.flatMap((row) => collectRowPositions(row)),
-    [rows],
+    () => activeTrees.map(treeToFilterPosition).filter(Boolean),
+    [activeTrees],
   );
 
   const filterOptions = useMemo(
@@ -256,7 +246,7 @@ function SatelliteMonitoringPage() {
       <PageHeader
         section="Monitoring"
         title="Satellite"
-        subtitle="Weekly Sentinel signals for every tree with GPS. Filter by block, row, lot, variety, or stress level."
+        subtitle="Weekly Sentinel signals for active trees. Filter by block, row, lot, variety, or stress level."
       />
 
       {message && (
