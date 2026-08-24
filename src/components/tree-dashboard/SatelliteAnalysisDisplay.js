@@ -32,6 +32,7 @@ import {
   stressLevelColor,
   stressPercentTextColor,
 } from '../../utils/satelliteDisplay';
+import SatelliteIndicatorVisual, { SatelliteOverallVisual } from './SatelliteIndicatorArt';
 
 function overallPanelSx(theme, severity, stressPercentage) {
   const level = overallStressLevel(severity, stressPercentage);
@@ -48,12 +49,14 @@ function overallPanelSx(theme, severity, stressPercentage) {
   };
 }
 
-function IndexCard({ icon, title, short, statusRaw, value, hint, technicalKey }) {
+function IndexCard({ indicatorId, icon, title, short, statusRaw, value, hint, technicalKey }) {
   const friendly = friendlyIndexStatus(statusRaw);
   const technical = formatTechnicalIndex(technicalKey, value);
+  const chipColor = stressLevelColor(friendly.label);
 
   return (
-    <Paper variant="outlined" sx={{ p: 2, height: '100%' }}>
+    <Paper variant="outlined" sx={{ p: 2, height: '100%', overflow: 'hidden' }}>
+      <SatelliteIndicatorVisual indicatorId={indicatorId} statusColor={chipColor} />
       <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, mb: 1 }}>
         <Box sx={{ color: 'primary.main', mt: 0.25 }}>{icon}</Box>
         <Box sx={{ minWidth: 0 }}>
@@ -64,7 +67,7 @@ function IndexCard({ icon, title, short, statusRaw, value, hint, technicalKey })
       <Chip
         label={friendly.label}
         size="small"
-        color={stressLevelColor(friendly.label)}
+        color={chipColor}
         sx={{ mb: 1 }}
       />
       <Typography variant="body2" sx={{ mb: 0.5, lineHeight: 1.45 }}>
@@ -89,11 +92,13 @@ function IndexCard({ icon, title, short, statusRaw, value, hint, technicalKey })
   );
 }
 
-function StressCard({ icon, title, statusRaw, score, indicator }) {
+function StressCard({ indicatorId, icon, title, statusRaw, score, indicator }) {
   const friendly = friendlyStressStatus(statusRaw || indicator);
+  const chipColor = stressLevelColor(friendly.label);
 
   return (
-    <Paper variant="outlined" sx={{ p: 2, height: '100%' }}>
+    <Paper variant="outlined" sx={{ p: 2, height: '100%', overflow: 'hidden' }}>
+      <SatelliteIndicatorVisual indicatorId={indicatorId} statusColor={chipColor} />
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
         <Box sx={{ color: 'primary.main' }}>{icon}</Box>
         <Typography variant="subtitle2" fontWeight={700}>{title}</Typography>
@@ -101,7 +106,7 @@ function StressCard({ icon, title, statusRaw, score, indicator }) {
       <Chip
         label={friendly.label}
         size="small"
-        color={stressLevelColor(friendly.label)}
+        color={chipColor}
         sx={{ mb: 1 }}
       />
       <Typography variant="body2" sx={{ mb: 0.5, lineHeight: 1.45 }}>
@@ -163,6 +168,7 @@ export function SatelliteAnalysisDisplay({
   const severityLabel = overall.severity || overall.status;
   const showSeverityChip = overall.severity
     && String(overall.severity).toLowerCase() !== String(overallFriendly.headline).toLowerCase();
+  const overallVisualColor = severityToChipColor(severityLabel);
 
   return (
     <Box>
@@ -204,60 +210,65 @@ export function SatelliteAnalysisDisplay({
       </Box>
 
       <Paper sx={{ p: 2.5, mb: 2, ...overallPanelSx(theme, severityLabel, overall.stress_percentage) }}>
-        <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, mb: 1 }}>
-          <Typography variant="subtitle1" fontWeight={700}>Overall tree signal</Typography>
-          <Chip
-            label={overallFriendly.headline}
-            color={severityToChipColor(overallFriendly.headline)}
-          />
-          {showSeverityChip && (
-            <Chip
-              label={overall.severity}
-              color={severityToChipColor(overall.severity)}
-            />
-          )}
-          {quality.confidence && (
-            <Chip
-              label={`Image quality: ${quality.confidence}`}
-              size="small"
-              color={confidenceChipColor(quality.confidence)}
-            />
-          )}
-        </Box>
-        <Typography variant="body1" sx={{ mb: 1, lineHeight: 1.5 }}>
-          {overallFriendly.summary}
-        </Typography>
-        {overall.stress_percentage != null && (
-          <Typography
-            variant="body2"
-            sx={{ mb: 1, fontWeight: 600, color: stressPercentTextColor(overall.stress_percentage) }}
-          >
-            Combined stress estimate: {formatNumber(overall.stress_percentage, 0)}%
-            {overall.score != null && overall.max_score != null && (
-              <> · Score {overall.score} / {overall.max_score}</>
-            )}
-          </Typography>
-        )}
-        {actionHint && (
-          <Typography
-            variant="body2"
-            sx={{ mb: 1, fontWeight: 600, color: actionHintColor(overall.stress_percentage) }}
-          >
-            {actionHint}
-          </Typography>
-        )}
-        {Array.isArray(overall.reasons) && overall.reasons.length > 0 && (
-          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
-            {overall.reasons.map((reason) => (
+        <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, gap: 2, mb: 1.5 }}>
+          <SatelliteOverallVisual statusColor={overallVisualColor} />
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, mb: 1 }}>
+              <Typography variant="subtitle1" fontWeight={700}>Overall tree signal</Typography>
               <Chip
-                key={reason}
-                label={friendlyReason(reason)}
-                size="small"
-                color={reasonChipColor(reason)}
+                label={overallFriendly.headline}
+                color={severityToChipColor(overallFriendly.headline)}
               />
-            ))}
+              {showSeverityChip && (
+                <Chip
+                  label={overall.severity}
+                  color={severityToChipColor(overall.severity)}
+                />
+              )}
+              {quality.confidence && (
+                <Chip
+                  label={`Image quality: ${quality.confidence}`}
+                  size="small"
+                  color={confidenceChipColor(quality.confidence)}
+                />
+              )}
+            </Box>
+            <Typography variant="body1" sx={{ mb: 1, lineHeight: 1.5 }}>
+              {overallFriendly.summary}
+            </Typography>
+            {overall.stress_percentage != null && (
+              <Typography
+                variant="body2"
+                sx={{ mb: 1, fontWeight: 600, color: stressPercentTextColor(overall.stress_percentage) }}
+              >
+                Combined stress estimate: {formatNumber(overall.stress_percentage, 0)}%
+                {overall.score != null && overall.max_score != null && (
+                  <> · Score {overall.score} / {overall.max_score}</>
+                )}
+              </Typography>
+            )}
+            {actionHint && (
+              <Typography
+                variant="body2"
+                sx={{ mb: 1, fontWeight: 600, color: actionHintColor(overall.stress_percentage) }}
+              >
+                {actionHint}
+              </Typography>
+            )}
+            {Array.isArray(overall.reasons) && overall.reasons.length > 0 && (
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                {overall.reasons.map((reason) => (
+                  <Chip
+                    key={reason}
+                    label={friendlyReason(reason)}
+                    size="small"
+                    color={reasonChipColor(reason)}
+                  />
+                ))}
+              </Box>
+            )}
           </Box>
-        )}
+        </Box>
       </Paper>
 
       <Typography variant="subtitle2" sx={{ mb: 0.5 }}>What the satellite sees</Typography>
@@ -267,6 +278,7 @@ export function SatelliteAnalysisDisplay({
       <Grid container spacing={2} sx={{ mb: 3 }}>
         <Grid item xs={12} sm={6} md={3}>
           <IndexCard
+            indicatorId="NDVI"
             icon={<GrassOutlinedIcon fontSize="small" />}
             title={SATELLITE_INDEX_INFO.NDVI.title}
             short={SATELLITE_INDEX_INFO.NDVI.short}
@@ -278,6 +290,7 @@ export function SatelliteAnalysisDisplay({
         </Grid>
         <Grid item xs={12} sm={6} md={3}>
           <IndexCard
+            indicatorId="NDMI"
             icon={<WaterDropOutlinedIcon fontSize="small" />}
             title={SATELLITE_INDEX_INFO.NDMI.title}
             short={SATELLITE_INDEX_INFO.NDMI.short}
@@ -289,6 +302,7 @@ export function SatelliteAnalysisDisplay({
         </Grid>
         <Grid item xs={12} sm={6} md={3}>
           <IndexCard
+            indicatorId="NDRE"
             icon={<ScienceOutlinedIcon fontSize="small" />}
             title={SATELLITE_INDEX_INFO.NDRE.title}
             short={SATELLITE_INDEX_INFO.NDRE.short}
@@ -300,6 +314,7 @@ export function SatelliteAnalysisDisplay({
         </Grid>
         <Grid item xs={12} sm={6} md={3}>
           <IndexCard
+            indicatorId="S1_VV"
             icon={<RadarOutlinedIcon fontSize="small" />}
             title={SATELLITE_INDEX_INFO.S1_VV.title}
             short={SATELLITE_INDEX_INFO.S1_VV.short}
@@ -315,6 +330,7 @@ export function SatelliteAnalysisDisplay({
       <Grid container spacing={2} sx={{ mb: 3 }}>
         <Grid item xs={12} md={4}>
           <StressCard
+            indicatorId="water_stress"
             icon={<WaterDropOutlinedIcon fontSize="small" />}
             title="Water stress"
             statusRaw={water.status}
@@ -323,6 +339,7 @@ export function SatelliteAnalysisDisplay({
         </Grid>
         <Grid item xs={12} md={4}>
           <StressCard
+            indicatorId="nutrient_stress"
             icon={<ScienceOutlinedIcon fontSize="small" />}
             title="Nutrient stress"
             statusRaw={nutrient.status}
@@ -332,6 +349,7 @@ export function SatelliteAnalysisDisplay({
         </Grid>
         <Grid item xs={12} md={4}>
           <StressCard
+            indicatorId="radar_stress"
             icon={<RadarOutlinedIcon fontSize="small" />}
             title="Unusual wetness (radar)"
             statusRaw={radar.status}
