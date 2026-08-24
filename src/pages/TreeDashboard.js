@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import {
   Box, Typography, Tabs, Tab, Paper, CircularProgress, Alert, Button, Chip,
 } from '@mui/material';
@@ -19,6 +19,7 @@ import CostTab from '../components/tree-dashboard/CostTab';
 import YieldTab from '../components/tree-dashboard/YieldTab';
 import HistoryTab from '../components/tree-dashboard/HistoryTab';
 import SatelliteTab from '../components/tree-dashboard/SatelliteTab';
+import { treeDashboardTabIndex } from '../utils/treeDashboard';
 
 const TAB_LABELS = [
   'Overview', 'Soil', 'Irrigation', 'Fertilizer',
@@ -27,7 +28,9 @@ const TAB_LABELS = [
 
 function TreeDashboard() {
   const { treeId } = useParams();
-  const [tab, setTab] = useState(0);
+  const [searchParams] = useSearchParams();
+  const tabParam = searchParams.get('tab');
+  const [tab, setTab] = useState(() => treeDashboardTabIndex(tabParam));
   const [tree, setTree] = useState(null);
   const [instances, setInstances] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -53,6 +56,10 @@ function TreeDashboard() {
   useEffect(() => {
     fetchTree();
   }, [fetchTree]);
+
+  useEffect(() => {
+    setTab(treeDashboardTabIndex(tabParam));
+  }, [tabParam, treeId]);
 
   if (loading) {
     return (

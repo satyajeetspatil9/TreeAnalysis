@@ -56,6 +56,7 @@ import {
   stressLevelColor,
   stressPercentTextColor,
 } from '../../utils/satelliteDisplay';
+import { treeDashboardUrl } from '../../utils/treeDashboard';
 
 function FilterSelect({
   label, value, options, onChange, disabled = false, minWidth = 120,
@@ -419,7 +420,17 @@ function SatelliteMonitoringPage() {
                   )}
                 >
                   <TableCell>
-                    <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                    <Typography
+                      component={RouterLink}
+                      to={treeDashboardUrl(row.positionCode, 'satellite')}
+                      variant="body2"
+                      sx={{
+                        fontWeight: 700,
+                        color: 'primary.main',
+                        textDecoration: 'none',
+                        '&:hover': { textDecoration: 'underline' },
+                      }}
+                    >
                       {row.positionCode}
                     </Typography>
                     {row.variety && (
@@ -477,8 +488,8 @@ function SatelliteMonitoringPage() {
                     <IconButton
                       size="small"
                       component={RouterLink}
-                      to={`/tree/${row.positionCode}`}
-                      aria-label={`Open ${row.positionCode}`}
+                      to={treeDashboardUrl(row.positionCode, 'satellite')}
+                      aria-label={`Open ${row.positionCode} satellite tab`}
                     >
                       <OpenInNewIcon fontSize="small" />
                     </IconButton>
