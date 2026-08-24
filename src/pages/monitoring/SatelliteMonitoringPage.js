@@ -420,25 +420,30 @@ function SatelliteMonitoringPage() {
                   )}
                 >
                   <TableCell>
-                    <Typography
-                      component={RouterLink}
-                      to={treeDashboardUrl(row.positionCode, 'satellite')}
-                      variant="body2"
-                      sx={{
-                        fontWeight: 700,
-                        color: 'primary.main',
-                        textDecoration: 'none',
-                        '&:hover': { textDecoration: 'underline' },
-                      }}
-                    >
-                      {row.positionCode}
-                    </Typography>
-                    {row.variety && (
-                      <Typography variant="caption" color="text.secondary">{row.variety}</Typography>
-                    )}
-                    {!row.hasGps && (
-                      <Chip label="No GPS" size="small" color="default" sx={{ mt: 0.5 }} />
-                    )}
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
+                      <Typography
+                        component={RouterLink}
+                        to={treeDashboardUrl(row.positionCode, 'satellite')}
+                        variant="body2"
+                        display="block"
+                        sx={{
+                          fontWeight: 700,
+                          color: 'primary.main',
+                          textDecoration: 'none',
+                          '&:hover': { textDecoration: 'underline' },
+                        }}
+                      >
+                        {row.positionCode}
+                      </Typography>
+                      {row.variety && (
+                        <Typography variant="caption" color="text.secondary" display="block">
+                          {row.variety}
+                        </Typography>
+                      )}
+                      {!row.hasGps && (
+                        <Chip label="No GPS" size="small" color="default" sx={{ mt: 0.25, alignSelf: 'flex-start' }} />
+                      )}
+                    </Box>
                   </TableCell>
 
                   <TableCell>
