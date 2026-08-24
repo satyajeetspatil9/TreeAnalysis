@@ -113,7 +113,7 @@ function SatelliteTab({ tree }) {
         fetchedAt={meta?.fetchedAt}
         weekStart={meta?.weekStart}
         onRefresh={loadCache}
-        cacheNote="Data is refreshed weekly for all trees. Use Settings → Satellite cache to run batch refresh."
+        cacheNote="Data is refreshed weekly via pg_cron (or manual batch in Settings). Reload reads the latest cache."
       />
     </Box>
   );

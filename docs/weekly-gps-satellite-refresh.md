@@ -1,64 +1,108 @@
-# Weekly GPS satellite cache (GitHub Actions)
+# Weekly GPS satellite cache (Supabase pg_cron)
 
 Automatic refresh stores orchard-planetary API results in `tree_gps_satellite_cache` so tree Satellite tabs load instantly.
 
 ## Schedule
 
-| Run | UTC cron | IST |
-|-----|----------|-----|
-| Primary (Monday) | `30 21 * * 0` | Mon 03:00 |
-| Continuation (Tue–Wed) | `30 21 * * 1,2` | Tue/Wed 03:00 |
+**pg_cron** job `gps-satellite-weekly-batch`:
 
-Large farms (600+ trees) may need Tue/Wed runs to finish (~1–2 min per tree). The script exits early when all trees are cached for the week.
+| Cron | Meaning |
+|------|---------|
+| `*/5 * * * 1,2,3` | Every **5 minutes** on **Mon, Tue, Wed** (UTC) |
 
-Manual run: **Actions → Weekly GPS satellite cache refresh → Run workflow**.
+Each tick processes **one tree** (~1–2 min upstream). Trees already cached this week are skipped. Large farms (600 trees) finish over Mon–Wed; when all are done, calls return quickly with nothing to do.
+
+Times are **UTC** (Supabase pg_cron). Mon–Wed UTC covers the weekly refresh window; adjust in migration `036` if needed.
 
 ## One-time setup
 
-### 1. Supabase migration
+### 1. Migrations
 
-Run `supabase/migrations/035_tree_gps_satellite_cache.sql` in SQL Editor (if not done).
+Run in Supabase SQL Editor:
 
-### 2. Edge function secret
+1. `035_tree_gps_satellite_cache.sql`
+2. `036_pg_cron_gps_satellite.sql`
 
-Supabase Dashboard → **Edge Functions** → **Secrets**:
+### 2. Enable extensions
+
+Dashboard → **Database → Extensions** → enable:
+
+- **pg_cron**
+- **pg_net**
+
+(Re-running migration 036 also runs `CREATE EXTENSION IF NOT EXISTS`.)
+
+### 3. Edge function secret
+
+Dashboard → **Edge Functions → Secrets**:
 
 | Secret | Value |
 |--------|--------|
-| `GPS_SATELLITE_CRON_SECRET` | Long random string (e.g. `openssl rand -hex 32`) |
-
-Redeploy after adding secrets:
+| `GPS_SATELLITE_CRON_SECRET` | Long random string |
 
 ```powershell
 supabase functions deploy refresh-gps-satellite-batch --no-verify-jwt
 ```
 
-### 3. GitHub repository secrets
+### 4. Cron settings row
 
-Repo → **Settings → Secrets and variables → Actions**:
+**Settings → Satellite cache → Automatic refresh (pg_cron)** in the app, or SQL:
 
-| Secret | Example |
-|--------|---------|
-| `SUPABASE_URL` | `https://jzgfeqiboxrhjnvwxywh.supabase.co` |
-| `SUPABASE_ANON_KEY` | Your project anon key |
-| `GPS_SATELLITE_CRON_SECRET` | Same value as Supabase secret |
-| `FARM_ID` | `1` (your `farms.id`) |
-
-### 4. Enable Actions
-
-GitHub → **Actions** tab → enable workflows for this repo.
-
-## Local test
-
-```powershell
-$env:SUPABASE_URL="https://jzgfeqiboxrhjnvwxywh.supabase.co"
-$env:SUPABASE_ANON_KEY="your-anon-key"
-$env:GPS_SATELLITE_CRON_SECRET="your-cron-secret"
-$env:FARM_ID="1"
-$env:MAX_RUNTIME_MINUTES="5"
-node scripts/run-gps-satellite-batch.mjs
+```sql
+INSERT INTO public.gps_satellite_cron_settings (
+  farm_id,
+  supabase_project_url,
+  anon_key,
+  cron_secret,
+  enabled
+) VALUES (
+  1,
+  'https://jzgfeqiboxrhjnvwxywh.supabase.co',
+  'your-supabase-anon-key',
+  'same-value-as-GPS_SATELLITE_CRON_SECRET',
+  TRUE
+)
+ON CONFLICT (singleton_id) DO UPDATE SET
+  farm_id = EXCLUDED.farm_id,
+  anon_key = EXCLUDED.anon_key,
+  cron_secret = EXCLUDED.cron_secret,
+  enabled = EXCLUDED.enabled,
+  updated_at = now();
 ```
+
+### 5. Verify cron job
+
+SQL Editor:
+
+```sql
+SELECT jobid, jobname, schedule, command FROM cron.job
+WHERE jobname = 'gps-satellite-weekly-batch';
+```
+
+Optional — run once manually:
+
+```sql
+SELECT public.run_gps_satellite_batch_cron();
+```
+
+Check **Database → Cron → Job runs** (or `cron.job_run_details`) for history.
 
 ## Manual refresh (UI)
 
-**Settings → Satellite cache** still works for on-demand refresh from the app (uses your login, not cron secret).
+**Settings → Satellite cache → Refresh missing trees this week** uses your login (not pg_cron).
+
+## Local test (optional)
+
+```powershell
+node scripts/run-gps-satellite-batch.mjs
+```
+
+Requires env vars documented in the script header.
+
+## Disable automatic refresh
+
+```sql
+UPDATE public.gps_satellite_cron_settings SET enabled = FALSE WHERE singleton_id = 1;
+```
+
+Or toggle off in **Settings → Satellite cache**.

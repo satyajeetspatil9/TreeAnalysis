@@ -4,6 +4,7 @@ import {
   Box, Typography, Paper, Grid, TextField, Button, FormControl, InputLabel, Select, MenuItem,
   Alert, Divider, Table, TableBody, TableCell, TableHead, TableRow,
   Dialog, DialogTitle, DialogContent, DialogActions, DialogContentText,
+  FormControlLabel, Switch,
 } from '@mui/material';
 import { supabase } from '../../supabaseClient';
 import { useAuth } from '../../contexts/AuthContext';
@@ -52,6 +53,10 @@ function SettingsPage() {
   const [satelliteRefreshing, setSatelliteRefreshing] = useState(false);
   const [satelliteProgress, setSatelliteProgress] = useState(null);
   const [satelliteAbort, setSatelliteAbort] = useState(null);
+  const [cronEnabled, setCronEnabled] = useState(false);
+  const [cronSecret, setCronSecret] = useState('');
+  const [cronSaving, setCronSaving] = useState(false);
+  const [cronConfigured, setCronConfigured] = useState(false);
 
   useEffect(() => {
     if (farm) {
@@ -96,6 +101,81 @@ function SettingsPage() {
   useEffect(() => {
     loadSatelliteStats();
   }, [loadSatelliteStats]);
+
+  const loadCronSettings = useCallback(async () => {
+    if (!farm) return;
+    const { data, error } = await supabase
+      .from('gps_satellite_cron_settings')
+      .select('enabled, cron_secret, farm_id')
+      .eq('singleton_id', 1)
+      .maybeSingle();
+
+    if (error) {
+      if (!error.message?.includes('gps_satellite_cron_settings')) {
+        setMessage({ type: 'error', text: error.message });
+      }
+      return;
+    }
+
+    if (data && Number(data.farm_id) === Number(farm.id)) {
+      setCronEnabled(Boolean(data.enabled));
+      setCronConfigured(Boolean(data.cron_secret));
+      setCronSecret('');
+    }
+  }, [farm]);
+
+  useEffect(() => {
+    loadCronSettings();
+  }, [loadCronSettings]);
+
+  const saveCronSettings = async () => {
+    if (!farm) return;
+    if (cronEnabled && !cronSecret && !cronConfigured) {
+      setMessage({ type: 'error', text: 'Enter the cron secret (same as Supabase Edge Function GPS_SATELLITE_CRON_SECRET).' });
+      return;
+    }
+
+    setCronSaving(true);
+    setMessage(null);
+
+    const payload = {
+      singleton_id: 1,
+      farm_id: farm.id,
+      supabase_project_url: process.env.REACT_APP_SUPABASE_URL,
+      anon_key: process.env.REACT_APP_SUPABASE_ANON_KEY,
+      enabled: cronEnabled,
+      updated_at: new Date().toISOString(),
+    };
+
+    if (cronSecret.trim()) {
+      payload.cron_secret = cronSecret.trim();
+    }
+
+    const { error } = await supabase
+      .from('gps_satellite_cron_settings')
+      .upsert(payload, { onConflict: 'singleton_id' });
+
+    setCronSaving(false);
+
+    if (error) {
+      setMessage({
+        type: 'error',
+        text: error.message.includes('gps_satellite_cron_settings')
+          ? `${error.message} Run migration 036_pg_cron_gps_satellite.sql in Supabase.`
+          : error.message,
+      });
+      return;
+    }
+
+    setCronConfigured(true);
+    setCronSecret('');
+    setMessage({
+      type: 'success',
+      text: cronEnabled
+        ? 'Automatic pg_cron refresh enabled (every 5 min Mon–Wed UTC).'
+        : 'Automatic pg_cron refresh disabled.',
+    });
+  };
 
   const startSatelliteRefresh = async (force = false) => {
     if (!farm || satelliteRefreshing) return;
@@ -509,9 +589,36 @@ function SettingsPage() {
           Tree dashboard → Satellite tab reads from this cache (instant). Each tree takes about 1–2 minutes
           during batch refresh.
           {' '}
-          <strong>Automatic:</strong> GitHub Actions runs Mon/Tue/Wed 3:00 AM IST if repo secrets are configured
+          <strong>Automatic:</strong> Supabase <strong>pg_cron</strong> runs every 5 minutes Mon–Wed UTC
           (see <code>docs/weekly-gps-satellite-refresh.md</code>).
         </Typography>
+        <Typography variant="subtitle2" sx={{ mb: 1 }}>Automatic refresh (pg_cron)</Typography>
+        <FormControlLabel
+          control={(
+            <Switch
+              checked={cronEnabled}
+              onChange={(e) => setCronEnabled(e.target.checked)}
+              disabled={!farm}
+            />
+          )}
+          label="Enable weekly pg_cron batch refresh"
+          sx={{ mb: 1, display: 'block' }}
+        />
+        <TextField
+          label="Cron secret"
+          type="password"
+          fullWidth
+          value={cronSecret}
+          onChange={(e) => setCronSecret(e.target.value)}
+          placeholder={cronConfigured ? 'Leave blank to keep existing secret' : 'Same as GPS_SATELLITE_CRON_SECRET'}
+          helperText="Must match Edge Function secret GPS_SATELLITE_CRON_SECRET. Run migration 036 first."
+          sx={{ mb: 2, maxWidth: 480 }}
+          disabled={!farm}
+        />
+        <Button variant="outlined" onClick={saveCronSettings} disabled={!farm || cronSaving} sx={{ mb: 2 }}>
+          {cronSaving ? 'Saving…' : 'Save automatic refresh settings'}
+        </Button>
+        <Divider sx={{ my: 2 }} />
         {satelliteStats && (
           <Typography variant="body2" sx={{ mb: 2 }}>
             Week of {formatDate(satelliteStats.week_start)} ·{' '}
