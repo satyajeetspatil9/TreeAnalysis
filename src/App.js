@@ -22,6 +22,7 @@ import InventoryPage from './pages/inputs/InventoryPage';
 import SprayPage from './pages/inputs/SprayPage';
 import SoilApplicationPage from './pages/inputs/SoilApplicationPage';
 import SoilMonitoringPage from './pages/monitoring/SoilMonitoringPage';
+import SatelliteMonitoringPage from './pages/monitoring/SatelliteMonitoringPage';
 import DiseaseDashboardPage from './pages/monitoring/DiseaseDashboardPage';
 import GrowthComparisonPage from './pages/monitoring/GrowthComparisonPage';
 import AlertsPage from './pages/monitoring/AlertsPage';
@@ -67,7 +68,7 @@ function ProtectedApp() {
           <Route path="inputs/soil-application" element={<SoilApplicationPage />} />
           <Route path="inputs/optimizer" element={<Navigate to="/inputs/inventory" replace />} />
           <Route path="monitoring/soil" element={<SoilMonitoringPage />} />
-          <Route path="monitoring/satellite" element={<Navigate to="/monitoring/soil" replace />} />
+          <Route path="monitoring/satellite" element={<SatelliteMonitoringPage />} />
           <Route path="monitoring/disease" element={<DiseaseDashboardPage />} />
           <Route path="monitoring/growth" element={<GrowthComparisonPage />} />
           <Route path="monitoring/alerts" element={<AlertsPage />} />

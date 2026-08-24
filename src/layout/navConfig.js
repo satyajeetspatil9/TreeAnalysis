@@ -16,6 +16,7 @@ import Inventory2Icon from '@mui/icons-material/Inventory2';
 import PostAddIcon from '@mui/icons-material/PostAdd';
 import PestControlIcon from '@mui/icons-material/PestControl';
 import GrassIcon from '@mui/icons-material/Grass';
+import SatelliteAltIcon from '@mui/icons-material/SatelliteAlt';
 import BiotechIcon from '@mui/icons-material/Biotech';
 import BugReportIcon from '@mui/icons-material/BugReport';
 import TrendingUpIcon from '@mui/icons-material/TrendingUp';
@@ -57,6 +58,7 @@ export const navSections = [
     icon: MonitorHeartIcon,
     items: [
       { label: 'Soil', path: '/monitoring/soil', icon: GrassIcon, description: 'Soil observations' },
+      { label: 'Satellite', path: '/monitoring/satellite', icon: SatelliteAltIcon, description: 'Weekly satellite signals for all trees' },
       { label: 'Disease', path: '/monitoring/disease', icon: BugReportIcon, description: 'Health problems' },
       { label: 'Growth', path: '/monitoring/growth', icon: TrendingUpIcon, description: 'Tree growth trends' },
       { label: 'Alerts', path: '/monitoring/alerts', icon: NotificationsActiveIcon, description: 'Open action items' },
