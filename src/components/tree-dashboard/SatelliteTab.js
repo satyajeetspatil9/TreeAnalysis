@@ -48,8 +48,20 @@ function DetailRow({ label, value }) {
   return (
     <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 2, py: 0.75 }}>
       <Typography variant="body2" color="text.secondary">{label}</Typography>
-      <Typography variant="body2" fontWeight={500} sx={{ textAlign: 'right' }}>
+      <Typography variant="body2" fontWeight={500} sx={{ textAlign: 'right', wordBreak: 'break-word', maxWidth: '70%' }}>
         {value ?? '—'}
+      </Typography>
+    </Box>
+  );
+}
+
+function LoadingPanel({ hint }) {
+  return (
+    <Box sx={{ textAlign: 'center', py: 6, px: 2 }}>
+      <CircularProgress sx={{ mb: 2 }} />
+      <Typography variant="body1" fontWeight={600}>Fetching satellite analysis…</Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 1, maxWidth: 420, mx: 'auto' }}>
+        {hint || 'First request after idle can take up to 2 minutes while the API wakes up.'}
       </Typography>
     </Box>
   );
@@ -58,43 +70,68 @@ function DetailRow({ label, value }) {
 function SatelliteTab({ tree }) {
   const [analysis, setAnalysis] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
+  const [loadHint, setLoadHint] = useState('');
 
   const positionCode = getTreeDisplayId(tree);
   const gps = getTreeGps(tree);
+  const latitude = gps?.latitude ?? null;
+  const longitude = gps?.longitude ?? null;
 
-  const loadAnalysis = useCallback(async () => {
-    if (!gps) {
-      setAnalysis(null);
-      setError(null);
+  const runFetch = useCallback(async ({ signal, isRefresh = false } = {}) => {
+    if (latitude == null || longitude == null) {
       setLoading(false);
       return;
     }
 
-    setLoading(true);
+    if (isRefresh) setRefreshing(true);
+    else setLoading(true);
     setError(null);
+    setLoadHint('Connecting to satellite API…');
+
+    const slowHintTimer = window.setTimeout(() => {
+      setLoadHint('Still loading — the satellite API may take 1–2 minutes on first use.');
+    }, 15000);
 
     try {
       const data = await fetchGpsSatelliteAnalysis({
         treeId: positionCode,
-        latitude: gps.latitude,
-        longitude: gps.longitude,
+        latitude,
+        longitude,
         daysBack: 10,
+        signal,
       });
       setAnalysis(data);
     } catch (err) {
+      if (err.name === 'AbortError') return;
       setAnalysis(null);
       setError(err.message || 'Could not load satellite analysis.');
     } finally {
+      window.clearTimeout(slowHintTimer);
+      setLoadHint('');
       setLoading(false);
+      setRefreshing(false);
     }
-  }, [gps, positionCode]);
+  }, [latitude, longitude, positionCode]);
 
   useEffect(() => {
-    loadAnalysis();
-  }, [loadAnalysis]);
+    if (latitude == null || longitude == null) {
+      setLoading(false);
+      return undefined;
+    }
 
-  if (!gps) {
+    const controller = new AbortController();
+    runFetch({ signal: controller.signal });
+    return () => controller.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fetch when GPS or tree id changes only
+  }, [latitude, longitude, positionCode]);
+
+  const handleRefresh = () => {
+    runFetch({ isRefresh: true });
+  };
+
+  if (latitude == null || longitude == null) {
     return (
       <Alert severity="warning">
         GPS coordinates are missing for this tree. Edit the tree and add latitude/longitude
@@ -103,19 +140,15 @@ function SatelliteTab({ tree }) {
     );
   }
 
-  if (loading) {
-    return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-        <CircularProgress />
-      </Box>
-    );
+  if (loading && !analysis) {
+    return <LoadingPanel hint={loadHint} />;
   }
 
-  if (error) {
+  if (error && !analysis) {
     return (
       <Box>
         <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>
-        <Button variant="outlined" startIcon={<RefreshIcon />} onClick={loadAnalysis}>
+        <Button variant="outlined" startIcon={<RefreshIcon />} onClick={handleRefresh}>
           Retry
         </Button>
       </Box>
@@ -123,7 +156,14 @@ function SatelliteTab({ tree }) {
   }
 
   if (!analysis) {
-    return <Alert severity="info">No satellite data available.</Alert>;
+    return (
+      <Box>
+        <Alert severity="info" sx={{ mb: 2 }}>No satellite data available.</Alert>
+        <Button variant="outlined" startIcon={<RefreshIcon />} onClick={handleRefresh}>
+          Retry
+        </Button>
+      </Box>
+    );
   }
 
   const overall = analysis.overall_condition || {};
@@ -149,13 +189,25 @@ function SatelliteTab({ tree }) {
           <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
             {formatDate(period.start)} – {formatDate(period.end)}
             {' · '}
-            {formatNumber(gps.latitude, 6)}, {formatNumber(gps.longitude, 6)}
+            {formatNumber(latitude, 6)}, {formatNumber(longitude, 6)}
           </Typography>
         </Box>
-        <Button variant="outlined" size="small" startIcon={<RefreshIcon />} onClick={loadAnalysis}>
-          Refresh
+        <Button
+          variant="outlined"
+          size="small"
+          startIcon={refreshing ? <CircularProgress size={16} /> : <RefreshIcon />}
+          onClick={handleRefresh}
+          disabled={refreshing}
+        >
+          {refreshing ? 'Refreshing…' : 'Refresh'}
         </Button>
       </Box>
+
+      {error && (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          Last refresh failed: {error}. Showing previous data.
+        </Alert>
+      )}
 
       <Paper sx={{ p: 2.5, mb: 2, bgcolor: 'action.hover' }}>
         <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, mb: 1 }}>

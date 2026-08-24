@@ -8,3 +8,6 @@ verify_jwt = false
 
 [functions.ingest-tree-growth]
 verify_jwt = false
+
+[functions.gps-satellite-analysis]
+verify_jwt = false
