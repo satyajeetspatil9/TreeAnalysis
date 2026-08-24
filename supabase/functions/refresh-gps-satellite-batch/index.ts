@@ -2,7 +2,8 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Headers':
+    'authorization, x-client-info, apikey, content-type, x-cron-secret',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
@@ -113,25 +114,33 @@ Deno.serve(async (req) => {
     return json({ error: 'farm_id is required' }, 400);
   }
 
+  const cronSecret = Deno.env.get('GPS_SATELLITE_CRON_SECRET') ?? '';
+  const requestCronSecret = req.headers.get('x-cron-secret') ?? '';
+  const isCronAuth = Boolean(cronSecret)
+    && requestCronSecret.length > 0
+    && requestCronSecret === cronSecret;
+
   const authHeader = req.headers.get('Authorization') ?? '';
   const userClient = createClient(supabaseUrl, anonKey ?? '', {
     global: { headers: { Authorization: authHeader } },
   });
   const admin = createClient(supabaseUrl, serviceKey);
 
-  const { data: authData, error: authError } = await userClient.auth.getUser();
-  if (authError || !authData?.user) {
-    return json({ error: 'Unauthorized' }, 401);
-  }
+  if (!isCronAuth) {
+    const { data: authData, error: authError } = await userClient.auth.getUser();
+    if (authError || !authData?.user) {
+      return json({ error: 'Unauthorized' }, 401);
+    }
 
-  const { data: farmRow, error: farmError } = await userClient
-    .from('farms')
-    .select('id')
-    .eq('id', farmId)
-    .maybeSingle();
+    const { data: farmRow, error: farmError } = await userClient
+      .from('farms')
+      .select('id')
+      .eq('id', farmId)
+      .maybeSingle();
 
-  if (farmError || !farmRow) {
-    return json({ error: 'Farm not found or access denied' }, 403);
+    if (farmError || !farmRow) {
+      return json({ error: 'Farm not found or access denied' }, 403);
+    }
   }
 
   const weekStart = getWeekMonday();

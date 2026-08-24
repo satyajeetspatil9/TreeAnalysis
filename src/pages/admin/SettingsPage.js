@@ -507,7 +507,10 @@ function SettingsPage() {
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
           GPS satellite analysis is fetched once per week for all trees with GPS and stored in Supabase.
           Tree dashboard → Satellite tab reads from this cache (instant). Each tree takes about 1–2 minutes
-          during batch refresh — run overnight or in the background for large farms.
+          during batch refresh.
+          {' '}
+          <strong>Automatic:</strong> GitHub Actions runs Mon/Tue/Wed 3:00 AM IST if repo secrets are configured
+          (see <code>docs/weekly-gps-satellite-refresh.md</code>).
         </Typography>
         {satelliteStats && (
           <Typography variant="body2" sx={{ mb: 2 }}>
