@@ -11,10 +11,6 @@ import {
 import { alpha, useTheme } from '@mui/material/styles';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import SatelliteAltIcon from '@mui/icons-material/SatelliteAlt';
-import WaterDropOutlinedIcon from '@mui/icons-material/WaterDropOutlined';
-import GrassOutlinedIcon from '@mui/icons-material/GrassOutlined';
-import ScienceOutlinedIcon from '@mui/icons-material/ScienceOutlined';
-import RadarOutlinedIcon from '@mui/icons-material/RadarOutlined';
 import { formatDate, formatNumber } from '../../utils/formatters';
 import {
   SATELLITE_INDEX_INFO,
@@ -49,27 +45,21 @@ function overallPanelSx(theme, severity, stressPercentage) {
   };
 }
 
-function IndexCard({ indicatorId, icon, title, short, statusRaw, value, hint, technicalKey }) {
+function IndexCard({ indicatorId, short, statusRaw, value, hint, technicalKey }) {
   const friendly = friendlyIndexStatus(statusRaw);
   const technical = formatTechnicalIndex(technicalKey, value);
   const chipColor = stressLevelColor(friendly.label);
 
   return (
     <Paper variant="outlined" sx={{ p: 2, height: '100%', overflow: 'hidden' }}>
-      <SatelliteIndicatorVisual indicatorId={indicatorId} statusColor={chipColor} />
-      <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, mb: 1 }}>
-        <Box sx={{ color: 'primary.main', mt: 0.25 }}>{icon}</Box>
-        <Box sx={{ minWidth: 0 }}>
-          <Typography variant="subtitle2" fontWeight={700}>{title}</Typography>
-          <Typography variant="caption" color="text.secondary">{short}</Typography>
-        </Box>
-      </Box>
-      <Chip
-        label={friendly.label}
-        size="small"
-        color={chipColor}
-        sx={{ mb: 1 }}
+      <SatelliteIndicatorVisual
+        indicatorId={indicatorId}
+        statusColor={chipColor}
+        statusLabel={friendly.label}
       />
+      <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
+        {short}
+      </Typography>
       <Typography variant="body2" sx={{ mb: 0.5, lineHeight: 1.45 }}>
         {friendly.summary}
       </Typography>
@@ -92,22 +82,16 @@ function IndexCard({ indicatorId, icon, title, short, statusRaw, value, hint, te
   );
 }
 
-function StressCard({ indicatorId, icon, title, statusRaw, score, indicator }) {
+function StressCard({ indicatorId, statusRaw, score, indicator }) {
   const friendly = friendlyStressStatus(statusRaw || indicator);
   const chipColor = stressLevelColor(friendly.label);
 
   return (
     <Paper variant="outlined" sx={{ p: 2, height: '100%', overflow: 'hidden' }}>
-      <SatelliteIndicatorVisual indicatorId={indicatorId} statusColor={chipColor} />
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-        <Box sx={{ color: 'primary.main' }}>{icon}</Box>
-        <Typography variant="subtitle2" fontWeight={700}>{title}</Typography>
-      </Box>
-      <Chip
-        label={friendly.label}
-        size="small"
-        color={chipColor}
-        sx={{ mb: 1 }}
+      <SatelliteIndicatorVisual
+        indicatorId={indicatorId}
+        statusColor={chipColor}
+        statusLabel={friendly.label}
       />
       <Typography variant="body2" sx={{ mb: 0.5, lineHeight: 1.45 }}>
         {friendly.summary}
@@ -211,7 +195,11 @@ export function SatelliteAnalysisDisplay({
 
       <Paper sx={{ p: 2.5, mb: 2, ...overallPanelSx(theme, severityLabel, overall.stress_percentage) }}>
         <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, gap: 2, mb: 1.5 }}>
-          <SatelliteOverallVisual statusColor={overallVisualColor} />
+          <SatelliteOverallVisual
+            statusColor={overallVisualColor}
+            statusLabel={overallFriendly.headline}
+            stressPercentage={overall.stress_percentage}
+          />
           <Box sx={{ flex: 1, minWidth: 0 }}>
             <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, mb: 1 }}>
               <Typography variant="subtitle1" fontWeight={700}>Overall tree signal</Typography>
@@ -279,8 +267,6 @@ export function SatelliteAnalysisDisplay({
         <Grid item xs={12} sm={6} md={3}>
           <IndexCard
             indicatorId="NDVI"
-            icon={<GrassOutlinedIcon fontSize="small" />}
-            title={SATELLITE_INDEX_INFO.NDVI.title}
             short={SATELLITE_INDEX_INFO.NDVI.short}
             statusRaw={indexStatus.NDVI}
             value={indices.NDVI}
@@ -291,8 +277,6 @@ export function SatelliteAnalysisDisplay({
         <Grid item xs={12} sm={6} md={3}>
           <IndexCard
             indicatorId="NDMI"
-            icon={<WaterDropOutlinedIcon fontSize="small" />}
-            title={SATELLITE_INDEX_INFO.NDMI.title}
             short={SATELLITE_INDEX_INFO.NDMI.short}
             statusRaw={indexStatus.NDMI}
             value={indices.NDMI}
@@ -303,8 +287,6 @@ export function SatelliteAnalysisDisplay({
         <Grid item xs={12} sm={6} md={3}>
           <IndexCard
             indicatorId="NDRE"
-            icon={<ScienceOutlinedIcon fontSize="small" />}
-            title={SATELLITE_INDEX_INFO.NDRE.title}
             short={SATELLITE_INDEX_INFO.NDRE.short}
             statusRaw={indexStatus.NDRE}
             value={indices.NDRE}
@@ -315,8 +297,6 @@ export function SatelliteAnalysisDisplay({
         <Grid item xs={12} sm={6} md={3}>
           <IndexCard
             indicatorId="S1_VV"
-            icon={<RadarOutlinedIcon fontSize="small" />}
-            title={SATELLITE_INDEX_INFO.S1_VV.title}
             short={SATELLITE_INDEX_INFO.S1_VV.short}
             statusRaw={radar.status}
             value={indices.S1_VV}
@@ -331,8 +311,6 @@ export function SatelliteAnalysisDisplay({
         <Grid item xs={12} md={4}>
           <StressCard
             indicatorId="water_stress"
-            icon={<WaterDropOutlinedIcon fontSize="small" />}
-            title="Water stress"
             statusRaw={water.status}
             score={water.score}
           />
@@ -340,8 +318,6 @@ export function SatelliteAnalysisDisplay({
         <Grid item xs={12} md={4}>
           <StressCard
             indicatorId="nutrient_stress"
-            icon={<ScienceOutlinedIcon fontSize="small" />}
-            title="Nutrient stress"
             statusRaw={nutrient.status}
             score={nutrient.score}
             indicator={nutrient.indicator}
@@ -350,8 +326,6 @@ export function SatelliteAnalysisDisplay({
         <Grid item xs={12} md={4}>
           <StressCard
             indicatorId="radar_stress"
-            icon={<RadarOutlinedIcon fontSize="small" />}
-            title="Unusual wetness (radar)"
             statusRaw={radar.status}
             score={radar.score}
           />
