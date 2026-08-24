@@ -20,6 +20,10 @@ import {
 import { buildPublicAddTreePageUrl } from '../../utils/publicAddTreeApi';
 import { buildPublicSoilReportPageUrl } from '../../utils/publicSoilReportApi';
 import { buildPublicGrowthPageUrl } from '../../utils/publicGrowthApi';
+import {
+  fetchGpsSatelliteStats,
+  runWeeklyGpsSatelliteRefresh,
+} from '../../utils/treeGpsSatelliteCache';
 
 const emptyFarmForm = {
   name: '',
@@ -44,6 +48,10 @@ function SettingsPage() {
   const [ingestKeyLabel, setIngestKeyLabel] = useState('ESP32');
   const [newIngestKey, setNewIngestKey] = useState(null);
   const [generatingKey, setGeneratingKey] = useState(false);
+  const [satelliteStats, setSatelliteStats] = useState(null);
+  const [satelliteRefreshing, setSatelliteRefreshing] = useState(false);
+  const [satelliteProgress, setSatelliteProgress] = useState(null);
+  const [satelliteAbort, setSatelliteAbort] = useState(null);
 
   useEffect(() => {
     if (farm) {
@@ -74,6 +82,63 @@ function SettingsPage() {
   }, [farm]);
 
   useEffect(() => { load(); }, [load]);
+
+  const loadSatelliteStats = useCallback(async () => {
+    if (!farm) return;
+    try {
+      const stats = await fetchGpsSatelliteStats(supabase, farm.id);
+      setSatelliteStats(stats);
+    } catch (err) {
+      setMessage({ type: 'error', text: err.message });
+    }
+  }, [farm]);
+
+  useEffect(() => {
+    loadSatelliteStats();
+  }, [loadSatelliteStats]);
+
+  const startSatelliteRefresh = async (force = false) => {
+    if (!farm || satelliteRefreshing) return;
+
+    const controller = new AbortController();
+    setSatelliteAbort(controller);
+    setSatelliteRefreshing(true);
+    setSatelliteProgress(null);
+    setMessage(null);
+
+    try {
+      await runWeeklyGpsSatelliteRefresh(supabase, farm.id, {
+        force,
+        signal: controller.signal,
+        onProgress: (result) => {
+          setSatelliteProgress(result);
+          setSatelliteStats({
+            week_start: result.week_start,
+            total_with_gps: result.total_with_gps,
+            cached_this_week: result.cached_this_week,
+            remaining: result.remaining,
+            done: result.done,
+          });
+        },
+      });
+      setMessage({
+        type: 'success',
+        text: 'Weekly satellite cache refresh finished for all trees with GPS.',
+      });
+    } catch (err) {
+      if (err.name !== 'AbortError') {
+        setMessage({ type: 'error', text: err.message });
+      }
+    } finally {
+      setSatelliteRefreshing(false);
+      setSatelliteAbort(null);
+      await loadSatelliteStats();
+    }
+  };
+
+  const stopSatelliteRefresh = () => {
+    satelliteAbort?.abort();
+  };
 
   const addSensor = async () => {
     if (!farm || !sensorForm.device_code) return;
@@ -435,6 +500,48 @@ function SettingsPage() {
           {'\n'}
           {buildIngestSampleJson()}
         </Typography>
+      </Paper>
+
+      <Paper sx={{ p: 3, mb: 3 }} variant="outlined">
+        <Typography variant="h6" gutterBottom>Satellite cache</Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          GPS satellite analysis is fetched once per week for all trees with GPS and stored in Supabase.
+          Tree dashboard → Satellite tab reads from this cache (instant). Each tree takes about 1–2 minutes
+          during batch refresh — run overnight or in the background for large farms.
+        </Typography>
+        {satelliteStats && (
+          <Typography variant="body2" sx={{ mb: 2 }}>
+            Week of {formatDate(satelliteStats.week_start)} ·{' '}
+            {satelliteStats.cached_this_week ?? 0} / {satelliteStats.total_with_gps ?? 0} trees cached
+            {satelliteStats.remaining > 0 && ` · ${satelliteStats.remaining} remaining`}
+          </Typography>
+        )}
+        {satelliteRefreshing && satelliteProgress?.processed?.length > 0 && (
+          <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
+            Last processed: {satelliteProgress.processed[satelliteProgress.processed.length - 1]?.position_code}
+          </Typography>
+        )}
+        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+          <Button
+            variant="contained"
+            onClick={() => startSatelliteRefresh(false)}
+            disabled={!farm || satelliteRefreshing}
+          >
+            {satelliteRefreshing ? 'Refreshing…' : 'Refresh missing trees this week'}
+          </Button>
+          <Button
+            variant="outlined"
+            onClick={() => startSatelliteRefresh(true)}
+            disabled={!farm || satelliteRefreshing}
+          >
+            Force refresh all trees
+          </Button>
+          {satelliteRefreshing && (
+            <Button variant="text" color="inherit" onClick={stopSatelliteRefresh}>
+              Stop
+            </Button>
+          )}
+        </Box>
       </Paper>
 
       <Paper sx={{ p: 3, mb: 3 }} variant="outlined">
