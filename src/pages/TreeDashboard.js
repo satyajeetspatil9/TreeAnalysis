@@ -18,10 +18,11 @@ import GrowthTab from '../components/tree-dashboard/GrowthTab';
 import CostTab from '../components/tree-dashboard/CostTab';
 import YieldTab from '../components/tree-dashboard/YieldTab';
 import HistoryTab from '../components/tree-dashboard/HistoryTab';
+import SatelliteTab from '../components/tree-dashboard/SatelliteTab';
 
 const TAB_LABELS = [
   'Overview', 'Soil', 'Irrigation', 'Fertilizer',
-  'Disease', 'Photos', 'Growth', 'Cost', 'Yield', 'History',
+  'Disease', 'Photos', 'Satellite', 'Growth', 'Cost', 'Yield', 'History',
 ];
 
 function TreeDashboard() {
@@ -76,6 +77,7 @@ function TreeDashboard() {
     <FertilizerTab key="fertilizer" tree={tree} zoneCode={zoneCode} />,
     <DiseaseTab key="disease" tree={tree} onUpdate={fetchTree} />,
     <PhotosTab key="photos" tree={tree} />,
+    <SatelliteTab key="satellite" tree={tree} />,
     <GrowthTab key="growth" tree={tree} />,
     <CostTab key="cost" tree={tree} />,
     <YieldTab key="yield" tree={tree} />,

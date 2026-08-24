@@ -11,7 +11,7 @@ import {
   fieldLabelWithUnit,
   getSoilStandard,
 } from '../utils/soil';
-import { fetchSensorReadings } from '../utils/sensorFetch';
+import { fetchSensorReadings, isSensorDemoMode, isWebBluetoothAvailable } from '../utils/sensorFetch';
 import { submitPublicSoilReport } from '../utils/publicSoilReportApi';
 
 function PublicSoilReportForm({ publicAccessKey }) {
@@ -20,6 +20,7 @@ function PublicSoilReportForm({ publicAccessKey }) {
   const [scannerOpen, setScannerOpen] = useState(false);
   const [fetching, setFetching] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [sensorDeviceName, setSensorDeviceName] = useState(null);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(false);
 
@@ -47,10 +48,14 @@ function PublicSoilReportForm({ publicAccessKey }) {
     setFetching(true);
     setError(null);
     setSuccess(false);
+    setSensorDeviceName(null);
 
     try {
       const data = await fetchSensorReadings();
       setReadings(data);
+      if (data._deviceName) {
+        setSensorDeviceName(data._deviceName);
+      }
     } catch (err) {
       setError(err.message || 'Could not fetch sensor data.');
     } finally {
@@ -98,7 +103,13 @@ function PublicSoilReportForm({ publicAccessKey }) {
   return (
     <Box sx={{ mt: 2, p: 3, borderRadius: 2, border: 1, borderColor: 'divider', bgcolor: 'background.paper' }}>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Scan the tree QR tag, fetch 7-in-1 sensor readings, then save the soil report.
+        Scan the tree QR tag, connect to the SoilSensor BLE reader, then save the soil report.
+        {!isSensorDemoMode() && !isWebBluetoothAvailable() && (
+          <> Sensor fetch requires <strong>Chrome on Android</strong>.</>
+        )}
+        {isSensorDemoMode() && (
+          <> Demo mode — set <code>REACT_APP_SENSOR_DEMO=false</code> for live BLE.</>
+        )}
       </Typography>
 
       <Button
@@ -119,8 +130,14 @@ function PublicSoilReportForm({ publicAccessKey }) {
         disabled={!positionCode || fetching}
         sx={{ mb: 2 }}
       >
-        {fetching ? 'Fetching…' : 'Fetch data from sensor'}
+        {fetching ? 'Connecting…' : 'Connect & fetch from sensor'}
       </Button>
+
+      {sensorDeviceName && (
+        <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 2 }}>
+          Connected to {sensorDeviceName}
+        </Typography>
+      )}
 
       <Box sx={{ mb: 2, p: 2, borderRadius: 1, bgcolor: 'action.hover' }}>
         <Typography variant="caption" color="text.secondary" display="block">

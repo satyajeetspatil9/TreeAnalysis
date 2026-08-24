@@ -51,18 +51,32 @@ function computeAverages(records) {
   const trunkValues = records
     .filter((r) => r.trunk_diameter_mm != null && r.trunk_diameter_mm !== '')
     .map((r) => Number(r.trunk_diameter_mm));
+  const canopyNsValues = records
+    .filter((r) => r.canopy_ns_cm != null && r.canopy_ns_cm !== '')
+    .map((r) => Number(r.canopy_ns_cm));
+  const canopyEwValues = records
+    .filter((r) => r.canopy_ew_cm != null && r.canopy_ew_cm !== '')
+    .map((r) => Number(r.canopy_ew_cm));
+
+  const avg = (values) => (values.length
+    ? values.reduce((sum, value) => sum + value, 0) / values.length
+    : null);
 
   return {
-    height: heightValues.length
-      ? heightValues.reduce((sum, value) => sum + value, 0) / heightValues.length
-      : null,
-    trunk: trunkValues.length
-      ? trunkValues.reduce((sum, value) => sum + value, 0) / trunkValues.length
-      : null,
+    height: avg(heightValues),
+    trunk: avg(trunkValues),
+    canopyNs: avg(canopyNsValues),
+    canopyEw: avg(canopyEwValues),
     count: records.length,
     heightCount: heightValues.length,
     trunkCount: trunkValues.length,
+    canopyCount: records.filter((r) => r.canopy_ns_cm != null && r.canopy_ew_cm != null).length,
   };
+}
+
+function formatCanopyLabel(nsCm, ewCm) {
+  if (nsCm == null || ewCm == null || nsCm === '' || ewCm === '') return '—';
+  return `${formatNumber(Number(nsCm) / 100, 1)} × ${formatNumber(Number(ewCm) / 100, 1)} m`;
 }
 
 function diffFromAverage(value, average) {
@@ -116,6 +130,28 @@ function TrunkTooltip({ active, payload, average }) {
   );
 }
 
+function CanopyTooltip({ active, payload, averages }) {
+  if (!active || !payload?.length) return null;
+  const row = payload[0]?.payload;
+  return (
+    <Paper sx={{ p: 1.5 }} variant="outlined">
+      <Typography variant="caption" display="block" sx={{ fontWeight: 600 }}>{row?.tree}</Typography>
+      <Typography variant="body2">Canopy N-S: {formatNumber(row?.canopyNs, 1)} cm</Typography>
+      <Typography variant="body2">Canopy E-W: {formatNumber(row?.canopyEw, 1)} cm</Typography>
+      {averages.canopyNs != null && row?.canopyNs != null && (
+        <Typography variant="caption" color="text.secondary" display="block">
+          N-S vs avg: {formatNumber(Number(row.canopyNs) - averages.canopyNs, 1)} cm
+        </Typography>
+      )}
+      {averages.canopyEw != null && row?.canopyEw != null && (
+        <Typography variant="caption" color="text.secondary" display="block">
+          E-W vs avg: {formatNumber(Number(row.canopyEw) - averages.canopyEw, 1)} cm
+        </Typography>
+      )}
+    </Paper>
+  );
+}
+
 function GrowthComparisonPage() {
   const [allRecords, setAllRecords] = useState([]);
   const [message, setMessage] = useState(null);
@@ -163,6 +199,17 @@ function GrowthComparisonPage() {
       .map((r) => ({
         tree: getTreeDisplayId(r.trees || {}),
         trunk: Number(r.trunk_diameter_mm),
+      })),
+    [latestRecords]
+  );
+
+  const canopyChartData = useMemo(
+    () => sortRecords(latestRecords)
+      .filter((r) => r.canopy_ns_cm != null && r.canopy_ew_cm != null)
+      .map((r) => ({
+        tree: getTreeDisplayId(r.trees || {}),
+        canopyNs: Number(r.canopy_ns_cm),
+        canopyEw: Number(r.canopy_ew_cm),
       })),
     [latestRecords]
   );
@@ -252,7 +299,7 @@ function GrowthComparisonPage() {
 
       <Paper sx={{ p: 2, mb: 2 }} variant="outlined">
         <Grid container spacing={2}>
-          <Grid item xs={12} sm={4}>
+          <Grid item xs={6} sm={3}>
             <Typography variant="caption" color="text.secondary">Average height</Typography>
             <Typography variant="h6">
               {averages.height != null ? `${formatNumber(averages.height, 1)} cm` : '—'}
@@ -261,7 +308,7 @@ function GrowthComparisonPage() {
               {averages.heightCount} tree{averages.heightCount === 1 ? '' : 's'}
             </Typography>
           </Grid>
-          <Grid item xs={12} sm={4}>
+          <Grid item xs={6} sm={3}>
             <Typography variant="caption" color="text.secondary">Average trunk</Typography>
             <Typography variant="h6">
               {averages.trunk != null ? `${formatNumber(averages.trunk, 1)} mm` : '—'}
@@ -270,7 +317,16 @@ function GrowthComparisonPage() {
               {averages.trunkCount} tree{averages.trunkCount === 1 ? '' : 's'}
             </Typography>
           </Grid>
-          <Grid item xs={12} sm={4}>
+          <Grid item xs={6} sm={3}>
+            <Typography variant="caption" color="text.secondary">Average canopy</Typography>
+            <Typography variant="h6">
+              {formatCanopyLabel(averages.canopyNs, averages.canopyEw)}
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              {averages.canopyCount} tree{averages.canopyCount === 1 ? '' : 's'}
+            </Typography>
+          </Grid>
+          <Grid item xs={6} sm={3}>
             <Typography variant="caption" color="text.secondary">Trees measured</Typography>
             <Typography variant="h6">{averages.count}</Typography>
           </Grid>
@@ -279,7 +335,7 @@ function GrowthComparisonPage() {
 
       {latestRecords.length > 0 && (
         <Grid container spacing={2} sx={{ mb: 3 }}>
-          <Grid item xs={12} lg={6}>
+          <Grid item xs={12} lg={4}>
             <Paper sx={{ p: 2 }} variant="outlined">
               <Typography variant="h6" gutterBottom>Height by Tree</Typography>
               {heightChartData.length > 0 ? (
@@ -313,7 +369,7 @@ function GrowthComparisonPage() {
               )}
             </Paper>
           </Grid>
-          <Grid item xs={12} lg={6}>
+          <Grid item xs={12} lg={4}>
             <Paper sx={{ p: 2 }} variant="outlined">
               <Typography variant="h6" gutterBottom>Trunk by Tree</Typography>
               {trunkChartData.length > 0 ? (
@@ -347,6 +403,57 @@ function GrowthComparisonPage() {
               )}
             </Paper>
           </Grid>
+          <Grid item xs={12} lg={4}>
+            <Paper sx={{ p: 2 }} variant="outlined">
+              <Typography variant="h6" gutterBottom>Canopy by Tree</Typography>
+              {canopyChartData.length > 0 ? (
+                <ResponsiveContainer width="100%" height={300}>
+                  <LineChart data={canopyChartData} margin={{ top: 12, right: 12, left: 0, bottom: 8 }}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis {...xAxisProps} />
+                    <YAxis tickFormatter={(value) => `${value} cm`} width={52} />
+                    <Tooltip content={<CanopyTooltip averages={averages} />} />
+                    {averages.canopyNs != null && (
+                      <ReferenceLine
+                        y={averages.canopyNs}
+                        stroke="#ef6c00"
+                        strokeDasharray="4 4"
+                        label={{ value: 'Avg N-S', position: 'insideTopRight', fill: '#ef6c00', fontSize: 11 }}
+                      />
+                    )}
+                    {averages.canopyEw != null && (
+                      <ReferenceLine
+                        y={averages.canopyEw}
+                        stroke="#8e24aa"
+                        strokeDasharray="2 6"
+                        label={{ value: 'Avg E-W', position: 'insideBottomRight', fill: '#8e24aa', fontSize: 11 }}
+                      />
+                    )}
+                    <Line
+                      type="monotone"
+                      dataKey="canopyNs"
+                      stroke="#6a1b9a"
+                      strokeWidth={2}
+                      dot={{ r: 4 }}
+                      activeDot={{ r: 6 }}
+                      name="Canopy N-S (cm)"
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="canopyEw"
+                      stroke="#ab47bc"
+                      strokeWidth={2}
+                      dot={{ r: 4 }}
+                      activeDot={{ r: 6 }}
+                      name="Canopy E-W (cm)"
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              ) : (
+                <Typography color="text.secondary">No canopy measurements yet.</Typography>
+              )}
+            </Paper>
+          </Grid>
         </Grid>
       )}
 
@@ -361,17 +468,18 @@ function GrowthComparisonPage() {
               <TableCell>Date</TableCell>
               <TableCell>Height (cm)</TableCell>
               <TableCell>Trunk (mm)</TableCell>
-              <TableCell>Canopy N-S (cm)</TableCell>
-              <TableCell>Canopy E-W (cm)</TableCell>
+              <TableCell>Canopy (N-S × E-W)</TableCell>
               <TableCell>vs Avg Height</TableCell>
               <TableCell>vs Avg Trunk</TableCell>
+              <TableCell>vs Avg Canopy N-S</TableCell>
+              <TableCell>vs Avg Canopy E-W</TableCell>
               <TableCell align="right">Actions</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {allRecords.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={9} align="center">No growth measurements recorded yet.</TableCell>
+                <TableCell colSpan={10} align="center">No growth measurements recorded yet.</TableCell>
               </TableRow>
             ) : (
               sortAllRecords(allRecords).map((r) => (
@@ -380,8 +488,7 @@ function GrowthComparisonPage() {
                   <TableCell>{formatDate(r.measurement_date)}</TableCell>
                   <TableCell>{formatNumber(r.height_cm, 1)}</TableCell>
                   <TableCell>{formatNumber(r.trunk_diameter_mm, 1)}</TableCell>
-                  <TableCell>{formatNumber(r.canopy_ns_cm, 1)}</TableCell>
-                  <TableCell>{formatNumber(r.canopy_ew_cm, 1)}</TableCell>
+                  <TableCell>{formatCanopyLabel(r.canopy_ns_cm, r.canopy_ew_cm)}</TableCell>
                   <TableCell>
                     {diffFromAverage(r.height_cm, averages.height)}
                     {r.height_cm != null && averages.height != null ? ' cm' : ''}
@@ -389,6 +496,14 @@ function GrowthComparisonPage() {
                   <TableCell>
                     {diffFromAverage(r.trunk_diameter_mm, averages.trunk)}
                     {r.trunk_diameter_mm != null && averages.trunk != null ? ' mm' : ''}
+                  </TableCell>
+                  <TableCell>
+                    {diffFromAverage(r.canopy_ns_cm, averages.canopyNs)}
+                    {r.canopy_ns_cm != null && averages.canopyNs != null ? ' cm' : ''}
+                  </TableCell>
+                  <TableCell>
+                    {diffFromAverage(r.canopy_ew_cm, averages.canopyEw)}
+                    {r.canopy_ew_cm != null && averages.canopyEw != null ? ' cm' : ''}
                   </TableCell>
                   <TableCell align="right">
                     <IconButton size="small" aria-label="Edit measurement" onClick={() => openEditRecord(r)}>
