@@ -295,12 +295,33 @@ export function SatelliteAnalysisDisplay({
       </Typography>
       <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1.5 }}>
         {radarOnly
-          ? 'Ground wetness from radar that works through cloud. Confirm important decisions with a field visit or soil test.'
+          ? 'Radar readings work through cloud. Confirm important decisions with a field visit or soil test.'
           : 'Plain-language readings from space. Confirm important decisions with a field visit or soil test.'}
       </Typography>
-      <Grid container spacing={2} sx={{ mb: 3 }}>
-        {!radarOnly && (
-          <>
+      {radarOnly ? (
+        <Grid container spacing={2} sx={{ mb: 3 }}>
+          <Grid item xs={12} md={6} sx={{ display: 'flex' }}>
+            <IndexCard
+              indicatorId="S1_VV"
+              short={SATELLITE_INDEX_INFO.S1_VV.short}
+              statusRaw={radar.status || indexStatus.S1_VV}
+              value={indices.S1_VV}
+              hint={SATELLITE_INDEX_INFO.S1_VV.hint}
+              technicalKey="S1_VV"
+              useStressLabels
+            />
+          </Grid>
+          <Grid item xs={12} md={6} sx={{ display: 'flex' }}>
+            <StressCard
+              indicatorId="radar_stress"
+              statusRaw={radar.status}
+              score={radar.score}
+            />
+          </Grid>
+        </Grid>
+      ) : (
+        <>
+          <Grid container spacing={2} sx={{ mb: 3 }}>
             <Grid item xs={12} sm={6} md={3}>
               <IndexCard
                 indicatorId="NDVI"
@@ -331,25 +352,21 @@ export function SatelliteAnalysisDisplay({
                 technicalKey="NDRE"
               />
             </Grid>
-          </>
-        )}
-        <Grid item xs={12} sm={6} md={radarOnly ? 6 : 3}>
-          <IndexCard
-            indicatorId="S1_VV"
-            short={SATELLITE_INDEX_INFO.S1_VV.short}
-            statusRaw={radar.status || indexStatus.S1_VV}
-            value={indices.S1_VV}
-            hint={SATELLITE_INDEX_INFO.S1_VV.hint}
-            technicalKey="S1_VV"
-            useStressLabels
-          />
-        </Grid>
-      </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <IndexCard
+                indicatorId="S1_VV"
+                short={SATELLITE_INDEX_INFO.S1_VV.short}
+                statusRaw={radar.status || indexStatus.S1_VV}
+                value={indices.S1_VV}
+                hint={SATELLITE_INDEX_INFO.S1_VV.hint}
+                technicalKey="S1_VV"
+                useStressLabels
+              />
+            </Grid>
+          </Grid>
 
-      <Typography variant="subtitle2" sx={{ mb: 1.5 }}>Stress summary</Typography>
-      <Grid container spacing={2} sx={{ mb: 3 }}>
-        {!radarOnly && (
-          <>
+          <Typography variant="subtitle2" sx={{ mb: 1.5 }}>Stress summary</Typography>
+          <Grid container spacing={2} sx={{ mb: 3 }}>
             <Grid item xs={12} md={4}>
               <StressCard
                 indicatorId="water_stress"
@@ -365,16 +382,16 @@ export function SatelliteAnalysisDisplay({
                 indicator={nutrient.indicator}
               />
             </Grid>
-          </>
-        )}
-        <Grid item xs={12} md={radarOnly ? 12 : 4}>
-          <StressCard
-            indicatorId="radar_stress"
-            statusRaw={radar.status}
-            score={radar.score}
-          />
-        </Grid>
-      </Grid>
+            <Grid item xs={12} md={4}>
+              <StressCard
+                indicatorId="radar_stress"
+                statusRaw={radar.status}
+                score={radar.score}
+              />
+            </Grid>
+          </Grid>
+        </>
+      )}
 
       <Grid container spacing={2}>
         <Grid item xs={12} md={6}>
