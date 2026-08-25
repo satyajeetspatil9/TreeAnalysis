@@ -11,6 +11,18 @@ function isMissingTable(error) {
     || message.includes('tree_gps_satellite_cache');
 }
 
+export function parseCachedAnalysis(analysis) {
+  if (analysis == null) return null;
+  if (typeof analysis === 'string') {
+    try {
+      return JSON.parse(analysis);
+    } catch {
+      return null;
+    }
+  }
+  return analysis;
+}
+
 export async function loadCachedGpsAnalysis(supabase, positionId) {
   if (!positionId) {
     return { analysis: null, cache: null, error: 'Missing tree position.' };
@@ -44,8 +56,10 @@ export async function loadCachedGpsAnalysis(supabase, positionId) {
     };
   }
 
+  let analysis = parseCachedAnalysis(data.analysis);
+
   return {
-    analysis: data.analysis,
+    analysis,
     cache: data,
     error: data.error_message,
     empty: !data.analysis,

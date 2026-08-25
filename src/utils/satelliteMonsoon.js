@@ -1,10 +1,35 @@
 ﻿export const CLOUD_COVER_RADAR_ONLY_THRESHOLD = 35;
 
+function parseCloudPercent(value) {
+  if (value == null || value === '') return null;
+  if (typeof value === 'string') {
+    const cleaned = value.trim().replace(/%$/, '');
+    const num = Number(cleaned);
+    if (!Number.isFinite(num)) return null;
+    return num <= 1 ? num * 100 : num;
+  }
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  return num <= 1 ? num * 100 : num;
+}
+
 export function getCloudCoverPercent(analysis) {
-  const cloud = analysis?.selected_images?.sentinel2?.cloud_cover;
-  if (cloud == null || cloud === '') return null;
-  const num = Number(cloud);
-  return Number.isFinite(num) ? num : null;
+  const s2 = analysis?.selected_images?.sentinel2;
+  if (!s2) return null;
+
+  const candidates = [
+    s2.cloud_cover,
+    s2.cloudCover,
+    s2['eo:cloud_cover'],
+    analysis?.data_quality?.cloud_cover,
+  ];
+
+  for (const candidate of candidates) {
+    const parsed = parseCloudPercent(candidate);
+    if (parsed != null) return parsed;
+  }
+
+  return null;
 }
 
 export function isRadarOnlyMode(analysis) {

@@ -42,7 +42,7 @@ import {
   matchesTreeFilters,
   normalizeFilterValue,
 } from '../../utils/treeSearch';
-import { fetchGpsSatelliteStats } from '../../utils/treeGpsSatelliteCache';
+import { fetchGpsSatelliteStats, parseCachedAnalysis } from '../../utils/treeGpsSatelliteCache';
 import {
   SATELLITE_MONITOR_COLUMNS,
   SATELLITE_STRESS_FILTER_OPTIONS,
@@ -167,7 +167,10 @@ function SatelliteMonitoringPage() {
         getTreeDisplayId(a).localeCompare(getTreeDisplayId(b), undefined, { numeric: true }),
       );
       setActiveTrees(sortedTrees);
-      setCacheByPositionId(new Map((cacheResult.data || []).map((entry) => [entry.position_id, entry])));
+      setCacheByPositionId(new Map((cacheResult.data || []).map((entry) => [
+        entry.position_id,
+        { ...entry, analysis: parseCachedAnalysis(entry.analysis) },
+      ])));
       setStats(statsResult);
     } catch (err) {
       setMessage({ type: 'error', text: err.message });
