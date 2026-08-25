@@ -1,4 +1,4 @@
-﻿export const CLOUD_COVER_RADAR_ONLY_THRESHOLD = 35;
+export const CLOUD_COVER_RADAR_ONLY_THRESHOLD = 35;
 
 function parseCloudPercent(value) {
   if (value == null || value === '') return null;
