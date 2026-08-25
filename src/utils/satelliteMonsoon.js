@@ -1,4 +1,4 @@
-export const CLOUD_COVER_RADAR_ONLY_THRESHOLD = 35;
+export const CLOUD_COVER_RADAR_ONLY_THRESHOLD = 45;
 
 function parseCloudPercent(value) {
   if (value == null || value === '') return null;
@@ -61,7 +61,7 @@ export function shouldShowMonsoonDisclaimer(analysis, weekStart) {
 
 export function monsoonDisclaimer(variant) {
   if (variant === 'radar-only') {
-    return 'Cloud cover is above 35%. Optical readings are hidden; only Sentinel-1 radar is shown. During monsoon, satellite readings may not be fully accurate — confirm important decisions with a field visit or soil test.';
+    return 'Cloud cover is above 45%. Optical readings are hidden; only Sentinel-1 radar is shown. During monsoon, satellite readings may not be fully accurate — confirm important decisions with a field visit or soil test.';
   }
   return 'Monsoon season: heavy cloud and rain can make optical satellite readings less accurate. Use alongside soil sensor data and field inspection.';
 }
