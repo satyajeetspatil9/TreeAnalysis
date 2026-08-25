@@ -385,12 +385,12 @@ export function SatelliteAnalysisDisplay({
             <DetailRow label="Optical images used" value={quality.sentinel2_images} />
             <DetailRow label="Radar images used" value={quality.sentinel1_images} />
             <DetailRow label="Confidence" value={quality.confidence_score != null ? `${quality.confidence_score}/100` : quality.confidence} />
-            <DetailRow label="Area averaged" value={sampling.radius_m != null ? `${sampling.radius_m} m around tree GPS` : sampling.method} />
           </Paper>
         </Grid>
         <Grid item xs={12} md={6}>
           <Paper variant="outlined" sx={{ p: 2 }}>
             <Typography variant="subtitle2" sx={{ mb: 1 }}>Satellite images used</Typography>
+            <DetailRow label="Area averaged" value={sampling.radius_m != null ? `${sampling.radius_m} m around tree GPS` : sampling.method} />
             {s2 && (
               <>
                 <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1 }}>
