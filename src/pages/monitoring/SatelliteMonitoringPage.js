@@ -57,6 +57,11 @@ import {
   stressPercentTextColor,
 } from '../../utils/satelliteDisplay';
 import { treeDashboardUrl } from '../../utils/treeDashboard';
+import {
+  getAnalysisSeasonDate,
+  isMonsoonSeason,
+  monsoonDisclaimer,
+} from '../../utils/satelliteMonsoon';
 
 function FilterSelect({
   label, value, options, onChange, disabled = false, minWidth = 120,
@@ -223,6 +228,13 @@ function SatelliteMonitoringPage() {
   const stressCounts = useMemo(() => countSatelliteStressRows(tableRows), [tableRows]);
   const attentionCount = stressCounts.critical + stressCounts.high + stressCounts.moderate;
   const filtersActive = hasActiveTreeFilters(searchQuery, filters) || stressFilter !== 'all';
+  const showMonsoonBanner = useMemo(
+    () => filteredRows.some((row) => {
+      if (!row.cache?.analysis) return false;
+      return isMonsoonSeason(getAnalysisSeasonDate(row.cache.analysis, row.cache.week_start));
+    }),
+    [filteredRows],
+  );
 
   const updateFilter = (key, value) => {
     setFilters((prev) => applyFilterPatch(prev, key, normalizeFilterValue(key, value)));
@@ -265,6 +277,12 @@ function SatelliteMonitoringPage() {
           </>
         )}
       </Alert>
+
+      {showMonsoonBanner && (
+        <Alert severity="info" sx={{ mb: 2 }}>
+          {monsoonDisclaimer('season')}
+        </Alert>
+      )}
 
       <Paper
         sx={(theme) => ({
@@ -443,6 +461,9 @@ function SatelliteMonitoringPage() {
                       {!row.hasGps && (
                         <Chip label="No GPS" size="small" color="default" sx={{ mt: 0.25, alignSelf: 'flex-start' }} />
                       )}
+                      {row.indicators?.radarOnly && (
+                        <Chip label="S1 only" size="small" color="warning" variant="outlined" sx={{ mt: 0.25, alignSelf: 'flex-start' }} />
+                      )}
                     </Box>
                   </TableCell>
 
@@ -456,9 +477,9 @@ function SatelliteMonitoringPage() {
                         <Chip
                           label={row.indicators.overall.label}
                           size="small"
-                          color={severityToChipColor(row.indicators.overall.label)}
+                          color={row.indicators.radarOnly ? 'warning' : severityToChipColor(row.indicators.overall.label)}
                         />
-                        {row.indicators.overall.stressPct != null && (
+                        {!row.indicators.radarOnly && row.indicators.overall.stressPct != null && (
                           <Typography
                             variant="caption"
                             display="block"

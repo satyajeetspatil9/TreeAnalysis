@@ -1,5 +1,6 @@
 import React from 'react';
 import {
+  Alert,
   Box,
   Button,
   Chip,
@@ -29,6 +30,11 @@ import {
   stressPercentTextColor,
 } from '../../utils/satelliteDisplay';
 import SatelliteIndicatorVisual, { SatelliteOverallVisual } from './SatelliteIndicatorArt';
+import {
+  isRadarOnlyMode,
+  monsoonDisclaimer,
+  shouldShowMonsoonDisclaimer,
+} from '../../utils/satelliteMonsoon';
 
 function overallPanelSx(theme, severity, stressPercentage) {
   const level = overallStressLevel(severity, stressPercentage);
@@ -155,6 +161,8 @@ export function SatelliteAnalysisDisplay({
   const showSeverityChip = overall.severity
     && String(overall.severity).toLowerCase() !== String(overallFriendly.headline).toLowerCase();
   const overallVisualColor = severityToChipColor(severityLabel);
+  const radarOnly = isRadarOnlyMode(analysis);
+  const showMonsoonNote = shouldShowMonsoonDisclaimer(analysis, weekStart);
 
   return (
     <Box>
@@ -195,6 +203,18 @@ export function SatelliteAnalysisDisplay({
         )}
       </Box>
 
+      {radarOnly && (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          {monsoonDisclaimer('radar-only')}
+        </Alert>
+      )}
+      {showMonsoonNote && (
+        <Alert severity="info" sx={{ mb: 2 }}>
+          {monsoonDisclaimer('season')}
+        </Alert>
+      )}
+
+      {!radarOnly && (
       <Paper sx={{ p: 2.5, mb: 2, ...overallPanelSx(theme, severityLabel, overall.stress_percentage) }}>
         <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, gap: 2, mb: 1.5 }}>
           <SatelliteOverallVisual
@@ -260,43 +280,60 @@ export function SatelliteAnalysisDisplay({
           </Box>
         </Box>
       </Paper>
+      )}
 
-      <Typography variant="subtitle2" sx={{ mb: 0.5 }}>What the satellite sees</Typography>
+      {radarOnly && (
+        <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
+          <Typography variant="body2" color="text.secondary">
+            Radar-only week — overall score not shown because optical data was skipped due to high cloud cover.
+          </Typography>
+        </Paper>
+      )}
+
+      <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+        {radarOnly ? 'Radar readings (Sentinel-1)' : 'What the satellite sees'}
+      </Typography>
       <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1.5 }}>
-        Plain-language readings from space. Confirm important decisions with a field visit or soil test.
+        {radarOnly
+          ? 'Ground wetness from radar that works through cloud. Confirm important decisions with a field visit or soil test.'
+          : 'Plain-language readings from space. Confirm important decisions with a field visit or soil test.'}
       </Typography>
       <Grid container spacing={2} sx={{ mb: 3 }}>
-        <Grid item xs={12} sm={6} md={3}>
-          <IndexCard
-            indicatorId="NDVI"
-            short={SATELLITE_INDEX_INFO.NDVI.short}
-            statusRaw={indexStatus.NDVI}
-            value={indices.NDVI}
-            hint={SATELLITE_INDEX_INFO.NDVI.hint}
-            technicalKey="NDVI"
-          />
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <IndexCard
-            indicatorId="NDMI"
-            short={SATELLITE_INDEX_INFO.NDMI.short}
-            statusRaw={indexStatus.NDMI}
-            value={indices.NDMI}
-            hint={SATELLITE_INDEX_INFO.NDMI.hint}
-            technicalKey="NDMI"
-          />
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <IndexCard
-            indicatorId="NDRE"
-            short={SATELLITE_INDEX_INFO.NDRE.short}
-            statusRaw={indexStatus.NDRE}
-            value={indices.NDRE}
-            hint={SATELLITE_INDEX_INFO.NDRE.hint}
-            technicalKey="NDRE"
-          />
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
+        {!radarOnly && (
+          <>
+            <Grid item xs={12} sm={6} md={3}>
+              <IndexCard
+                indicatorId="NDVI"
+                short={SATELLITE_INDEX_INFO.NDVI.short}
+                statusRaw={indexStatus.NDVI}
+                value={indices.NDVI}
+                hint={SATELLITE_INDEX_INFO.NDVI.hint}
+                technicalKey="NDVI"
+              />
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <IndexCard
+                indicatorId="NDMI"
+                short={SATELLITE_INDEX_INFO.NDMI.short}
+                statusRaw={indexStatus.NDMI}
+                value={indices.NDMI}
+                hint={SATELLITE_INDEX_INFO.NDMI.hint}
+                technicalKey="NDMI"
+              />
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <IndexCard
+                indicatorId="NDRE"
+                short={SATELLITE_INDEX_INFO.NDRE.short}
+                statusRaw={indexStatus.NDRE}
+                value={indices.NDRE}
+                hint={SATELLITE_INDEX_INFO.NDRE.hint}
+                technicalKey="NDRE"
+              />
+            </Grid>
+          </>
+        )}
+        <Grid item xs={12} sm={6} md={radarOnly ? 6 : 3}>
           <IndexCard
             indicatorId="S1_VV"
             short={SATELLITE_INDEX_INFO.S1_VV.short}
@@ -311,22 +348,26 @@ export function SatelliteAnalysisDisplay({
 
       <Typography variant="subtitle2" sx={{ mb: 1.5 }}>Stress summary</Typography>
       <Grid container spacing={2} sx={{ mb: 3 }}>
-        <Grid item xs={12} md={4}>
-          <StressCard
-            indicatorId="water_stress"
-            statusRaw={water.status}
-            score={water.score}
-          />
-        </Grid>
-        <Grid item xs={12} md={4}>
-          <StressCard
-            indicatorId="nutrient_stress"
-            statusRaw={nutrient.status}
-            score={nutrient.score}
-            indicator={nutrient.indicator}
-          />
-        </Grid>
-        <Grid item xs={12} md={4}>
+        {!radarOnly && (
+          <>
+            <Grid item xs={12} md={4}>
+              <StressCard
+                indicatorId="water_stress"
+                statusRaw={water.status}
+                score={water.score}
+              />
+            </Grid>
+            <Grid item xs={12} md={4}>
+              <StressCard
+                indicatorId="nutrient_stress"
+                statusRaw={nutrient.status}
+                score={nutrient.score}
+                indicator={nutrient.indicator}
+              />
+            </Grid>
+          </>
+        )}
+        <Grid item xs={12} md={radarOnly ? 12 : 4}>
           <StressCard
             indicatorId="radar_stress"
             statusRaw={radar.status}
@@ -354,9 +395,12 @@ export function SatelliteAnalysisDisplay({
               <>
                 <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1 }}>
                   Optical (Sentinel-2) · {formatDate(s2.date)}
+                  {radarOnly && ' · skipped (high cloud)'}
                 </Typography>
                 <DetailRow label="Cloud over area" value={s2.cloud_cover != null ? `${formatNumber(s2.cloud_cover, 1)}%` : null} />
-                <DetailRow label="Clear view of tree" value={s2.scl_clear_percentage != null ? `${formatNumber(s2.scl_clear_percentage, 0)}%` : null} />
+                {!radarOnly && (
+                  <DetailRow label="Clear view of tree" value={s2.scl_clear_percentage != null ? `${formatNumber(s2.scl_clear_percentage, 0)}%` : null} />
+                )}
               </>
             )}
             {s1 && (

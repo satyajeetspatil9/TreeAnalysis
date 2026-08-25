@@ -4,6 +4,7 @@ import {
   friendlyStressStatus,
   overallStressLevel,
 } from './satelliteDisplay';
+import { isRadarOnlyMode } from './satelliteMonsoon';
 
 export const SATELLITE_MONITOR_COLUMNS = [
   { key: 'overall', label: 'Overall', short: 'Combined signal' },
@@ -34,19 +35,23 @@ export function extractSatelliteIndicators(analysis) {
   const nutrient = analysis.nutrient_stress || {};
   const radar = analysis.radar_stress || {};
   const overallFriendly = friendlyOverallStatus(overall.status, overall.severity);
+  const radarOnly = isRadarOnlyMode(analysis);
 
   return {
-    overall: {
-      label: overallFriendly.headline,
-      summary: overallFriendly.summary,
-      raw: overall.severity || overall.status,
-      stressPct: overall.stress_percentage,
-    },
-    ndvi: friendlyIndexStatus(indexStatus.NDVI),
-    ndmi: friendlyIndexStatus(indexStatus.NDMI),
-    ndre: friendlyIndexStatus(indexStatus.NDRE),
-    water: friendlyStressStatus(water.status),
-    nutrient: friendlyStressStatus(nutrient.status || nutrient.indicator),
+    radarOnly,
+    overall: radarOnly
+      ? { label: 'Radar only', summary: null, raw: null, stressPct: null }
+      : {
+        label: overallFriendly.headline,
+        summary: overallFriendly.summary,
+        raw: overall.severity || overall.status,
+        stressPct: overall.stress_percentage,
+      },
+    ndvi: radarOnly ? null : friendlyIndexStatus(indexStatus.NDVI),
+    ndmi: radarOnly ? null : friendlyIndexStatus(indexStatus.NDMI),
+    ndre: radarOnly ? null : friendlyIndexStatus(indexStatus.NDRE),
+    water: radarOnly ? null : friendlyStressStatus(water.status),
+    nutrient: radarOnly ? null : friendlyStressStatus(nutrient.status || nutrient.indicator),
     radar: friendlyStressStatus(radar.status),
   };
 }
@@ -59,7 +64,9 @@ export function getSatelliteRowMeta({ hasGps, cache, indicators }) {
     return { category: cache?.error_message ? 'no_cache' : 'no_cache', sortRank: 4 };
   }
 
-  const category = overallStressLevel(indicators.overall.raw, indicators.overall.stressPct);
+  const category = indicators.radarOnly
+    ? overallStressLevel(indicators.radar?.raw || indicators.radar?.label, null)
+    : overallStressLevel(indicators.overall.raw, indicators.overall.stressPct);
   const sortRank = {
     critical: 0,
     high: 1,
