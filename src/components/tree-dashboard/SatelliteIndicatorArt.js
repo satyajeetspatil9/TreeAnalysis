@@ -60,8 +60,11 @@ function useStatusPalette(statusColor) {
     warning: theme.palette.warning,
     success: theme.palette.success,
     info: theme.palette.info,
-    default: theme.palette.text,
     primary: theme.palette.primary,
+    default: {
+      main: theme.palette.text.secondary,
+      light: theme.palette.text.primary,
+    },
   };
   return map[statusColor] || map.primary;
 }

@@ -7,6 +7,29 @@ import { loadCachedGpsAnalysis } from '../../utils/treeGpsSatelliteCache';
 import SatelliteAnalysisDisplay from './SatelliteAnalysisDisplay';
 import { getTreeGps } from '../../utils/schema';
 
+class SatelliteTabErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <Alert severity="error">
+          Could not display satellite data: {this.state.error.message || 'Unknown error'}.
+          {' '}Try Reload on this tab, or refresh the page.
+        </Alert>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 function SatelliteTab({ tree }) {
   const [analysis, setAnalysis] = useState(null);
   const [meta, setMeta] = useState(null);
@@ -100,22 +123,24 @@ function SatelliteTab({ tree }) {
   }
 
   return (
-    <Box>
-      {meta?.cacheError && (
-        <Alert severity="warning" sx={{ mb: 2 }}>
-          Last batch refresh recorded an error for this tree: {meta.cacheError}
-        </Alert>
-      )}
-      <SatelliteAnalysisDisplay
-        analysis={analysis}
-        latitude={latitude}
-        longitude={longitude}
-        fetchedAt={meta?.fetchedAt}
-        weekStart={meta?.weekStart}
-        onRefresh={loadCache}
-        cacheNote="Data is refreshed weekly via pg_cron (or manual batch in Settings). Reload reads the latest cache."
-      />
-    </Box>
+    <SatelliteTabErrorBoundary>
+      <Box>
+        {meta?.cacheError && (
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            Last batch refresh recorded an error for this tree: {meta.cacheError}
+          </Alert>
+        )}
+        <SatelliteAnalysisDisplay
+          analysis={analysis}
+          latitude={latitude}
+          longitude={longitude}
+          fetchedAt={meta?.fetchedAt}
+          weekStart={meta?.weekStart}
+          onRefresh={loadCache}
+          cacheNote="Data is refreshed weekly via pg_cron (or manual batch in Settings). Reload reads the latest cache."
+        />
+      </Box>
+    </SatelliteTabErrorBoundary>
   );
 }
 

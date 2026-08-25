@@ -45,8 +45,10 @@ function overallPanelSx(theme, severity, stressPercentage) {
   };
 }
 
-function IndexCard({ indicatorId, short, statusRaw, value, hint, technicalKey }) {
-  const friendly = friendlyIndexStatus(statusRaw);
+function IndexCard({ indicatorId, short, statusRaw, value, hint, technicalKey, useStressLabels = false }) {
+  const friendly = useStressLabels
+    ? friendlyStressStatus(statusRaw)
+    : friendlyIndexStatus(statusRaw);
   const technical = formatTechnicalIndex(technicalKey, value);
   const chipColor = stressLevelColor(friendly.label);
 
@@ -298,10 +300,11 @@ export function SatelliteAnalysisDisplay({
           <IndexCard
             indicatorId="S1_VV"
             short={SATELLITE_INDEX_INFO.S1_VV.short}
-            statusRaw={radar.status}
+            statusRaw={radar.status || indexStatus.S1_VV}
             value={indices.S1_VV}
             hint={SATELLITE_INDEX_INFO.S1_VV.hint}
             technicalKey="S1_VV"
+            useStressLabels
           />
         </Grid>
       </Grid>
