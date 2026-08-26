@@ -34,6 +34,7 @@ export const navSections = [
     items: [
       { label: 'Dashboard', path: '/', icon: DashboardIcon, description: 'Overview and alerts' },
       { label: 'Tree Dashboard', path: '/orchard/map', icon: MapIcon, description: 'Tree locations and status on map' },
+      { label: 'Irrigation', path: '/orchard/irrigation', icon: WaterDropIcon, description: 'Live zone status from controller' },
     ],
   },
   {

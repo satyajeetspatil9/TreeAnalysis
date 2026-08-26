@@ -14,3 +14,6 @@ verify_jwt = false
 
 [functions.refresh-gps-satellite-batch]
 verify_jwt = false
+
+[functions.ingest-irrigation-status]
+verify_jwt = false

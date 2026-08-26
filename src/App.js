@@ -14,6 +14,7 @@ import TreesPage from './pages/TreesPage';
 import TreeDashboard from './pages/TreeDashboard';
 import FarmSetup from './pages/FarmSetup';
 import AddSoilReportPage from './pages/farm/AddSoilReportPage';
+import IrrigationDashboardPage from './pages/orchard/IrrigationDashboardPage';
 import IrrigationZonesPage from './pages/irrigation/IrrigationZonesPage';
 import IrrigationEventsPage from './pages/irrigation/IrrigationEventsPage';
 import FertigationPage from './pages/irrigation/FertigationPage';
@@ -57,6 +58,7 @@ function ProtectedApp() {
           <Route path="orchard/trees" element={<TreesPage />} />
           <Route path="orchard/setup" element={<FarmSetup />} />
           <Route path="orchard/soil-report" element={<AddSoilReportPage />} />
+          <Route path="orchard/irrigation" element={<IrrigationDashboardPage />} />
           <Route path="orchard/soil-zones" element={<Navigate to="/" replace />} />
           <Route path="tree/:treeId" element={<TreeDashboard />} />
           <Route path="irrigation/zones" element={<IrrigationZonesPage />} />
