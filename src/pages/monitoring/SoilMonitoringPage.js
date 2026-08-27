@@ -28,6 +28,7 @@ import {
   buildTreeNutrientDeficiencyReport,
   buildFarmLabNutrientDeficiencyReport,
   getLatestObservationByTree,
+  soilRangeFieldSx,
   soilReadingCellSx,
 } from '../../utils/soil';
 import { refreshSoilNutrientAlerts } from '../../utils/soilAlerts';
@@ -546,6 +547,7 @@ function SoilMonitoringPage() {
                   value={editSensorForm[key]}
                   onChange={(e) => setEditSensorForm({ ...editSensorForm, [key]: e.target.value })}
                   helperText={standardKey ? `Target: ${getSoilStandard(standardKey)?.rangeLabel || ''}` : undefined}
+                  sx={soilRangeFieldSx(standardKey, editSensorForm[key])}
                 />
               </Grid>
             ))}

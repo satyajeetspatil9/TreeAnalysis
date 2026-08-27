@@ -19,7 +19,7 @@ import {
   buildLabReportPayload,
   getSoilStandard,
   rlsHint,
-  soilValueColor,
+  soilRangeFieldSx,
 } from '../../utils/soil';
 import { refreshSoilNutrientAlerts } from '../../utils/soilAlerts';
 import { fetchSensorReadings, isSensorDemoMode, isWebBluetoothAvailable } from '../../utils/sensorFetch';
@@ -223,17 +223,7 @@ function AddSoilReportPage() {
                 value={sensorForm[key]}
                 onChange={(e) => setSensorForm({ ...sensorForm, [key]: e.target.value })}
                 helperText={standardKey ? `Target: ${getSoilStandard(standardKey)?.rangeLabel || ''}` : ' '}
-                FormHelperTextProps={{
-                  sx: {
-                    minHeight: 32,
-                    m: 0,
-                    mt: 0.5,
-                    color: soilValueColor(standardKey, sensorForm[key]),
-                  },
-                }}
-                InputProps={{
-                  sx: { color: soilValueColor(standardKey, sensorForm[key]), fontWeight: 600 },
-                }}
+                sx={soilRangeFieldSx(standardKey, sensorForm[key])}
               />
             </Grid>
           ))}

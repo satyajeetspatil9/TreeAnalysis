@@ -21,6 +21,8 @@ import {
   getSoilStandard,
   formatSensorMethodLabel,
   rlsHint,
+  soilRangeFieldSx,
+  soilReadingCellSx,
 } from '../../utils/soil';
 import { refreshSoilNutrientAlerts } from '../../utils/soilAlerts';
 import SoilNutrientDisplay, { SoilStandardsReference } from '../soil/SoilNutrientDisplay';
@@ -274,13 +276,15 @@ function SoilTab({ tree }) {
             {readings.map((r) => (
               <TableRow key={r.id}>
                 <TableCell>{formatDate(r.observed_at)}</TableCell>
-                <TableCell>{r.moisture_percent != null ? `${formatNumber(r.moisture_percent, 0)}%` : '—'}</TableCell>
-                <TableCell>{r.ph ?? '—'}</TableCell>
-                <TableCell>{r.ec ?? '—'}</TableCell>
+                <TableCell sx={soilReadingCellSx('moisture_percent', r.moisture_percent)}>
+                  {r.moisture_percent != null ? `${formatNumber(r.moisture_percent, 0)}%` : '—'}
+                </TableCell>
+                <TableCell sx={soilReadingCellSx('ph', r.ph)}>{r.ph ?? '—'}</TableCell>
+                <TableCell sx={soilReadingCellSx('ec', r.ec)}>{r.ec ?? '—'}</TableCell>
                 <TableCell>{r.temperature_c ?? '—'}</TableCell>
-                <TableCell>{r.nitrogen ?? '—'}</TableCell>
-                <TableCell>{r.phosphorus ?? '—'}</TableCell>
-                <TableCell>{r.potassium ?? '—'}</TableCell>
+                <TableCell sx={soilReadingCellSx('nitrogen', r.nitrogen)}>{r.nitrogen ?? '—'}</TableCell>
+                <TableCell sx={soilReadingCellSx('phosphorus', r.phosphorus)}>{r.phosphorus ?? '—'}</TableCell>
+                <TableCell sx={soilReadingCellSx('potassium', r.potassium)}>{r.potassium ?? '—'}</TableCell>
                 <TableCell align="right">
                   <IconButton size="small" aria-label="Edit reading" onClick={() => openEditReading(r)}>
                     <EditIcon fontSize="small" />
@@ -337,6 +341,7 @@ function SoilTab({ tree }) {
                   value={editForm[key]}
                   onChange={(e) => setEditForm({ ...editForm, [key]: e.target.value })}
                   helperText={standardKey ? `Target: ${getSoilStandard(standardKey)?.rangeLabel || ''}` : undefined}
+                  sx={soilRangeFieldSx(standardKey, editForm[key])}
                 />
               </Grid>
             ))}

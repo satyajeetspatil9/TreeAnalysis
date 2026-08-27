@@ -128,18 +128,50 @@ export function soilStatusColor(status) {
   return 'text.secondary';
 }
 
-/** MUI sx for soil monitoring tables — highlights out-of-range values. */
+export function soilRangeStatus(standardKey, value) {
+  return evaluateSoilStandard(getSoilStandard(standardKey), value);
+}
+
+export function soilRangePaletteKey(standardKey, value) {
+  const { status } = soilRangeStatus(standardKey, value);
+  if (status === 'low') return 'warning';
+  if (status === 'high') return 'error';
+  if (status === 'good' || status === 'ok') return 'success';
+  return null;
+}
+
 export function soilReadingCellSx(standardKey, value) {
   if (value == null || value === '') return undefined;
-  const status = evaluateSoilStandard(getSoilStandard(standardKey), value).status;
-  if (status === 'low') return { color: 'warning.light', fontWeight: 600 };
-  if (status === 'high') return { color: 'error.light', fontWeight: 600 };
-  if (status === 'good' || status === 'ok') return { color: 'success.light', fontWeight: 600 };
-  return undefined;
+  const { status } = soilRangeStatus(standardKey, value);
+  if (status === 'unknown') return undefined;
+  return { color: soilStatusColor(status), fontWeight: 700 };
 }
 
 export function soilValueColor(standardKey, value) {
-  return soilStatusColor(evaluateSoilStandard(getSoilStandard(standardKey), value).status);
+  return soilStatusColor(soilRangeStatus(standardKey, value).status);
+}
+
+export function soilRangeCardSx(standardKey, value) {
+  const paletteKey = soilRangePaletteKey(standardKey, value);
+  return (theme) => {
+    if (!paletteKey) {
+      return { bgcolor: theme.palette.action.hover };
+    }
+    const color = theme.palette[paletteKey].main;
+    return {
+      bgcolor: `${color}29`,
+      border: '1px solid',
+      borderColor: color,
+    };
+  };
+}
+
+export function soilRangeFieldSx(standardKey, value) {
+  const color = soilValueColor(standardKey, value);
+  return {
+    '& .MuiInputBase-input': { color, fontWeight: 700 },
+    '& .MuiFormHelperText-root': { color },
+  };
 }
 
 export function soilStatusChipSx(status) {

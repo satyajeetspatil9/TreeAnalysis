@@ -1,6 +1,6 @@
 import React, { useCallback, useState } from 'react';
 import {
-  Alert, Box, Button, CircularProgress, Grid, Typography,
+  Alert, Box, Button, Chip, CircularProgress, Grid, Typography,
 } from '@mui/material';
 import QrCodeScannerIcon from '@mui/icons-material/QrCodeScanner';
 import SensorsIcon from '@mui/icons-material/Sensors';
@@ -10,6 +10,9 @@ import {
   SENSOR_READING_FIELDS,
   fieldLabelWithUnit,
   getSoilStandard,
+  soilRangeCardSx,
+  soilRangeStatus,
+  soilStatusColor,
   soilValueColor,
 } from '../utils/soil';
 import { fetchSensorReadings, isSensorDemoMode, isWebBluetoothAvailable } from '../utils/sensorFetch';
@@ -172,18 +175,21 @@ function PublicSoilReportForm({ publicAccessKey }) {
           <Grid container spacing={1.5} sx={{ mb: 2 }}>
             {SENSOR_READING_FIELDS.map((field) => {
               const standard = field.standardKey ? getSoilStandard(field.standardKey) : null;
+              const evaluation = soilRangeStatus(field.standardKey, readings[field.key]);
               return (
                 <Grid item xs={6} sm={4} md={3} key={field.key} sx={{ display: 'flex' }}>
                   <Box
-                    sx={{
-                      p: 1.5,
-                      borderRadius: 1,
-                      bgcolor: 'action.hover',
-                      width: '100%',
-                      minHeight: 104,
-                      display: 'flex',
-                      flexDirection: 'column',
-                    }}
+                    sx={[
+                      {
+                        p: 1.5,
+                        borderRadius: 1,
+                        width: '100%',
+                        minHeight: 104,
+                        display: 'flex',
+                        flexDirection: 'column',
+                      },
+                      soilRangeCardSx(field.standardKey, readings[field.key]),
+                    ]}
                   >
                     <Typography
                       variant="caption"
@@ -194,11 +200,28 @@ function PublicSoilReportForm({ publicAccessKey }) {
                     </Typography>
                     <Typography
                       variant="h6"
-                      fontWeight={600}
+                      fontWeight={700}
                       sx={{ my: 0.5, lineHeight: 1.2, color: soilValueColor(field.standardKey, readings[field.key]) }}
                     >
                       {readings[field.key] ?? '—'}
+                      {field.unit ? ` ${field.unit}` : ''}
                     </Typography>
+                    {evaluation.label && (
+                      <Chip
+                        size="small"
+                        label={evaluation.label}
+                        sx={{
+                          alignSelf: 'flex-start',
+                          mb: 0.5,
+                          height: 22,
+                          fontWeight: 700,
+                          color: soilStatusColor(evaluation.status),
+                          borderColor: soilStatusColor(evaluation.status),
+                          bgcolor: 'transparent',
+                          border: 1,
+                        }}
+                      />
+                    )}
                     <Typography
                       variant="caption"
                       color="text.secondary"
