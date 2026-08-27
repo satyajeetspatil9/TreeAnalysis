@@ -40,11 +40,6 @@ function PublicSoilReportForm({ publicAccessKey }) {
   }, []);
 
   const handleFetchSensor = async () => {
-    if (!positionCode) {
-      setError('Scan the tree QR code first.');
-      return;
-    }
-
     setFetching(true);
     setError(null);
     setSuccess(false);
@@ -103,12 +98,12 @@ function PublicSoilReportForm({ publicAccessKey }) {
   return (
     <Box sx={{ mt: 2, p: 3, borderRadius: 2, border: 1, borderColor: 'divider', bgcolor: 'background.paper' }}>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Scan the tree QR tag, connect to the SoilSensor BLE reader, then save the soil report.
+        Scan the tree QR tag, then tap Connect & fetch from sensor (RDL908 / SoilSensor-XXXX).
         {!isSensorDemoMode() && !isWebBluetoothAvailable() && (
-          <> Sensor fetch requires <strong>Chrome on Android</strong>.</>
+          <> Live fetch needs <strong>Chrome on Android</strong> with location allowed.</>
         )}
         {isSensorDemoMode() && (
-          <> Demo mode — set <code>REACT_APP_SENSOR_DEMO=false</code> for live BLE.</>
+          <> Demo mode is on — set <code>REACT_APP_SENSOR_DEMO=false</code> and restart npm to use BLE.</>
         )}
       </Typography>
 
@@ -127,10 +122,10 @@ function PublicSoilReportForm({ publicAccessKey }) {
         variant="outlined"
         startIcon={fetching ? <CircularProgress size={18} /> : <SensorsIcon />}
         onClick={handleFetchSensor}
-        disabled={!positionCode || fetching}
+        disabled={fetching}
         sx={{ mb: 2 }}
       >
-        {fetching ? 'Connecting…' : 'Connect & fetch from sensor'}
+        {fetching ? 'Reading sensor…' : 'Connect & fetch from sensor'}
       </Button>
 
       {sensorDeviceName && (

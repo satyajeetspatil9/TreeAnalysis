@@ -24,7 +24,7 @@ function PublicAddSoilReportPage() {
           Add Soil Report
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          7-in-1 sensor only. Scan QR, fetch readings, and save — no login required.
+          7-in-1 sensor (JXBS-3001-TR via RDL908 BLE). Scan QR, fetch readings in Chrome on Android, then save.
         </Typography>
         <PublicSoilReportForm publicAccessKey={accessKey} />
       </Container>

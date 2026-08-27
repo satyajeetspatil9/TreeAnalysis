@@ -1,7 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import {
-  Box, Typography, Paper, Button, TextField, Grid, FormControl, InputLabel, Select, MenuItem, Alert,
+  Alert, Box, Button, CircularProgress, FormControl, Grid, InputLabel, MenuItem, Paper, Select,
+  TextField, Typography,
 } from '@mui/material';
+import SensorsIcon from '@mui/icons-material/Sensors';
 import { supabase } from '../../supabaseClient';
 import { getTreeDisplayId } from '../../utils/formatters';
 import { useFarm } from '../../hooks/useFarm';
@@ -19,6 +21,16 @@ import {
   rlsHint,
 } from '../../utils/soil';
 import { refreshSoilNutrientAlerts } from '../../utils/soilAlerts';
+import { fetchSensorReadings, isSensorDemoMode, isWebBluetoothAvailable } from '../../utils/sensorFetch';
+
+function readingsToSensorForm(readings) {
+  const form = emptySensorForm();
+  form.observed_at = readings.observed_at || form.observed_at;
+  SENSOR_READING_FIELDS.forEach(({ key }) => {
+    form[key] = readings[key] != null && !Number.isNaN(readings[key]) ? String(readings[key]) : '';
+  });
+  return form;
+}
 
 function AddSoilReportPage() {
   const { farm } = useFarm();
@@ -29,6 +41,8 @@ function AddSoilReportPage() {
   const [selectedTreeId, setSelectedTreeId] = useState('');
   const [savingSensor, setSavingSensor] = useState(false);
   const [savingLab, setSavingLab] = useState(false);
+  const [fetchingSensor, setFetchingSensor] = useState(false);
+  const [sensorDeviceName, setSensorDeviceName] = useState(null);
 
   useEffect(() => {
     async function loadTrees() {
@@ -48,6 +62,25 @@ function AddSoilReportPage() {
     const hasReading = SENSOR_READING_FIELDS.some(({ key }) => form[key] !== '' && form[key] != null);
     if (!hasReading) return 'Enter at least one sensor value.';
     return null;
+  };
+
+  const handleFetchSensor = async () => {
+    setFetchingSensor(true);
+    setMessage(null);
+    setSensorDeviceName(null);
+
+    try {
+      const data = await fetchSensorReadings();
+      setSensorForm(readingsToSensorForm(data));
+      if (data._deviceName) {
+        setSensorDeviceName(data._deviceName);
+      }
+      setMessage({ type: 'success', text: 'Sensor readings loaded from BLE. Review values, then save.' });
+    } catch (err) {
+      setMessage({ type: 'error', text: err.message || 'Could not fetch sensor data.' });
+    } finally {
+      setFetchingSensor(false);
+    }
   };
 
   const handleSaveSensor = async () => {
@@ -131,9 +164,29 @@ function AddSoilReportPage() {
       <Paper sx={{ p: 3, mb: 3 }} variant="outlined">
         <Typography variant="h6" gutterBottom>7-in-1 Sensor — Per Tree</Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Monthly field tests with your 7-in-1 sensor. Each reading is stored against one tree.
-          View and edit past readings under Monitoring → Soil.
+          Monthly field tests with your 7-in-1 sensor. Connect via Bluetooth (RDL908 / SoilSensor-XXXX) or enter values manually.
+          {!isSensorDemoMode() && !isWebBluetoothAvailable() && (
+            <> Live BLE fetch needs <strong>Chrome on Android</strong> with location allowed.</>
+          )}
+          {isSensorDemoMode() && (
+            <> Demo mode is on — set <code>REACT_APP_SENSOR_DEMO=false</code> on Vercel for live BLE.</>
+          )}
         </Typography>
+        <Button
+          type="button"
+          variant="outlined"
+          startIcon={fetchingSensor ? <CircularProgress size={18} /> : <SensorsIcon />}
+          onClick={handleFetchSensor}
+          disabled={fetchingSensor}
+          sx={{ mb: 2 }}
+        >
+          {fetchingSensor ? 'Reading sensor…' : 'Connect & fetch from sensor'}
+        </Button>
+        {sensorDeviceName && (
+          <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 2 }}>
+            Connected to {sensorDeviceName}
+          </Typography>
+        )}
         <Grid container spacing={2}>
           <Grid item xs={12} sm={6} md={4}>
             <FormControl fullWidth required>
