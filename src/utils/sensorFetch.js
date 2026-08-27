@@ -116,6 +116,49 @@ async function readCachedReadings(characteristic) {
   return parseReadingsJson(decodeCharacteristicValue(value));
 }
 
+/**
+ * Chrome shows its device chooser on every requestDevice() call, so hold the
+ * granted device and reuse it. Survives repeat fetches; a page reload resets it
+ * unless chrome://flags/#enable-web-bluetooth-new-permissions-backend is on,
+ * which is what makes getDevices() return previously granted devices.
+ */
+let grantedDevice = null;
+
+async function restoreGrantedDevice() {
+  if (grantedDevice) {
+    return grantedDevice;
+  }
+  if (typeof navigator.bluetooth.getDevices !== 'function') {
+    return null;
+  }
+  try {
+    const devices = await navigator.bluetooth.getDevices();
+    grantedDevice = devices.find((d) => String(d.name || '').startsWith(SOIL_BLE_NAME_PREFIX)) || null;
+  } catch {
+    grantedDevice = null;
+  }
+  return grantedDevice;
+}
+
+export function forgetSensorDevice() {
+  grantedDevice = null;
+}
+
+async function acquireDevice() {
+  const known = await restoreGrantedDevice();
+  if (known) {
+    return known;
+  }
+  grantedDevice = await navigator.bluetooth.requestDevice({
+    filters: [
+      { services: [SOIL_SERVICE_UUID] },
+      { namePrefix: SOIL_BLE_NAME_PREFIX },
+    ],
+    optionalServices: [SOIL_SERVICE_UUID],
+  });
+  return grantedDevice;
+}
+
 async function fetchBleReadings() {
   if (!navigator.bluetooth) {
     throw new Error(
@@ -123,15 +166,21 @@ async function fetchBleReadings() {
     );
   }
 
-  const device = await navigator.bluetooth.requestDevice({
-    filters: [
-      { services: [SOIL_SERVICE_UUID] },
-      { namePrefix: SOIL_BLE_NAME_PREFIX },
-    ],
-    optionalServices: [SOIL_SERVICE_UUID],
-  });
+  const device = await acquireDevice();
 
-  const server = await device.gatt.connect();
+  let server;
+  try {
+    server = await device.gatt.connect();
+  } catch {
+    // A remembered device may be out of range or powered off. Drop it so the
+    // next tap opens the chooser again; re-requesting here would fail because
+    // the user gesture has already expired.
+    forgetSensorDevice();
+    throw new Error(
+      `Could not connect to ${device.name || SOIL_BLE_NAME_PREFIX}. Power the RDL908, move closer, then tap again.`,
+    );
+  }
+
   let readingsChar;
   try {
     const service = await server.getPrimaryService(SOIL_SERVICE_UUID);

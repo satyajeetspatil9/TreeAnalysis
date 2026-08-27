@@ -20,13 +20,16 @@ export const LAB_NUTRIENT_FIELDS = [
 
 /** Required soil nutrient ranges for mango orchard (Devgad). */
 export const SOIL_NUTRIENT_STANDARDS = {
+  // Volumetric water content from the JXBS-3001-TR probe, not a capacitive
+  // probe's 0-95% scale. Real soil saturates near 40-45%, so an "adequate"
+  // ceiling above that would never trigger.
   moisture_percent: {
     label: 'Moisture',
     unit: '%',
-    min: 30,
-    max: 70,
+    min: 15,
+    max: 35,
     okLabel: 'Adequate',
-    rangeLabel: '< 30 low · 30–70 adequate · > 70 high',
+    rangeLabel: '< 15 low · 15–35 adequate · > 35 high (VWC)',
   },
   nitrogen: { label: 'N', unit: 'kg/ha', min: 280, max: 560, rangeLabel: '280–560 kg/ha' },
   phosphorus: { label: 'P', unit: 'kg/ha', min: 10, max: 25, rangeLabel: '10–25 kg/ha' },
