@@ -1,3 +1,5 @@
+import { rawMoistureToPercent } from './soilSensorMoisture';
+
 const SENSOR_FIELD_KEYS = [
   'moisture_percent',
   'ph',
@@ -31,8 +33,6 @@ export async function hashIngestKey(key) {
 export function ingestKeyPrefix(key) {
   return key.slice(0, 12);
 }
-
-import { rawMoistureToPercent } from './soilSensorMoisture';
 
 export function buildIngestSampleJson(positionCode = 'A-R01-L01-T01') {
   return JSON.stringify({
