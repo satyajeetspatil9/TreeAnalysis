@@ -10,9 +10,12 @@ import {
   SOIL_SERVICE_UUID,
   SOIL_TRIGGER_CHAR_UUID,
 } from './soilSensorBle';
+import { rawMoistureToPercent } from './soilSensorMoisture';
+
+export const DEMO_SENSOR_RAW_M = 140;
 
 export const DEMO_SENSOR_READINGS = {
-  moisture_percent: 45,
+  moisture_percent: rawMoistureToPercent(DEMO_SENSOR_RAW_M),
   ph: 6.8,
   ec: 0.52,
   temperature_c: 28.5,
@@ -54,7 +57,10 @@ function pickNumber(raw, keys) {
 function normalizeReadings(raw) {
   const observedAt = raw?.observed_at;
   const useToday = !observedAt || String(observedAt).startsWith('1970');
-  const moisture = pickNumber(raw, ['moisture_percent', 'humidity', 'moisture']);
+  const rawM = pickNumber(raw, ['m', 'raw_m'])
+    ?? pickNumber(raw?.raw, ['m']);
+  const moistureFromRaw = rawMoistureToPercent(rawM);
+  const moisture = moistureFromRaw ?? pickNumber(raw, ['moisture_percent', 'humidity', 'moisture']);
   const temperature = pickNumber(raw, ['temperature_c', 'temperature']);
   const ph = pickNumber(raw, ['ph', 'pH']);
   const ec = pickNumber(raw, ['ec', 'EC']);
@@ -65,7 +71,8 @@ function normalizeReadings(raw) {
 
   return {
     observed_at: useToday ? todayIsoDate() : observedAt,
-    moisture_percent: moisture,
+    moisture_percent: Math.round(moisture),
+    moisture_raw_m: rawM != null && !Number.isNaN(rawM) ? rawM : null,
     ph,
     ec,
     temperature_c: temperature,

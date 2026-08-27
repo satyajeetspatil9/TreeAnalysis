@@ -1,3 +1,12 @@
+import {
+  MOISTURE_ADEQUATE_MAX_M,
+  MOISTURE_ADEQUATE_MIN_M,
+  MOISTURE_PERCENT_ADEQUATE_MAX,
+  MOISTURE_PERCENT_ADEQUATE_MIN,
+  MOISTURE_RAW_MAX,
+  MOISTURE_RAW_MIN,
+} from './soilSensorMoisture';
+
 export const SENSOR_READING_FIELDS = [
   { key: 'moisture_percent', label: 'Moisture', unit: '%', decimals: 0, standardKey: 'moisture_percent' },
   { key: 'ph', label: 'pH', decimals: 1, standardKey: 'ph' },
@@ -20,16 +29,15 @@ export const LAB_NUTRIENT_FIELDS = [
 
 /** Required soil nutrient ranges for mango orchard (Devgad). */
 export const SOIL_NUTRIENT_STANDARDS = {
-  // Volumetric water content from the JXBS-3001-TR probe, not a capacitive
-  // probe's 0-95% scale. Real soil saturates near 40-45%, so an "adequate"
-  // ceiling above that would never trigger.
+  // Moisture % is derived from raw Modbus m: m≤30 → 0%, m≥250 → 100%.
+  // Adequate band on raw m is 100–180 (see soilSensorMoisture.js).
   moisture_percent: {
     label: 'Moisture',
     unit: '%',
-    min: 15,
-    max: 35,
+    min: MOISTURE_PERCENT_ADEQUATE_MIN,
+    max: MOISTURE_PERCENT_ADEQUATE_MAX,
     okLabel: 'Adequate',
-    rangeLabel: '< 15 low · 15–35 adequate · > 35 high (VWC)',
+    rangeLabel: `< ${MOISTURE_ADEQUATE_MIN_M} low · ${MOISTURE_ADEQUATE_MIN_M}–${MOISTURE_ADEQUATE_MAX_M} adequate · > ${MOISTURE_ADEQUATE_MAX_M} high (raw m ${MOISTURE_RAW_MIN}–${MOISTURE_RAW_MAX} → 0–100%)`,
   },
   nitrogen: { label: 'N', unit: 'kg/ha', min: 280, max: 560, rangeLabel: '280–560 kg/ha' },
   phosphorus: { label: 'P', unit: 'kg/ha', min: 10, max: 25, rangeLabel: '10–25 kg/ha' },

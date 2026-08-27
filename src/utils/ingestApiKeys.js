@@ -32,11 +32,13 @@ export function ingestKeyPrefix(key) {
   return key.slice(0, 12);
 }
 
+import { rawMoistureToPercent } from './soilSensorMoisture';
+
 export function buildIngestSampleJson(positionCode = 'A-R01-L01-T01') {
   return JSON.stringify({
     position_code: positionCode,
     observed_at: new Date().toISOString(),
-    moisture_percent: 45,
+    moisture_percent: Math.round(rawMoistureToPercent(140)),
     ph: 6.8,
     ec: 0.52,
     temperature_c: 28.5,
