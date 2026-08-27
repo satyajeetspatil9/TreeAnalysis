@@ -166,6 +166,9 @@ async function fetchBleReadings() {
 
     const normalized = normalizeReadings(parsed);
     normalized._deviceName = device.name || SOIL_BLE_NAME_PREFIX;
+    if (parsed.raw && typeof parsed.raw === 'object') {
+      normalized._raw = parsed.raw;
+    }
     return normalized;
   } finally {
     if (readingsChar) {

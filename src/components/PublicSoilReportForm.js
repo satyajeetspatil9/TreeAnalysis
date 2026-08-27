@@ -134,6 +134,17 @@ function PublicSoilReportForm({ publicAccessKey }) {
         </Typography>
       )}
 
+      {readings?._raw && (
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          display="block"
+          sx={{ mb: 2, fontFamily: 'monospace' }}
+        >
+          Raw registers: {Object.entries(readings._raw).map(([key, value]) => `${key}=${value}`).join('  ')}
+        </Typography>
+      )}
+
       <Box sx={{ mb: 2, p: 2, borderRadius: 1, bgcolor: 'action.hover' }}>
         <Typography variant="caption" color="text.secondary" display="block">
           Position code
