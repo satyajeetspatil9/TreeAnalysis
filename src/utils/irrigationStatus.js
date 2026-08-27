@@ -1,6 +1,6 @@
 import { formatDate, formatNumber } from './formatters';
 
-export const IRRIGATION_STATUS_POLL_MS = 5000;
+export const IRRIGATION_STATUS_POLL_MS = 3 * 60 * 1000;
 
 export function buildIrrigationStatusSampleJson(zoneCode = 'Z01') {
   const now = new Date().toISOString();

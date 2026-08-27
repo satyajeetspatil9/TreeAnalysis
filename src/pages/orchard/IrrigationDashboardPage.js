@@ -138,7 +138,7 @@ function IrrigationDashboardPage() {
       <PageHeader
         section="Orchard"
         title="Irrigation dashboard"
-        subtitle="Live drip zone status from your irrigation controller — zone, start time, duration, voltage, amp, and discharge."
+        subtitle="Drip zone status from your irrigation controller. Readings refresh every 3 minutes."
       />
 
       {message && (
