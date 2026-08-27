@@ -5,6 +5,7 @@ import {
   evaluateSoilStandard,
   getSoilStandard,
   soilStatusColor,
+  soilValueColor,
   SOIL_STANDARDS_REFERENCE,
 } from '../../utils/soil';
 
@@ -48,7 +49,11 @@ export function SoilNutrientDisplay({
     <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
         {statusFirst && statusChip}
-        <Typography variant={variant} component="span">
+        <Typography
+          variant={variant}
+          component="span"
+          sx={{ color: soilValueColor(standardKey, value), fontWeight: 600 }}
+        >
           {displayLabel ? `${displayLabel}: ` : ''}
           {value != null && value !== ''
             ? `${formatNumber(value, decimals)}${displayUnit ? ` ${displayUnit}` : ''}`

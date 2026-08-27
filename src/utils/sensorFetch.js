@@ -15,7 +15,7 @@ import { rawMoistureToPercent } from './soilSensorMoisture';
 export const DEMO_SENSOR_RAW_M = 140;
 
 export const DEMO_SENSOR_READINGS = {
-  moisture_percent: rawMoistureToPercent(DEMO_SENSOR_RAW_M),
+  moisture_percent: Math.round(rawMoistureToPercent(DEMO_SENSOR_RAW_M)),
   ph: 6.8,
   ec: 0.52,
   temperature_c: 28.5,
@@ -45,22 +45,34 @@ function parseReadingsJson(text) {
   return JSON.parse(trimmed);
 }
 
-function pickNumber(raw, keys) {
+function pickNumber(source, keys) {
+  if (!source) return Number.NaN;
   for (const key of keys) {
-    if (raw[key] !== undefined && raw[key] !== null && raw[key] !== '') {
-      return Number(raw[key]);
+    if (source[key] !== undefined && source[key] !== null && source[key] !== '') {
+      const num = Number(source[key]);
+      if (!Number.isNaN(num)) return num;
     }
   }
   return Number.NaN;
 }
 
+function firstFiniteNumber(...values) {
+  for (const value of values) {
+    if (value != null && !Number.isNaN(Number(value))) return Number(value);
+  }
+  return null;
+}
+
 function normalizeReadings(raw) {
   const observedAt = raw?.observed_at;
   const useToday = !observedAt || String(observedAt).startsWith('1970');
-  const rawM = pickNumber(raw, ['m', 'raw_m'])
-    ?? pickNumber(raw?.raw, ['m']);
-  const moistureFromRaw = rawMoistureToPercent(rawM);
-  const moisture = moistureFromRaw ?? pickNumber(raw, ['moisture_percent', 'humidity', 'moisture']);
+  const firmwareMoisture = pickNumber(raw, ['moisture_percent', 'humidity', 'moisture']);
+  const rawM = firstFiniteNumber(
+    pickNumber(raw?.raw, ['m']),
+    pickNumber(raw, ['m', 'raw_m']),
+    Number.isNaN(firmwareMoisture) ? null : firmwareMoisture * 10,
+  );
+  const moisture = rawMoistureToPercent(rawM) ?? firmwareMoisture;
   const temperature = pickNumber(raw, ['temperature_c', 'temperature']);
   const ph = pickNumber(raw, ['ph', 'pH']);
   const ec = pickNumber(raw, ['ec', 'EC']);
@@ -72,7 +84,7 @@ function normalizeReadings(raw) {
   return {
     observed_at: useToday ? todayIsoDate() : observedAt,
     moisture_percent: Math.round(moisture),
-    moisture_raw_m: rawM != null && !Number.isNaN(rawM) ? rawM : null,
+    moisture_raw_m: rawM,
     ph,
     ec,
     temperature_c: temperature,

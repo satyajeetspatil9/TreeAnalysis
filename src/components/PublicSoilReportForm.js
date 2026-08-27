@@ -10,6 +10,7 @@ import {
   SENSOR_READING_FIELDS,
   fieldLabelWithUnit,
   getSoilStandard,
+  soilValueColor,
 } from '../utils/soil';
 import { fetchSensorReadings, isSensorDemoMode, isWebBluetoothAvailable } from '../utils/sensorFetch';
 import { submitPublicSoilReport } from '../utils/publicSoilReportApi';
@@ -191,7 +192,11 @@ function PublicSoilReportForm({ publicAccessKey }) {
                     >
                       {fieldLabelWithUnit(field)}
                     </Typography>
-                    <Typography variant="h6" fontWeight={600} sx={{ my: 0.5, lineHeight: 1.2 }}>
+                    <Typography
+                      variant="h6"
+                      fontWeight={600}
+                      sx={{ my: 0.5, lineHeight: 1.2, color: soilValueColor(field.standardKey, readings[field.key]) }}
+                    >
                       {readings[field.key] ?? '—'}
                     </Typography>
                     <Typography

@@ -168,7 +168,7 @@ function SoilTab({ tree }) {
               value={current?.moisture_percent}
               decimals={0}
               unit="%"
-              showRange={false}
+              showRange
               showLabel={false}
               statusFirst
               variant="h6"

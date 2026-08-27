@@ -3,7 +3,7 @@ import { Grid, Paper, Typography, Box, CircularProgress } from '@mui/material';
 import { supabase } from '../../supabaseClient';
 import { formatDate, formatNumber } from '../../utils/formatters';
 import { getIrrigationZoneId } from '../../utils/schema';
-import { evaluateSoilStandard, getSoilStandard, soilStatusBadgeSx } from '../../utils/soil';
+import { evaluateSoilStandard, getSoilStandard, soilStatusBadgeSx, soilStatusColor } from '../../utils/soil';
 import HealthIndicator from '../common/HealthIndicator';
 
 function SummaryCard({ label, value, status }) {
@@ -16,7 +16,12 @@ function SummaryCard({ label, value, status }) {
             {status.label}
           </Typography>
         )}
-        <Typography variant="h6" sx={{ fontWeight: 700 }}>{value}</Typography>
+        <Typography
+          variant="h6"
+          sx={{ fontWeight: 700, color: status?.status ? soilStatusColor(status.status) : undefined }}
+        >
+          {value}
+        </Typography>
       </Box>
     </Paper>
   );

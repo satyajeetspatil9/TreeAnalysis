@@ -1,10 +1,6 @@
 import {
-  MOISTURE_ADEQUATE_MAX_M,
-  MOISTURE_ADEQUATE_MIN_M,
   MOISTURE_PERCENT_ADEQUATE_MAX,
   MOISTURE_PERCENT_ADEQUATE_MIN,
-  MOISTURE_RAW_MAX,
-  MOISTURE_RAW_MIN,
 } from './soilSensorMoisture';
 
 export const SENSOR_READING_FIELDS = [
@@ -37,7 +33,7 @@ export const SOIL_NUTRIENT_STANDARDS = {
     min: MOISTURE_PERCENT_ADEQUATE_MIN,
     max: MOISTURE_PERCENT_ADEQUATE_MAX,
     okLabel: 'Adequate',
-    rangeLabel: `< ${MOISTURE_ADEQUATE_MIN_M} low · ${MOISTURE_ADEQUATE_MIN_M}–${MOISTURE_ADEQUATE_MAX_M} adequate · > ${MOISTURE_ADEQUATE_MAX_M} high (raw m ${MOISTURE_RAW_MIN}–${MOISTURE_RAW_MAX} → 0–100%)`,
+    rangeLabel: `< ${Math.round(MOISTURE_PERCENT_ADEQUATE_MIN)}% low · ${Math.round(MOISTURE_PERCENT_ADEQUATE_MIN)}–${Math.round(MOISTURE_PERCENT_ADEQUATE_MAX)}% adequate · > ${Math.round(MOISTURE_PERCENT_ADEQUATE_MAX)}% high`,
   },
   nitrogen: { label: 'N', unit: 'kg/ha', min: 280, max: 560, rangeLabel: '280–560 kg/ha' },
   phosphorus: { label: 'P', unit: 'kg/ha', min: 10, max: 25, rangeLabel: '10–25 kg/ha' },
@@ -138,7 +134,12 @@ export function soilReadingCellSx(standardKey, value) {
   const status = evaluateSoilStandard(getSoilStandard(standardKey), value).status;
   if (status === 'low') return { color: 'warning.light', fontWeight: 600 };
   if (status === 'high') return { color: 'error.light', fontWeight: 600 };
+  if (status === 'good' || status === 'ok') return { color: 'success.light', fontWeight: 600 };
   return undefined;
+}
+
+export function soilValueColor(standardKey, value) {
+  return soilStatusColor(evaluateSoilStandard(getSoilStandard(standardKey), value).status);
 }
 
 export function soilStatusChipSx(status) {
