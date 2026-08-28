@@ -61,6 +61,169 @@ function parseTimestamp(raw: unknown) {
   return date.toISOString();
 }
 
+async function expireStaleCommands(supabase: ReturnType<typeof createClient>, farmId: number) {
+  const now = new Date().toISOString();
+  await supabase
+    .from('irrigation_command_queue')
+    .update({ status: 'expired' })
+    .eq('farm_id', farmId)
+    .eq('status', 'pending')
+    .lt('expires_at', now);
+}
+
+async function fetchQueueCommands(supabase: ReturnType<typeof createClient>, farmId: number) {
+  await expireStaleCommands(supabase, farmId);
+
+  const { data: queueRows, error: queueError } = await supabase
+    .from('irrigation_command_queue')
+    .select('id, device_code, action, job_id, zone_id, payload, created_at, expires_at')
+    .eq('farm_id', farmId)
+    .eq('status', 'pending')
+    .order('created_at', { ascending: true })
+    .limit(50);
+
+  if (queueError) {
+    // Table may not exist yet — return empty queue and fall back to legacy
+    if (String(queueError.message || '').includes('irrigation_command_queue')) {
+      return { commands: [], queueError: null, missingQueue: true };
+    }
+    return { commands: [], queueError, missingQueue: false };
+  }
+
+  const { data: zones } = await supabase
+    .from('irrigation_zones')
+    .select('id, zone_code')
+    .eq('farm_id', farmId);
+
+  const zoneCodeById = new Map((zones || []).map((zone) => [zone.id, zone.zone_code]));
+
+  const commands = (queueRows || []).map((row) => {
+    const until = (row.payload as Record<string, unknown>)?.until ?? undefined;
+    return {
+      id: row.id,
+      device_code: row.device_code,
+      action: row.action,
+      job_id: row.job_id,
+      zone_id: row.zone_id,
+      zone_code: row.zone_id ? (zoneCodeById.get(row.zone_id) || null) : null,
+      until,
+      payload: row.payload || {},
+      created_at: row.created_at,
+      expires_at: row.expires_at,
+    };
+  });
+
+  return { commands, queueError: null, missingQueue: false };
+}
+
+async function fetchLegacyPending(
+  supabase: ReturnType<typeof createClient>,
+  farmId: number,
+) {
+  const { data: commands, error: commandError } = await supabase
+    .from('irrigation_zone_status')
+    .select('zone_id, pending_command, pending_command_at, is_irrigating')
+    .eq('farm_id', farmId)
+    .not('pending_command', 'is', null);
+
+  if (commandError) {
+    return { pending: [], error: commandError };
+  }
+
+  const { data: zones } = await supabase
+    .from('irrigation_zones')
+    .select('id, zone_code')
+    .eq('farm_id', farmId);
+
+  const zoneCodeById = new Map((zones || []).map((zone) => [zone.id, zone.zone_code]));
+  const pending = (commands || []).map((row) => ({
+    zone_code: zoneCodeById.get(row.zone_id) || null,
+    command: row.pending_command,
+    command_at: row.pending_command_at,
+    is_irrigating: row.is_irrigating,
+  }));
+
+  return { pending, error: null };
+}
+
+async function updateRunningJobLiters(
+  supabase: ReturnType<typeof createClient>,
+  farmId: number,
+  zoneId: number,
+  totalDischargeLiters: number | null,
+) {
+  if (totalDischargeLiters == null) return;
+
+  const { data: jobs } = await supabase
+    .from('irrigation_jobs')
+    .select('id, liters_baseline, liters_delivered, target_liters, status')
+    .eq('farm_id', farmId)
+    .eq('zone_id', zoneId)
+    .in('status', ['running', 'paused_outside_window'])
+    .order('updated_at', { ascending: false })
+    .limit(1);
+
+  const job = jobs?.[0];
+  if (!job) return;
+
+  const baseline = job.liters_baseline != null
+    ? Number(job.liters_baseline)
+    : Number(totalDischargeLiters);
+
+  const delivered = Math.max(0, Number(totalDischargeLiters) - baseline);
+  const patch: Record<string, unknown> = {
+    liters_delivered: delivered,
+    updated_at: new Date().toISOString(),
+  };
+
+  if (job.liters_baseline == null) {
+    patch.liters_baseline = totalDischargeLiters;
+    patch.liters_delivered = 0;
+  }
+
+  const target = job.target_liters != null ? Number(job.target_liters) : null;
+  if (target != null && delivered >= target && job.liters_baseline != null) {
+    patch.status = 'completed';
+    patch.completed_at = new Date().toISOString();
+  }
+
+  await supabase.from('irrigation_jobs').update(patch).eq('id', job.id);
+}
+
+async function ackQueueCommands(
+  supabase: ReturnType<typeof createClient>,
+  farmId: number,
+  body: Record<string, unknown>,
+  zoneId: number,
+) {
+  const now = new Date().toISOString();
+  const commandId = parseNumber(body.command_id ?? body.ack_command_id);
+
+  if (commandId != null) {
+    await supabase
+      .from('irrigation_command_queue')
+      .update({ status: 'acked', acked_at: now })
+      .eq('id', commandId)
+      .eq('farm_id', farmId);
+    return;
+  }
+
+  const deviceCode = body.device_code ? String(body.device_code).trim().toUpperCase() : null;
+  const action = body.acked_action ? String(body.acked_action).trim().toLowerCase() : null;
+
+  let query = supabase
+    .from('irrigation_command_queue')
+    .update({ status: 'acked', acked_at: now })
+    .eq('farm_id', farmId)
+    .eq('status', 'pending')
+    .eq('zone_id', zoneId);
+
+  if (deviceCode) query = query.eq('device_code', deviceCode);
+  if (action === 'start' || action === 'stop') query = query.eq('action', action);
+
+  await query;
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: corsHeaders });
@@ -101,30 +264,23 @@ Deno.serve(async (req) => {
   }
 
   if (req.method === 'GET') {
-    const { data: commands, error: commandError } = await supabase
-      .from('irrigation_zone_status')
-      .select('zone_id, pending_command, pending_command_at, is_irrigating')
-      .eq('farm_id', keyRow.farm_id)
-      .not('pending_command', 'is', null);
-
-    if (commandError) {
-      return jsonResponse({ error: commandError.message }, 500);
+    const { commands, queueError, missingQueue } = await fetchQueueCommands(supabase, keyRow.farm_id);
+    if (queueError) {
+      return jsonResponse({ error: queueError.message }, 500);
     }
 
-    const { data: zones } = await supabase
-      .from('irrigation_zones')
-      .select('id, zone_code')
-      .eq('farm_id', keyRow.farm_id);
+    const { pending, error: legacyError } = await fetchLegacyPending(supabase, keyRow.farm_id);
+    if (legacyError) {
+      return jsonResponse({ error: legacyError.message }, 500);
+    }
 
-    const zoneCodeById = new Map((zones || []).map((zone) => [zone.id, zone.zone_code]));
-    const pending = (commands || []).map((row) => ({
-      zone_code: zoneCodeById.get(row.zone_id) || null,
-      command: row.pending_command,
-      command_at: row.pending_command_at,
-      is_irrigating: row.is_irrigating,
-    }));
-
-    return jsonResponse({ ok: true, pending_commands: pending });
+    return jsonResponse({
+      ok: true,
+      updated_at: new Date().toISOString(),
+      commands,
+      pending_commands: pending,
+      queue_available: !missingQueue,
+    });
   }
 
   let body: Record<string, unknown>;
@@ -132,6 +288,32 @@ Deno.serve(async (req) => {
     body = await req.json();
   } catch {
     return jsonResponse({ error: 'Invalid JSON body' }, 400);
+  }
+
+  // Ack-only for non-zone devices (motors / fertigation)
+  const ackOnly = parseBoolean(body.ack_only) === true;
+  if (ackOnly) {
+    const commandId = parseNumber(body.command_id ?? body.ack_command_id);
+    if (commandId == null) {
+      return jsonResponse({ error: 'ack_only requires command_id' }, 400);
+    }
+    const now = new Date().toISOString();
+    const { error: ackError } = await supabase
+      .from('irrigation_command_queue')
+      .update({ status: 'acked', acked_at: now })
+      .eq('id', commandId)
+      .eq('farm_id', keyRow.farm_id);
+
+    if (ackError) {
+      return jsonResponse({ error: ackError.message }, 500);
+    }
+
+    await supabase
+      .from('farm_ingest_keys')
+      .update({ last_used_at: now })
+      .eq('id', keyRow.id);
+
+    return jsonResponse({ ok: true, acked_command_id: commandId });
   }
 
   const zoneCode = normalizeZoneCode(body.zone_code ?? body.zone);
@@ -169,6 +351,7 @@ Deno.serve(async (req) => {
   const reportedAt = parseTimestamp(body.reported_at) ?? new Date().toISOString();
   const now = new Date().toISOString();
   const ackCommand = parseBoolean(body.ack_command ?? body.command_ack) === true;
+  const totalLiters = parseNumber(body.total_discharge_liters ?? body.total_discharge);
 
   const payload: Record<string, unknown> = {
     zone_id: zoneRow.id,
@@ -180,7 +363,7 @@ Deno.serve(async (req) => {
     start_indicator: startIndicator,
     stop_indicator: stopIndicator,
     current_discharge_lpm: parseNumber(body.current_discharge_lpm ?? body.current_discharge),
-    total_discharge_liters: parseNumber(body.total_discharge_liters ?? body.total_discharge),
+    total_discharge_liters: totalLiters,
     device_code: body.device_code ? String(body.device_code).trim() : null,
     reported_at: reportedAt,
     updated_at: now,
@@ -189,6 +372,7 @@ Deno.serve(async (req) => {
   if (ackCommand) {
     payload.pending_command = null;
     payload.pending_command_at = null;
+    await ackQueueCommands(supabase, keyRow.farm_id, body, zoneRow.id);
   }
 
   const { error: upsertError } = await supabase
@@ -198,6 +382,8 @@ Deno.serve(async (req) => {
   if (upsertError) {
     return jsonResponse({ error: upsertError.message }, 500);
   }
+
+  await updateRunningJobLiters(supabase, keyRow.farm_id, zoneRow.id, totalLiters);
 
   await supabase
     .from('farm_ingest_keys')
@@ -214,6 +400,8 @@ Deno.serve(async (req) => {
     return jsonResponse({ error: latestError.message }, 500);
   }
 
+  const { commands } = await fetchQueueCommands(supabase, keyRow.farm_id);
+
   return jsonResponse({
     ok: true,
     zone_id: zoneRow.id,
@@ -221,5 +409,6 @@ Deno.serve(async (req) => {
     is_irrigating: isIrrigating,
     pending_command: latest?.pending_command ?? null,
     pending_command_at: latest?.pending_command_at ?? null,
+    commands,
   });
 });
