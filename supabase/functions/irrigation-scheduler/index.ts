@@ -160,15 +160,25 @@ async function createJobFromProgram(
     .sort((a, b) => Number(a.seq) - Number(b.seq));
   if (!activeSteps.length) return null;
 
-  // Skip if program already has an incomplete job
-  const { data: openJobs } = await supabase
+  // Skip if this program already has an incomplete job
+  const { data: openForProgram } = await supabase
     .from('irrigation_jobs')
     .select('id')
     .eq('farm_id', farmId)
     .eq('program_id', program.id as number)
     .in('status', ['planned', 'running', 'paused_outside_window'])
     .limit(1);
-  if (openJobs?.length) return null;
+  if (openForProgram?.length) return null;
+
+  // Farm-wide: only one watering/fertigation job at a time (programs run sequentially)
+  const { data: openFarmJobs } = await supabase
+    .from('irrigation_jobs')
+    .select('id')
+    .eq('farm_id', farmId)
+    .in('job_type', ['water', 'fertigation', 'manual'])
+    .in('status', ['planned', 'running', 'paused_outside_window'])
+    .limit(1);
+  if (openFarmJobs?.length) return null;
 
   const first = activeSteps[0];
   const target = await resolveStepTargetLiters(
@@ -282,39 +292,75 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
   const statusByZone = new Map((statusRows || []).map((s) => [s.zone_id, s]));
   const inWindow = isInsideWindows(windows || [], local.weekday, local.timeStr);
 
-  // Create jobs from programs at start times (or allowed-window mode on matching days)
-  for (const program of programs || []) {
-    const days: number[] = program.days_of_week || [];
-    if (days.length && !days.map(Number).includes(local.weekday)) continue;
+  const sortedPrograms = [...(programs || [])].sort((a, b) => {
+    const orderA = Number(a.run_order) || 0;
+    const orderB = Number(b.run_order) || 0;
+    if (orderA !== orderB) return orderA - orderB;
+    return Number(a.id) - Number(b.id);
+  });
 
-    const shouldFireTimed = !program.use_allowed_windows
-      && matchesStartTime(program.start_times || [], local.hhmm);
-    const shouldFireWindow = program.use_allowed_windows && inWindow
-      && matchesStartTime(program.start_times || [], local.hhmm);
+  // Create at most one new job: next program in run_order that is due and has no open farm job
+  const { data: anyOpen } = await supabase
+    .from('irrigation_jobs')
+    .select('id')
+    .eq('farm_id', farmId)
+    .in('job_type', ['water', 'fertigation', 'manual'])
+    .in('status', ['planned', 'running', 'paused_outside_window'])
+    .limit(1);
 
-    // If use_allowed_windows and no start times: create once when entering window on a program day
-    const fireOnWindowOpen = program.use_allowed_windows
-      && (!program.start_times || program.start_times.length === 0)
-      && inWindow
-      && local.minute === 0; // once per hour at :00 to avoid spam; open-job check prevents dupes
+  if (!anyOpen?.length) {
+    const dayStart = `${local.dateKey}T00:00:00+05:30`;
+    const dayEnd = `${local.dateKey}T23:59:59+05:30`;
 
-    if (!(shouldFireTimed || shouldFireWindow || fireOnWindowOpen)) continue;
+    for (const program of sortedPrograms) {
+      const days: number[] = program.days_of_week || [];
+      if (days.length && !days.map(Number).includes(local.weekday)) continue;
 
-    const [{ data: steps }, { data: progDevices }] = await Promise.all([
-      supabase.from('irrigation_program_steps').select('*').eq('program_id', program.id),
-      supabase.from('irrigation_program_devices').select('*').eq('program_id', program.id),
-    ]);
+      const startTimes: string[] = program.start_times || [];
+      const startPassedOrNow = startTimes.length === 0
+        || startTimes.some((t) => {
+          const hhmm = String(t).slice(0, 5);
+          return hhmm <= local.hhmm;
+        });
+      const matchesExact = matchesStartTime(startTimes, local.hhmm);
 
-    const job = await createJobFromProgram(
-      supabase,
-      farmId,
-      program,
-      steps || [],
-      progDevices || [],
-      zonesById,
-      now.toISOString(),
-    );
-    if (job) actions.push(`created_job:${job.id}:program:${program.id}`);
+      const shouldFireTimed = !program.use_allowed_windows && (matchesExact || startPassedOrNow);
+      const shouldFireWindow = program.use_allowed_windows && inWindow
+        && (matchesExact || startPassedOrNow || startTimes.length === 0);
+
+      if (!(shouldFireTimed || shouldFireWindow)) continue;
+
+      // Skip if this program already completed a job today
+      const { data: doneToday } = await supabase
+        .from('irrigation_jobs')
+        .select('id')
+        .eq('farm_id', farmId)
+        .eq('program_id', program.id)
+        .eq('status', 'completed')
+        .gte('completed_at', dayStart)
+        .lte('completed_at', dayEnd)
+        .limit(1);
+      if (doneToday?.length) continue;
+
+      const [{ data: steps }, { data: progDevices }] = await Promise.all([
+        supabase.from('irrigation_program_steps').select('*').eq('program_id', program.id),
+        supabase.from('irrigation_program_devices').select('*').eq('program_id', program.id),
+      ]);
+
+      const job = await createJobFromProgram(
+        supabase,
+        farmId,
+        program,
+        steps || [],
+        progDevices || [],
+        zonesById,
+        now.toISOString(),
+      );
+      if (job) {
+        actions.push(`created_job:${job.id}:program:${program.id}`);
+        break; // only one program at a time
+      }
+    }
   }
 
   // Refresh open jobs after possible creates
@@ -324,7 +370,21 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
     .eq('farm_id', farmId)
     .in('status', ['planned', 'running', 'paused_outside_window']);
 
-  for (const job of openJobs || []) {
+  // Only one job may actively water; prefer running, else earliest by program run_order
+  const programOrder = new Map(sortedPrograms.map((p, idx) => [p.id, Number(p.run_order) || idx]));
+  const sortedOpenJobs = [...(openJobs || [])].sort((a, b) => {
+    const oa = programOrder.get(a.program_id) ?? 9999;
+    const ob = programOrder.get(b.program_id) ?? 9999;
+    if (oa !== ob) return oa - ob;
+    return Number(a.id) - Number(b.id);
+  });
+  const primaryJob = sortedOpenJobs.find((j) => j.status === 'running')
+    || sortedOpenJobs[0]
+    || null;
+
+  for (const job of sortedOpenJobs) {
+    const isPrimary = primaryJob && job.id === primaryJob.id;
+
     const zone = job.zone_id ? zonesById.get(job.zone_id) : null;
     const status = job.zone_id ? statusByZone.get(job.zone_id) : null;
     const valveCode = zone
@@ -338,7 +398,7 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
 
     const motorIds: number[] = [];
     if (job.program_id) {
-      const prog = (programs || []).find((p) => p.id === job.program_id);
+      const prog = sortedPrograms.find((p) => p.id === job.program_id);
       if (prog?.motor_device_ids?.length) motorIds.push(...prog.motor_device_ids.map(Number));
     }
 
@@ -348,6 +408,26 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
     ].map((c) => String(c).toUpperCase());
 
     const allCodes = [valveCode, ...extraCodes].filter(Boolean) as string[];
+
+    // Non-primary jobs must wait (do not start another program/zone while one is active)
+    if (!isPrimary) {
+      if (job.status === 'running') {
+        await cancelPendingForDevices(supabase, farmId, allCodes);
+        for (const code of allCodes) {
+          await enqueueCommand(supabase, farmId, code, 'stop', {
+            jobId: job.id,
+            zoneId: job.zone_id,
+          });
+        }
+        await supabase.from('irrigation_jobs').update({
+          status: 'planned',
+          liters_baseline: null,
+          updated_at: now.toISOString(),
+        }).eq('id', job.id);
+        actions.push(`queued_behind_primary:${job.id}`);
+      }
+      continue;
+    }
 
     // Update liters from telemetry if baseline set
     if (status?.total_discharge_liters != null && job.liters_baseline != null) {

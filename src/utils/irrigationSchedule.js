@@ -229,3 +229,67 @@ export function programTimesLabel(startTimes) {
   if (!times.length) return 'Allowed windows';
   return times.map(formatTimeInput).join(', ');
 }
+
+/** Format minutes as "2h 15m" / "45m" */
+export function formatEstimatedDuration(minutes) {
+  const mins = Math.round(Number(minutes));
+  if (!Number.isFinite(mins) || mins <= 0) return null;
+  const hours = Math.floor(mins / 60);
+  const rem = mins % 60;
+  if (hours > 0 && rem > 0) return `${hours}h ${rem}m`;
+  if (hours > 0) return `${hours}h`;
+  return `${rem}m`;
+}
+
+/**
+ * Suggest program start times from MSEB allowed windows for selected weekdays.
+ * Returns sorted unique HH:MM starts (and optionally ends for display).
+ */
+export function suggestStartsFromAllowedWindows(windows, daysOfWeek = []) {
+  const days = (daysOfWeek || []).map(Number);
+  const starts = new Set();
+  const slots = [];
+
+  (windows || [])
+    .filter((w) => w.enabled !== false)
+    .filter((w) => !days.length || days.includes(Number(w.weekday)))
+    .forEach((w) => {
+      const start = timeToInputValue(w.start_time);
+      const end = timeToInputValue(w.end_time);
+      if (!start) return;
+      starts.add(start);
+      slots.push({
+        weekday: Number(w.weekday),
+        start,
+        end,
+        label: `${WEEKDAY_LABELS[Number(w.weekday)] || '?'} ${start}–${end}`,
+      });
+    });
+
+  return {
+    starts: [...starts].sort(),
+    slots: slots.sort((a, b) => a.weekday - b.weekday || a.start.localeCompare(b.start)),
+  };
+}
+
+/** Earliest suggested start for new programs; falls back to 06:00 */
+export function defaultStartFromWindows(windows, daysOfWeek = []) {
+  const { starts } = suggestStartsFromAllowedWindows(windows, daysOfWeek);
+  return starts[0] || '06:00';
+}
+
+export function estimateStepMinutes(step, zones) {
+  const zone = (zones || []).find((z) => String(z.id) === String(step.zone_id));
+  const fromLiters = estimateMinutesFromLiters(step.target_liters, zone?.flow_rate_lph);
+  if (fromLiters != null) return fromLiters;
+  const manual = Number(step.on_duration_minutes);
+  return Number.isFinite(manual) && manual > 0 ? manual : null;
+}
+
+export function estimateProgramMinutes(steps, zones) {
+  return (steps || []).reduce((sum, step) => {
+    const mins = estimateStepMinutes(step, zones);
+    return sum + (mins || 0);
+  }, 0);
+}
+
