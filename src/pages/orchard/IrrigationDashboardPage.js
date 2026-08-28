@@ -1,23 +1,26 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link as RouterLink } from 'react-router-dom';
 import {
+  Accordion,
+  AccordionDetails,
+  AccordionSummary,
   Alert,
   Box,
+  Button,
   Chip,
   CircularProgress,
+  Grid,
   Paper,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
   Typography,
   alpha,
 } from '@mui/material';
 import WaterDropIcon from '@mui/icons-material/WaterDrop';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import StopIcon from '@mui/icons-material/Stop';
-import FiberManualRecordIcon from '@mui/icons-material/FiberManualRecord';
+import ElectricBoltIcon from '@mui/icons-material/ElectricBolt';
+import SpeedIcon from '@mui/icons-material/Speed';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import PauseCircleOutlineIcon from '@mui/icons-material/PauseCircleOutline';
 import { supabase } from '../../supabaseClient';
 import { useFarm } from '../../hooks/useFarm';
 import PageHeader from '../../components/common/PageHeader';
@@ -28,8 +31,8 @@ import {
   formatAmperage,
   formatDateTime,
   formatDischargeRate,
-  formatIrrigationDuration,
-  formatLastUpdated,
+  formatIrrigationDurationLong,
+  formatRelativeTime,
   formatTotalDischarge,
   formatVoltage,
   isMissingStatusTable,
@@ -37,17 +40,50 @@ import {
   statusTableHint,
 } from '../../utils/irrigationStatus';
 
-function IndicatorChip({ active, activeLabel, inactiveLabel, activeColor = 'success' }) {
+function MetricTile({ label, value, icon, emphasize = false }) {
+  return (
+    <Paper
+      variant="outlined"
+      sx={{
+        p: 1.5,
+        height: '100%',
+        bgcolor: emphasize ? (theme) => alpha(theme.palette.info.main, 0.08) : 'background.paper',
+      }}
+    >
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: 0.5 }}>
+        {icon}
+        <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+          {label}
+        </Typography>
+      </Box>
+      <Typography variant={emphasize ? 'h5' : 'h6'} fontWeight={700} sx={{ lineHeight: 1.2 }}>
+        {value}
+      </Typography>
+    </Paper>
+  );
+}
+
+function SignalBadge({ on, onLabel, offLabel, color }) {
   return (
     <Chip
-      icon={<FiberManualRecordIcon sx={{ fontSize: '12px !important' }} />}
-      label={active ? activeLabel : inactiveLabel}
       size="small"
-      color={active ? activeColor : 'default'}
-      variant={active ? 'filled' : 'outlined'}
-      sx={{ fontWeight: 600 }}
+      icon={color === 'success' ? <PlayArrowIcon /> : <StopIcon />}
+      label={on ? onLabel : offLabel}
+      color={on ? color : 'default'}
+      variant={on ? 'filled' : 'outlined'}
+      sx={{ fontWeight: 700 }}
     />
   );
+}
+
+function zoneStatusCopy(row) {
+  if (!row.hasTelemetry) {
+    return { label: 'No signal', color: 'default', helper: 'Controller has not reported this zone yet' };
+  }
+  if (row.isIrrigating) {
+    return { label: 'Watering now', color: 'info', helper: 'Pump is running on this zone' };
+  }
+  return { label: 'Idle', color: 'success', helper: 'Not watering' };
 }
 
 function IrrigationDashboardPage() {
@@ -57,13 +93,14 @@ function IrrigationDashboardPage() {
   const [message, setMessage] = useState(null);
   const [nowMs, setNowMs] = useState(Date.now());
 
-  const load = useCallback(async () => {
+  const load = useCallback(async ({ showSpinner = false } = {}) => {
     if (!farm?.id) {
       setRows([]);
       setLoading(false);
       return;
     }
 
+    if (showSpinner) setLoading(true);
     setMessage(null);
 
     const { data: zones, error: zonesError } = await supabase
@@ -104,8 +141,7 @@ function IrrigationDashboardPage() {
 
   useEffect(() => {
     if (farmLoading) return undefined;
-    setLoading(true);
-    load();
+    load({ showSpinner: true });
 
     const pollId = window.setInterval(() => {
       load();
@@ -123,7 +159,8 @@ function IrrigationDashboardPage() {
   }, [load, farmLoading]);
 
   const counts = useMemo(() => countIrrigationStatusRows(rows), [rows]);
-  const activeZone = rows.find((row) => row.isIrrigating);
+  const activeZones = useMemo(() => rows.filter((row) => row.isIrrigating), [rows]);
+  const activeZone = activeZones[0] || null;
 
   if (farmLoading || loading) {
     return (
@@ -137,8 +174,8 @@ function IrrigationDashboardPage() {
     <Box>
       <PageHeader
         section="Orchard"
-        title="Irrigation dashboard"
-        subtitle="Drip zone status from your irrigation controller. Readings refresh every 3 minutes."
+        title="Irrigation"
+        subtitle="See which zone is watering, how long it has run, and pump readings. Status updates every 3 minutes."
       />
 
       {message && (
@@ -149,159 +186,217 @@ function IrrigationDashboardPage() {
 
       <Paper
         sx={(theme) => ({
-          p: 2.5,
+          p: { xs: 2, sm: 3 },
           mb: 3,
           border: '2px solid',
-          borderColor: counts.irrigating > 0
-            ? theme.palette.info.main
-            : alpha(theme.palette.success.main, 0.45),
-          borderLeftWidth: 8,
-          borderLeftColor: counts.irrigating > 0
-            ? theme.palette.info.dark
-            : theme.palette.success.main,
-          bgcolor: counts.irrigating > 0
-            ? alpha(theme.palette.info.main, 0.1)
+          borderColor: activeZone ? theme.palette.info.main : alpha(theme.palette.success.main, 0.5),
+          borderLeftWidth: 10,
+          borderLeftColor: activeZone ? theme.palette.info.dark : theme.palette.success.main,
+          bgcolor: activeZone
+            ? alpha(theme.palette.info.main, 0.12)
             : alpha(theme.palette.success.main, 0.08),
         })}
         variant="outlined"
       >
-        <Typography variant="h6" gutterBottom sx={{ fontWeight: 700 }}>
-          Current status
-        </Typography>
-        {activeZone ? (
-          <Typography variant="body1" sx={{ mb: 1.5 }}>
-            Irrigating <strong>{activeZone.zone.zone_code}</strong>
-            {activeZone.zone.description ? ` · ${activeZone.zone.description}` : ''}
-            {' '}since {formatDateTime(activeZone.status?.started_at)}
-            {' '}({formatIrrigationDuration(activeZone.status?.started_at, nowMs)})
-          </Typography>
-        ) : (
-          <Typography variant="body1" color="text.secondary" sx={{ mb: 1.5 }}>
-            No zone is irrigating right now.
-          </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 2, flexWrap: 'wrap' }}>
+          <Box>
+            <Typography variant="overline" sx={{ fontWeight: 800, letterSpacing: 1 }}>
+              Right now
+            </Typography>
+            {activeZone ? (
+              <>
+                <Typography variant="h4" fontWeight={800} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <WaterDropIcon color="info" fontSize="large" />
+                  Watering {activeZone.zone.zone_code}
+                </Typography>
+                {activeZone.zone.description && (
+                  <Typography variant="body1" color="text.secondary" sx={{ mt: 0.5 }}>
+                    {activeZone.zone.description}
+                  </Typography>
+                )}
+              </>
+            ) : (
+              <>
+                <Typography variant="h4" fontWeight={800} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <PauseCircleOutlineIcon color="success" fontSize="large" />
+                  No watering
+                </Typography>
+                <Typography variant="body1" color="text.secondary" sx={{ mt: 0.5 }}>
+                  All zones are idle. Open a zone card below if you need pump details.
+                </Typography>
+              </>
+            )}
+          </Box>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+            <Chip color="info" label={`${counts.irrigating} watering`} />
+            <Chip color="success" variant="outlined" label={`${counts.idle} idle`} />
+            {counts.noData > 0 && (
+              <Chip variant="outlined" label={`${counts.noData} no signal`} />
+            )}
+          </Box>
+        </Box>
+
+        {activeZone && (
+          <Grid container spacing={1.5} sx={{ mt: 2 }}>
+            <Grid item xs={6} sm={4} md={2}>
+              <MetricTile
+                label="Running for"
+                value={formatIrrigationDurationLong(activeZone.status?.started_at, nowMs)}
+                emphasize
+              />
+            </Grid>
+            <Grid item xs={6} sm={4} md={2}>
+              <MetricTile
+                label="Started"
+                value={formatDateTime(activeZone.status?.started_at)}
+              />
+            </Grid>
+            <Grid item xs={6} sm={4} md={2}>
+              <MetricTile
+                label="Voltage"
+                value={formatVoltage(activeZone.status?.voltage_v)}
+                icon={<ElectricBoltIcon fontSize="small" color="action" />}
+              />
+            </Grid>
+            <Grid item xs={6} sm={4} md={2}>
+              <MetricTile
+                label="Current"
+                value={formatAmperage(activeZone.status?.current_amp)}
+              />
+            </Grid>
+            <Grid item xs={6} sm={4} md={2}>
+              <MetricTile
+                label="Flow now"
+                value={formatDischargeRate(activeZone.status?.current_discharge_lpm)}
+                icon={<SpeedIcon fontSize="small" color="action" />}
+              />
+            </Grid>
+            <Grid item xs={6} sm={4} md={2}>
+              <MetricTile
+                label="Water used"
+                value={formatTotalDischarge(activeZone.status?.total_discharge_liters)}
+              />
+            </Grid>
+          </Grid>
         )}
-        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-          <Chip label={`${counts.irrigating} irrigating`} color="info" size="small" />
-          <Chip label={`${counts.idle} idle`} color="default" size="small" />
-          <Chip label={`${counts.noData} no live data`} color="default" variant="outlined" size="small" />
-        </Box>
       </Paper>
 
-      <Alert severity="info" sx={{ mb: 2 }}>
-        Controller posts to the ingest API every few seconds. Use the same ESP32 API key as soil sensors.
-        Sample JSON:
-        <Box component="pre" sx={{ mt: 1, mb: 0, overflow: 'auto', fontSize: '0.75rem' }}>
-          {buildIrrigationStatusSampleJson(rows[0]?.zone?.zone_code || 'Z01')}
-        </Box>
-      </Alert>
+      {rows.length === 0 ? (
+        <Paper variant="outlined" sx={{ p: 4, textAlign: 'center' }}>
+          <WaterDropIcon sx={{ fontSize: 48, color: 'text.disabled', mb: 1 }} />
+          <Typography variant="h6" gutterBottom>No drip zones yet</Typography>
+          <Typography color="text.secondary" sx={{ mb: 2 }}>
+            Add zones first, then the controller can report which line is watering.
+          </Typography>
+          <Button variant="contained" component={RouterLink} to="/irrigation/zones">
+            Add irrigation zones
+          </Button>
+        </Paper>
+      ) : (
+        <>
+          <Typography variant="h6" fontWeight={700} sx={{ mb: 1.5 }}>
+            Zones
+          </Typography>
+          <Grid container spacing={2}>
+            {rows.map((row) => {
+              const copy = zoneStatusCopy(row);
+              const status = row.status;
 
-      <Paper variant="outlined" sx={{ overflow: 'hidden' }}>
-        <TableContainer sx={{ maxHeight: '72vh' }}>
-          <Table stickyHeader size="small">
-            <TableHead>
-              <TableRow>
-                <TableCell sx={{ fontWeight: 700 }}>Zone</TableCell>
-                <TableCell sx={{ fontWeight: 700 }}>Status</TableCell>
-                <TableCell sx={{ fontWeight: 700 }}>Start time</TableCell>
-                <TableCell sx={{ fontWeight: 700 }}>Duration</TableCell>
-                <TableCell sx={{ fontWeight: 700 }}>Voltage</TableCell>
-                <TableCell sx={{ fontWeight: 700 }}>Amp</TableCell>
-                <TableCell sx={{ fontWeight: 700 }}>Start</TableCell>
-                <TableCell sx={{ fontWeight: 700 }}>Stop</TableCell>
-                <TableCell sx={{ fontWeight: 700 }}>Current discharge</TableCell>
-                <TableCell sx={{ fontWeight: 700 }}>Total discharge</TableCell>
-                <TableCell sx={{ fontWeight: 700 }}>Updated</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {rows.map((row) => (
-                <TableRow
-                  key={row.zone.id}
-                  hover
-                  sx={(theme) => (
-                    row.isIrrigating
-                      ? { bgcolor: alpha(theme.palette.info.main, 0.08) }
-                      : undefined
-                  )}
-                >
-                  <TableCell>
-                    <Typography variant="body2" fontWeight={700}>{row.zone.zone_code}</Typography>
-                    {row.zone.description && (
-                      <Typography variant="caption" color="text.secondary" display="block">
-                        {row.zone.description}
-                      </Typography>
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    {!row.hasTelemetry ? (
-                      <Chip label="No data" size="small" />
-                    ) : (
-                      <Chip
-                        icon={row.isIrrigating ? <WaterDropIcon /> : undefined}
-                        label={row.isIrrigating ? 'Irrigating' : 'Idle'}
-                        size="small"
-                        color={row.isIrrigating ? 'info' : 'default'}
-                      />
-                    )}
-                  </TableCell>
-                  <TableCell>{row.isIrrigating ? formatDateTime(row.status?.started_at) : '—'}</TableCell>
-                  <TableCell>
-                    {row.isIrrigating
-                      ? formatIrrigationDuration(row.status?.started_at, nowMs)
-                      : '—'}
-                  </TableCell>
-                  <TableCell>{formatVoltage(row.status?.voltage_v)}</TableCell>
-                  <TableCell>{formatAmperage(row.status?.current_amp)}</TableCell>
-                  <TableCell>
-                    {row.hasTelemetry ? (
-                      <IndicatorChip
-                        active={row.status?.start_indicator}
-                        activeLabel="ON"
-                        inactiveLabel="OFF"
-                        activeColor="success"
-                      />
-                    ) : '—'}
-                  </TableCell>
-                  <TableCell>
-                    {row.hasTelemetry ? (
-                      <IndicatorChip
-                        active={row.status?.stop_indicator}
-                        activeLabel="ON"
-                        inactiveLabel="OFF"
-                        activeColor="error"
-                      />
-                    ) : '—'}
-                  </TableCell>
-                  <TableCell>{formatDischargeRate(row.status?.current_discharge_lpm)}</TableCell>
-                  <TableCell>{formatTotalDischarge(row.status?.total_discharge_liters)}</TableCell>
-                  <TableCell>{formatLastUpdated(row.status?.reported_at)}</TableCell>
-                </TableRow>
-              ))}
-
-              {rows.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={11} align="center">
-                    <Box sx={{ py: 4 }}>
-                      <PlayArrowIcon sx={{ fontSize: 40, color: 'text.disabled', mb: 1 }} />
-                      <Typography color="text.secondary" sx={{ mb: 0.5 }}>
-                        No irrigation zones configured yet.
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        Add zones under Farm Setting → Zones, then connect your controller.
-                      </Typography>
+              return (
+                <Grid item xs={12} md={6} key={row.zone.id}>
+                  <Paper
+                    variant="outlined"
+                    sx={(theme) => ({
+                      p: 2,
+                      height: '100%',
+                      borderWidth: 2,
+                      borderColor: row.isIrrigating
+                        ? theme.palette.info.main
+                        : theme.palette.divider,
+                      bgcolor: row.isIrrigating
+                        ? alpha(theme.palette.info.main, 0.06)
+                        : undefined,
+                    })}
+                  >
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1, mb: 1.5 }}>
+                      <Box>
+                        <Typography variant="h6" fontWeight={800}>
+                          {row.zone.zone_code}
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary">
+                          {row.zone.description || 'Drip zone'}
+                        </Typography>
+                      </Box>
+                      <Chip label={copy.label} color={copy.color} sx={{ fontWeight: 700 }} />
                     </Box>
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-        </TableContainer>
-      </Paper>
 
-      <Box sx={{ display: 'flex', gap: 1, mt: 2, flexWrap: 'wrap' }}>
-        <Chip icon={<PlayArrowIcon />} label="Start indicator ON = pump start signal active" size="small" variant="outlined" />
-        <Chip icon={<StopIcon />} label="Stop indicator ON = stop signal active" size="small" variant="outlined" />
-      </Box>
+                    <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1.5 }}>
+                      {copy.helper}
+                      {row.hasTelemetry ? ` · Updated ${formatRelativeTime(status?.reported_at, nowMs)}` : ''}
+                    </Typography>
+
+                    {row.isIrrigating && (
+                      <Typography variant="h5" fontWeight={800} sx={{ mb: 1.5 }}>
+                        {formatIrrigationDurationLong(status?.started_at, nowMs)}
+                      </Typography>
+                    )}
+
+                    <Grid container spacing={1}>
+                      <Grid item xs={6}>
+                        <MetricTile label="Started" value={row.isIrrigating ? formatDateTime(status?.started_at) : '—'} />
+                      </Grid>
+                      <Grid item xs={6}>
+                        <MetricTile label="Voltage" value={formatVoltage(status?.voltage_v)} />
+                      </Grid>
+                      <Grid item xs={6}>
+                        <MetricTile label="Current" value={formatAmperage(status?.current_amp)} />
+                      </Grid>
+                      <Grid item xs={6}>
+                        <MetricTile label="Flow now" value={formatDischargeRate(status?.current_discharge_lpm)} />
+                      </Grid>
+                      <Grid item xs={12}>
+                        <MetricTile label="Total water this run" value={formatTotalDischarge(status?.total_discharge_liters)} />
+                      </Grid>
+                    </Grid>
+
+                    {row.hasTelemetry && (
+                      <Box sx={{ display: 'flex', gap: 1, mt: 1.5, flexWrap: 'wrap' }}>
+                        <SignalBadge
+                          on={status?.start_indicator}
+                          onLabel="Pump start ON"
+                          offLabel="Pump start off"
+                          color="success"
+                        />
+                        <SignalBadge
+                          on={status?.stop_indicator}
+                          onLabel="Pump stop ON"
+                          offLabel="Pump stop off"
+                          color="error"
+                        />
+                      </Box>
+                    )}
+                  </Paper>
+                </Grid>
+              );
+            })}
+          </Grid>
+        </>
+      )}
+
+      <Accordion sx={{ mt: 3 }} disableGutters>
+        <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+          <Typography variant="subtitle2">Controller setup (for technician)</Typography>
+        </AccordionSummary>
+        <AccordionDetails>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+            Controller posts to the ingest API. Use the same ESP32 API key as soil sensors.
+            Dashboard rereads the latest values every 3 minutes.
+          </Typography>
+          <Box component="pre" sx={{ m: 0, overflow: 'auto', fontSize: '0.75rem' }}>
+            {buildIrrigationStatusSampleJson(rows[0]?.zone?.zone_code || 'Z01')}
+          </Box>
+        </AccordionDetails>
+      </Accordion>
     </Box>
   );
 }

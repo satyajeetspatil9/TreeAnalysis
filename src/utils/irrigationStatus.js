@@ -116,3 +116,29 @@ export function formatLastUpdated(value) {
   if (!value) return 'Never';
   return formatDate(value);
 }
+
+export function formatRelativeTime(value, nowMs = Date.now()) {
+  if (!value) return 'Never';
+  const then = new Date(value).getTime();
+  if (!Number.isFinite(then)) return formatLastUpdated(value);
+  const diffSec = Math.max(0, Math.round((nowMs - then) / 1000));
+  if (diffSec < 60) return 'Just now';
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin} min ago`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}h ago`;
+  return formatLastUpdated(value);
+}
+
+export function formatIrrigationDurationLong(startedAt, nowMs = Date.now()) {
+  if (!startedAt) return '—';
+  const ms = nowMs - new Date(startedAt).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return '—';
+  const totalSeconds = Math.floor(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
