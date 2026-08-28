@@ -9,8 +9,17 @@ import {
   Button,
   Chip,
   CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
+  FormControl,
   Grid,
+  InputLabel,
+  MenuItem,
   Paper,
+  Select,
   Typography,
   alpha,
 } from '@mui/material';
@@ -37,6 +46,7 @@ import {
   formatVoltage,
   isMissingStatusTable,
   mergeZoneStatusRows,
+  sendIrrigationCommandPayload,
   statusTableHint,
 } from '../../utils/irrigationStatus';
 
@@ -92,6 +102,9 @@ function IrrigationDashboardPage() {
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState(null);
   const [nowMs, setNowMs] = useState(Date.now());
+  const [controlZoneId, setControlZoneId] = useState('');
+  const [commanding, setCommanding] = useState(false);
+  const [confirmStart, setConfirmStart] = useState(null);
 
   const load = useCallback(async ({ showSpinner = false } = {}) => {
     if (!farm?.id) {
@@ -161,6 +174,68 @@ function IrrigationDashboardPage() {
   const counts = useMemo(() => countIrrigationStatusRows(rows), [rows]);
   const activeZones = useMemo(() => rows.filter((row) => row.isIrrigating), [rows]);
   const activeZone = activeZones[0] || null;
+  const controlRow = useMemo(
+    () => rows.find((row) => String(row.zone.id) === String(controlZoneId)) || rows[0] || null,
+    [rows, controlZoneId],
+  );
+
+  useEffect(() => {
+    if (!rows.length) return;
+    if (controlZoneId && rows.some((row) => String(row.zone.id) === String(controlZoneId))) return;
+    const preferred = rows.find((row) => row.isIrrigating) || rows[0];
+    setControlZoneId(String(preferred.zone.id));
+  }, [rows, controlZoneId]);
+
+  const sendCommand = async (row, command) => {
+    if (!farm?.id || !row) return { error: 'Select a zone first.' };
+    const { error } = await supabase
+      .from('irrigation_zone_status')
+      .upsert(sendIrrigationCommandPayload(farm.id, row, command), { onConflict: 'zone_id' });
+    if (error) {
+      if (String(error.message || '').includes('pending_command')) {
+        return { error: 'Run migration 038_irrigation_zone_commands.sql in Supabase, then try again.' };
+      }
+      return { error: error.message };
+    }
+    return { error: null };
+  };
+
+  const startWatering = async (row) => {
+    if (!row) return;
+    setCommanding(true);
+    setMessage(null);
+    const others = rows.filter((item) => item.isIrrigating && item.zone.id !== row.zone.id);
+    for (const other of others) {
+      const stopped = await sendCommand(other, 'stop');
+      if (stopped.error) {
+        setMessage({ type: 'error', text: stopped.error });
+        setCommanding(false);
+        return;
+      }
+    }
+    const started = await sendCommand(row, 'start');
+    setCommanding(false);
+    if (started.error) {
+      setMessage({ type: 'error', text: started.error });
+      return;
+    }
+    setMessage({ type: 'success', text: `Start sent to ${row.zone.zone_code}. Controller should switch the valve within a few seconds.` });
+    await load();
+  };
+
+  const stopWatering = async (row) => {
+    if (!row) return;
+    setCommanding(true);
+    setMessage(null);
+    const stopped = await sendCommand(row, 'stop');
+    setCommanding(false);
+    if (stopped.error) {
+      setMessage({ type: 'error', text: stopped.error });
+      return;
+    }
+    setMessage({ type: 'success', text: `Stop sent to ${row.zone.zone_code}.` });
+    await load();
+  };
 
   if (farmLoading || loading) {
     return (
@@ -279,7 +354,82 @@ function IrrigationDashboardPage() {
             </Grid>
           </Grid>
         )}
+
+        {activeZone && (
+          <Button
+            color="error"
+            variant="contained"
+            startIcon={<StopIcon />}
+            sx={{ mt: 2 }}
+            disabled={commanding}
+            onClick={() => stopWatering(activeZone)}
+          >
+            Stop watering
+          </Button>
+        )}
       </Paper>
+
+      {rows.length > 0 && (
+        <Paper variant="outlined" sx={{ p: { xs: 2, sm: 3 }, mb: 3 }}>
+          <Typography variant="h6" fontWeight={800} gutterBottom>
+            Control irrigation
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Choose a drip zone, then start or stop watering. Only one zone runs at a time.
+            The pump controller must poll commands (see technician setup below).
+          </Typography>
+          <Grid container spacing={2} alignItems="center">
+            <Grid item xs={12} sm={6} md={4}>
+              <FormControl fullWidth>
+                <InputLabel>Zone</InputLabel>
+                <Select
+                  value={controlRow ? String(controlRow.zone.id) : ''}
+                  label="Zone"
+                  onChange={(e) => setControlZoneId(e.target.value)}
+                >
+                  {rows.map((row) => (
+                    <MenuItem key={row.zone.id} value={String(row.zone.id)}>
+                      {row.zone.zone_code}
+                      {row.zone.description ? ` — ${row.zone.description}` : ''}
+                      {row.isIrrigating ? ' (watering)' : ''}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            </Grid>
+            <Grid item xs={12} sm={6} md={8}>
+              <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                <Button
+                  variant="contained"
+                  color="info"
+                  size="large"
+                  startIcon={commanding ? <CircularProgress size={18} color="inherit" /> : <PlayArrowIcon />}
+                  disabled={!controlRow || commanding || controlRow.isIrrigating}
+                  onClick={() => setConfirmStart(controlRow)}
+                >
+                  Start watering
+                </Button>
+                <Button
+                  variant="contained"
+                  color="error"
+                  size="large"
+                  startIcon={<StopIcon />}
+                  disabled={!controlRow || commanding || (!controlRow.isIrrigating && controlRow.status?.pending_command !== 'start')}
+                  onClick={() => stopWatering(controlRow)}
+                >
+                  Stop watering
+                </Button>
+              </Box>
+            </Grid>
+          </Grid>
+          {controlRow?.status?.pending_command && (
+            <Alert severity="info" sx={{ mt: 2 }}>
+              {controlRow.status.pending_command === 'start' ? 'Start' : 'Stop'} sent to{' '}
+              {controlRow.zone.zone_code} — waiting for the controller to apply it.
+            </Alert>
+          )}
+        </Paper>
+      )}
 
       {rows.length === 0 ? (
         <Paper variant="outlined" sx={{ p: 4, textAlign: 'center' }}>
@@ -375,6 +525,34 @@ function IrrigationDashboardPage() {
                         />
                       </Box>
                     )}
+
+                    <Box sx={{ display: 'flex', gap: 1, mt: 2, flexWrap: 'wrap' }}>
+                      <Button
+                        variant="contained"
+                        color="info"
+                        startIcon={<PlayArrowIcon />}
+                        disabled={commanding || row.isIrrigating}
+                        onClick={() => setConfirmStart(row)}
+                      >
+                        Start
+                      </Button>
+                      <Button
+                        variant="outlined"
+                        color="error"
+                        startIcon={<StopIcon />}
+                        disabled={commanding || (!row.isIrrigating && status?.pending_command !== 'start')}
+                        onClick={() => stopWatering(row)}
+                      >
+                        Stop
+                      </Button>
+                      {status?.pending_command && (
+                        <Chip
+                          size="small"
+                          color="warning"
+                          label={status.pending_command === 'start' ? 'Start pending' : 'Stop pending'}
+                        />
+                      )}
+                    </Box>
                   </Paper>
                 </Grid>
               );
@@ -389,14 +567,43 @@ function IrrigationDashboardPage() {
         </AccordionSummary>
         <AccordionDetails>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-            Controller posts to the ingest API. Use the same ESP32 API key as soil sensors.
-            Dashboard rereads the latest values every 3 minutes.
+            Controller posts telemetry with POST. Poll start/stop with GET using the same API key.
+            After acting on a command, POST telemetry with <code>ack_command: true</code>.
+            Dashboard rereads status every 3 minutes.
           </Typography>
           <Box component="pre" sx={{ m: 0, overflow: 'auto', fontSize: '0.75rem' }}>
             {buildIrrigationStatusSampleJson(rows[0]?.zone?.zone_code || 'Z01')}
           </Box>
         </AccordionDetails>
       </Accordion>
+
+      <Dialog open={Boolean(confirmStart)} onClose={() => setConfirmStart(null)}>
+        <DialogTitle>Start watering {confirmStart?.zone.zone_code}?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            This sends a start command to the irrigation controller
+            {confirmStart?.zone.description ? ` for ${confirmStart.zone.description}` : ''}.
+            {activeZones.some((row) => row.zone.id !== confirmStart?.zone.id)
+              ? ' Any other zone that is watering will be stopped first.'
+              : ''}
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmStart(null)}>Cancel</Button>
+          <Button
+            variant="contained"
+            color="info"
+            disabled={commanding}
+            onClick={() => {
+              const row = confirmStart;
+              setConfirmStart(null);
+              startWatering(row);
+            }}
+          >
+            Start watering
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

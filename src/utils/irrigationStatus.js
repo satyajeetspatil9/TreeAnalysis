@@ -130,6 +130,30 @@ export function formatRelativeTime(value, nowMs = Date.now()) {
   return formatLastUpdated(value);
 }
 
+export function sendIrrigationCommandPayload(farmId, row, command) {
+  const now = new Date().toISOString();
+  const isStart = command === 'start';
+  const existing = row.status || {};
+
+  return {
+    zone_id: row.zone.id,
+    farm_id: farmId,
+    is_irrigating: isStart,
+    started_at: isStart ? (existing.started_at || now) : null,
+    voltage_v: existing.voltage_v ?? null,
+    current_amp: existing.current_amp ?? null,
+    start_indicator: isStart,
+    stop_indicator: !isStart,
+    current_discharge_lpm: isStart ? existing.current_discharge_lpm ?? null : existing.current_discharge_lpm ?? null,
+    total_discharge_liters: isStart ? existing.total_discharge_liters ?? 0 : existing.total_discharge_liters ?? null,
+    device_code: existing.device_code ?? null,
+    reported_at: existing.reported_at || now,
+    updated_at: now,
+    pending_command: command,
+    pending_command_at: now,
+  };
+}
+
 export function formatIrrigationDurationLong(startedAt, nowMs = Date.now()) {
   if (!startedAt) return '—';
   const ms = nowMs - new Date(startedAt).getTime();

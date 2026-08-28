@@ -32,6 +32,17 @@ Same farm ingest key as soil sensors: header `x-api-key: ta_...`
 
 `zone_code` must match `irrigation_zones.zone_code` for the farm tied to the API key.
 
+## Poll start/stop commands
+
+```bash
+curl -H "x-api-key: ta_YOUR_KEY" \
+  "https://YOUR_PROJECT.supabase.co/functions/v1/ingest-irrigation-status"
+```
+
+Returns `{ "pending_commands": [{ "zone_code": "Z01", "command": "start" }] }`.
+
+After switching the valve, POST telemetry with `"ack_command": true` to clear the pending command.
+
 ## Migration
 
-Run `037_irrigation_zone_status.sql` before first ingest.
+Run `037_irrigation_zone_status.sql` then `038_irrigation_zone_commands.sql`.
