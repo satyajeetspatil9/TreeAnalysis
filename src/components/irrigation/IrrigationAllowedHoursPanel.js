@@ -94,10 +94,6 @@ function IrrigationAllowedHoursPanel({ farmId }) {
     load();
   }, [load]);
 
-  const updateDay = (weekday, patch) => {
-    setDays((prev) => prev.map((d) => (d.weekday === weekday ? { ...d, ...patch } : d)));
-  };
-
   const toggleDay = (weekday, enabled) => {
     setDays((prev) => prev.map((d) => {
       if (d.weekday !== weekday) return d;
