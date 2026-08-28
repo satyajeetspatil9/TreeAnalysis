@@ -17,3 +17,6 @@ verify_jwt = false
 
 [functions.ingest-irrigation-status]
 verify_jwt = false
+
+[functions.irrigation-scheduler]
+verify_jwt = false
