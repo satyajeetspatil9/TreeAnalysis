@@ -1,9 +1,8 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   Alert,
   Box,
   Button,
-  Checkbox,
   Chip,
   CircularProgress,
   Dialog,
@@ -11,7 +10,6 @@ import {
   DialogContent,
   DialogTitle,
   FormControl,
-  FormControlLabel,
   Grid,
   IconButton,
   InputLabel,
@@ -23,11 +21,11 @@ import {
   Typography,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
-import DeleteIcon from '@mui/icons-material/Delete';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import { supabase } from '../../supabaseClient';
+import IrrigationProgramFormDialog, { emptyStep } from './IrrigationProgramFormDialog';
 import {
   createAdHocVolumeJob,
   defaultStartFromWindows,
@@ -41,15 +39,9 @@ import {
   programDaysLabel,
   programTimesLabel,
   scheduleTableHint,
-  suggestStartsFromAllowedWindows,
   timeToInputValue,
   updateIrrigationJob,
-  WEEKDAY_LABELS,
 } from '../../utils/irrigationSchedule';
-
-function emptyStep(seq = 0) {
-  return { zone_id: '', target_liters: '', on_duration_minutes: '', seq, is_active: true };
-}
 
 function IrrigationProgramsPanel({
   farmId,
@@ -86,16 +78,6 @@ function IrrigationProgramsPanel({
   const motors = (devices || []).filter((d) =>
     d.kind === 'irrigation_motor' || d.kind === 'bore_motor');
   const injectors = (devices || []).filter((d) => d.kind === 'fertigation');
-
-  const suggested = useMemo(
-    () => suggestStartsFromAllowedWindows(windows, form.days_of_week),
-    [windows, form.days_of_week],
-  );
-
-  const formTotalMinutes = useMemo(
-    () => estimateProgramMinutes(form.steps, zones),
-    [form.steps, zones],
-  );
 
   const load = useCallback(async () => {
     if (!farmId) return;
@@ -204,25 +186,6 @@ function IrrigationProgramsPanel({
       injector_ids: (program.irrigation_program_devices || []).map((d) => d.device_id),
     });
     setDialogOpen(true);
-  };
-
-  const toggleDay = (day) => {
-    setForm((prev) => {
-      const has = prev.days_of_week.includes(day);
-      const days_of_week = has
-        ? prev.days_of_week.filter((d) => d !== day)
-        : [...prev.days_of_week, day].sort((a, b) => a - b);
-      const start = defaultStartFromWindows(windows, days_of_week);
-      return {
-        ...prev,
-        days_of_week,
-        start_times: prev.start_times.length ? prev.start_times : [start],
-      };
-    });
-  };
-
-  const applySuggestedStart = (start) => {
-    setForm((f) => ({ ...f, start_times: [start] }));
   };
 
   const saveProgram = async () => {
@@ -668,254 +631,20 @@ function IrrigationProgramsPanel({
         </Grid>
       )}
 
-      <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} fullWidth maxWidth="md">
-        <DialogTitle>{editing ? 'Edit program' : `New ${programType === 'fertigation' ? 'fertigation' : 'water'} program`}</DialogTitle>
-        <DialogContent>
-          <Alert severity="info" sx={{ mt: 1, mb: 1 }}>
-            Zones in this program run in order (zone 2 waits for zone 1 liters).
-            Other programs wait until this whole program finishes.
-          </Alert>
-          <Grid container spacing={2} sx={{ mt: 0.5 }}>
-            <Grid item xs={12} sm={6}>
-              <TextField
-                fullWidth
-                label="Name"
-                value={form.name}
-                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-              />
-            </Grid>
-            <Grid item xs={6} sm={3}>
-              <TextField
-                fullWidth
-                label="Run order"
-                type="number"
-                value={form.run_order}
-                onChange={(e) => setForm((f) => ({ ...f, run_order: e.target.value }))}
-                helperText="Lower runs first"
-              />
-            </Grid>
-            <Grid item xs={6} sm={3}>
-              <FormControlLabel
-                control={(
-                  <Switch
-                    checked={form.is_active}
-                    onChange={(e) => setForm((f) => ({ ...f, is_active: e.target.checked }))}
-                  />
-                )}
-                label="Active"
-              />
-            </Grid>
-            <Grid item xs={12}>
-              <Typography variant="subtitle2" gutterBottom>Days</Typography>
-              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
-                {WEEKDAY_LABELS.map((label, day) => (
-                  <Chip
-                    key={label}
-                    label={label}
-                    clickable
-                    color={form.days_of_week.includes(day) ? 'primary' : 'default'}
-                    variant={form.days_of_week.includes(day) ? 'filled' : 'outlined'}
-                    onClick={() => toggleDay(day)}
-                  />
-                ))}
-              </Box>
-            </Grid>
-            <Grid item xs={12}>
-              <Typography variant="subtitle2" gutterBottom>
-                Start time (suggested from MSEB allowed hours)
-              </Typography>
-              {suggested.starts.length === 0 ? (
-                <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-                  No allowed hours set yet — add MSEB slots under Allowed hours, or type a start time below.
-                </Typography>
-              ) : (
-                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75, mb: 1 }}>
-                  {suggested.starts.map((start) => (
-                    <Chip
-                      key={start}
-                      label={`Start ${start}`}
-                      clickable
-                      color={form.start_times[0] === start ? 'primary' : 'default'}
-                      variant={form.start_times[0] === start ? 'filled' : 'outlined'}
-                      onClick={() => applySuggestedStart(start)}
-                    />
-                  ))}
-                </Box>
-              )}
-              {suggested.slots.length > 0 && (
-                <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
-                  MSEB windows: {suggested.slots.map((s) => s.label).join(' · ')}
-                </Typography>
-              )}
-              <TextField
-                fullWidth
-                label="Start times (comma-separated HH:MM)"
-                value={form.start_times.join(', ')}
-                onChange={(e) => setForm((f) => ({
-                  ...f,
-                  start_times: e.target.value.split(',').map((t) => t.trim()).filter(Boolean),
-                }))}
-                helperText="Prefer an MSEB window start. Program still only waters inside allowed hours."
-              />
-            </Grid>
-            <Grid item xs={12}>
-              <FormControlLabel
-                control={(
-                  <Checkbox
-                    checked={form.use_allowed_windows}
-                    onChange={(e) => setForm((f) => ({ ...f, use_allowed_windows: e.target.checked }))}
-                  />
-                )}
-                label="Only run inside MSEB allowed watering hours"
-              />
-            </Grid>
-            {motors.length > 0 && (
-              <Grid item xs={12}>
-                <FormControl fullWidth>
-                  <InputLabel>Irrigation motors</InputLabel>
-                  <Select
-                    multiple
-                    label="Irrigation motors"
-                    value={form.motor_device_ids}
-                    onChange={(e) => setForm((f) => ({ ...f, motor_device_ids: e.target.value }))}
-                    renderValue={(selected) => selected
-                      .map((id) => motors.find((m) => m.id === id)?.name || id)
-                      .join(', ')}
-                  >
-                    {motors.map((m) => (
-                      <MenuItem key={m.id} value={m.id}>{m.name} ({m.device_code})</MenuItem>
-                    ))}
-                  </Select>
-                </FormControl>
-              </Grid>
-            )}
-            {programType === 'fertigation' && (
-              <Grid item xs={12}>
-                <FormControl fullWidth>
-                  <InputLabel>Fertigation injectors</InputLabel>
-                  <Select
-                    multiple
-                    label="Fertigation injectors"
-                    value={form.injector_ids}
-                    onChange={(e) => setForm((f) => ({ ...f, injector_ids: e.target.value }))}
-                    renderValue={(selected) => selected
-                      .map((id) => injectors.find((m) => m.id === id)?.name || id)
-                      .join(', ')}
-                  >
-                    {injectors.map((m) => (
-                      <MenuItem key={m.id} value={m.id}>{m.name} ({m.device_code})</MenuItem>
-                    ))}
-                  </Select>
-                </FormControl>
-              </Grid>
-            )}
-            <Grid item xs={12}>
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
-                <Typography variant="subtitle2">
-                  Zone sequence (one zone at a time)
-                  {formTotalMinutes > 0 ? ` · ~${formatEstimatedDuration(formTotalMinutes)} total` : ''}
-                </Typography>
-                <Button
-                  size="small"
-                  startIcon={<AddIcon />}
-                  onClick={() => setForm((f) => ({
-                    ...f,
-                    steps: [...f.steps, emptyStep(f.steps.length)],
-                  }))}
-                >
-                  Add zone
-                </Button>
-              </Box>
-              {form.steps.map((step, idx) => {
-                const zone = (zones || []).find((z) => String(z.id) === String(step.zone_id));
-                const est = estimateMinutesFromLiters(step.target_liters, zone?.flow_rate_lph);
-                return (
-                  <Paper key={idx} variant="outlined" sx={{ p: 1.5, mb: 1 }}>
-                    <Typography variant="caption" color="text.secondary">
-                      Step {idx + 1}
-                      {idx > 0 ? ' — starts after previous zone completes' : ''}
-                    </Typography>
-                    <Grid container spacing={1} sx={{ mt: 0.5 }} alignItems="center">
-                      <Grid item xs={12} sm={4}>
-                        <FormControl fullWidth size="small">
-                          <InputLabel>Zone</InputLabel>
-                          <Select
-                            label="Zone"
-                            value={step.zone_id}
-                            onChange={(e) => setForm((f) => {
-                              const steps = [...f.steps];
-                              steps[idx] = { ...steps[idx], zone_id: e.target.value };
-                              return { ...f, steps };
-                            })}
-                          >
-                            {(zones || []).map((z) => (
-                              <MenuItem key={z.id} value={String(z.id)}>
-                                {z.zone_code}
-                                {z.flow_rate_lph ? ` (${z.flow_rate_lph} L/h)` : ''}
-                              </MenuItem>
-                            ))}
-                          </Select>
-                        </FormControl>
-                      </Grid>
-                      <Grid item xs={6} sm={3}>
-                        <TextField
-                          fullWidth
-                          size="small"
-                          label="Target L"
-                          type="number"
-                          value={step.target_liters}
-                          onChange={(e) => setForm((f) => {
-                            const steps = [...f.steps];
-                            const target_liters = e.target.value;
-                            const z = (zones || []).find((item) => String(item.id) === String(steps[idx].zone_id));
-                            const computed = estimateMinutesFromLiters(target_liters, z?.flow_rate_lph);
-                            steps[idx] = {
-                              ...steps[idx],
-                              target_liters,
-                              on_duration_minutes: computed != null ? String(computed) : steps[idx].on_duration_minutes,
-                            };
-                            return { ...f, steps };
-                          })}
-                        />
-                      </Grid>
-                      <Grid item xs={6} sm={3}>
-                        <TextField
-                          fullWidth
-                          size="small"
-                          label="Est. time"
-                          value={formatEstimatedDuration(est) || step.on_duration_minutes || '—'}
-                          InputProps={{ readOnly: true }}
-                          helperText={zone?.flow_rate_lph
-                            ? `From ${step.target_liters || '—'} L @ ${zone.flow_rate_lph} L/h`
-                            : 'Set zone flow rate (L/h) for estimate'}
-                        />
-                      </Grid>
-                      <Grid item xs={12} sm={2}>
-                        <IconButton
-                          aria-label="Remove step"
-                          disabled={form.steps.length <= 1}
-                          onClick={() => setForm((f) => ({
-                            ...f,
-                            steps: f.steps.filter((_, i) => i !== idx),
-                          }))}
-                        >
-                          <DeleteIcon />
-                        </IconButton>
-                      </Grid>
-                    </Grid>
-                  </Paper>
-                );
-              })}
-            </Grid>
-          </Grid>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setDialogOpen(false)}>Cancel</Button>
-          <Button variant="contained" disabled={saving} onClick={saveProgram}>
-            {saving ? 'Saving…' : 'Save'}
-          </Button>
-        </DialogActions>
-      </Dialog>
+      <IrrigationProgramFormDialog
+        open={dialogOpen}
+        onClose={() => setDialogOpen(false)}
+        editing={editing}
+        form={form}
+        setForm={setForm}
+        zones={zones}
+        windows={windows}
+        motors={motors}
+        injectors={injectors}
+        programType={programType}
+        saving={saving}
+        onSave={saveProgram}
+      />
 
       <Dialog open={Boolean(editJob)} onClose={() => setEditJob(null)} fullWidth maxWidth="sm">
         <DialogTitle>
