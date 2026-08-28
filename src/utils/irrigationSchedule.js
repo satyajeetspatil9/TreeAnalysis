@@ -168,11 +168,18 @@ export async function createAdHocVolumeJob({
   farmId,
   zoneId,
   targetLiters,
-  jobType = 'water',
+  jobType = 'manual',
   windowMode = true,
   deviceIds = [],
+  immediate = true,
 }) {
   const now = new Date().toISOString();
+
+  if (immediate) {
+    const paused = await pauseOpenIrrigationJobs(farmId, { reason: 'manual_override' });
+    if (paused.error) return { error: paused.error, job: null };
+  }
+
   const { data: job, error } = await supabase
     .from('irrigation_jobs')
     .insert({
@@ -203,8 +210,174 @@ export async function createAdHocVolumeJob({
     if (linkError) return { error: linkError, job };
   }
 
+  if (immediate) {
+    const { data: zone } = await supabase
+      .from('irrigation_zones')
+      .select('id, zone_code')
+      .eq('id', zoneId)
+      .maybeSingle();
+    const deviceCode = zone?.zone_code
+      ? `ZONE-${String(zone.zone_code).toUpperCase()}`
+      : `ZONE-${zoneId}`;
+
+    await enqueueIrrigationCommand({
+      farmId,
+      deviceCode,
+      action: 'start',
+      jobId: job.id,
+      zoneId,
+      payload: { until: { liters: Number(targetLiters) } },
+    });
+
+    const { data: existingStatus } = await supabase
+      .from('irrigation_zone_status')
+      .select('zone_id')
+      .eq('zone_id', zoneId)
+      .maybeSingle();
+
+    if (existingStatus) {
+      await supabase.from('irrigation_zone_status').update({
+        pending_command: 'start',
+        pending_command_at: now,
+        updated_at: now,
+      }).eq('zone_id', zoneId);
+    } else {
+      await supabase.from('irrigation_zone_status').insert({
+        zone_id: zoneId,
+        farm_id: farmId,
+        pending_command: 'start',
+        pending_command_at: now,
+        updated_at: now,
+        reported_at: now,
+        is_irrigating: false,
+      });
+    }
+
+    await supabase.from('irrigation_jobs').update({
+      status: 'running',
+      started_at: now,
+      updated_at: now,
+    }).eq('id', job.id);
+    job.status = 'running';
+    job.started_at = now;
+  }
+
   return { error: null, job };
 }
+
+/** Pause other open jobs so a manual/quick job can take the pump immediately. */
+export async function pauseOpenIrrigationJobs(farmId, { exceptJobId = null, reason = 'manual_override' } = {}) {
+  const now = new Date().toISOString();
+  let query = supabase
+    .from('irrigation_jobs')
+    .select('id, zone_id, status, job_type')
+    .eq('farm_id', farmId)
+    .in('status', ['planned', 'running', 'paused_outside_window']);
+
+  if (exceptJobId) query = query.neq('id', exceptJobId);
+
+  const { data: openJobs, error } = await query;
+  if (error) return { error, pausedIds: [] };
+
+  const ids = (openJobs || []).map((j) => j.id);
+  if (!ids.length) return { error: null, pausedIds: [] };
+
+  // Stop any zones that were watering
+  for (const job of openJobs || []) {
+    if (job.status !== 'running' || !job.zone_id) continue;
+    const { data: zone } = await supabase
+      .from('irrigation_zones')
+      .select('zone_code')
+      .eq('id', job.zone_id)
+      .maybeSingle();
+    const deviceCode = zone?.zone_code
+      ? `ZONE-${String(zone.zone_code).toUpperCase()}`
+      : null;
+    if (deviceCode) {
+      await enqueueIrrigationCommand({
+        farmId,
+        deviceCode,
+        action: 'stop',
+        jobId: job.id,
+        zoneId: job.zone_id,
+        payload: { reason },
+      });
+    }
+    await supabase.from('irrigation_zone_status').update({
+      pending_command: 'stop',
+      pending_command_at: now,
+      updated_at: now,
+    }).eq('zone_id', job.zone_id);
+  }
+
+  const { error: updateError } = await supabase
+    .from('irrigation_jobs')
+    .update({
+      status: 'planned',
+      liters_baseline: null,
+      updated_at: now,
+    })
+    .in('id', ids);
+
+  return { error: updateError || null, pausedIds: ids };
+}
+
+export async function updateIrrigationJob(jobId, { zoneId, targetLiters }) {
+  const patch = { updated_at: new Date().toISOString() };
+  if (zoneId != null) patch.zone_id = zoneId;
+  if (targetLiters != null) patch.target_liters = targetLiters;
+
+  const { data, error } = await supabase
+    .from('irrigation_jobs')
+    .update(patch)
+    .eq('id', jobId)
+    .select('*')
+    .single();
+
+  return { data, error };
+}
+
+export async function deleteIrrigationJob(farmId, job) {
+  const now = new Date().toISOString();
+
+  if (job.zone_id && (job.status === 'running' || job.status === 'planned')) {
+    const { data: zone } = await supabase
+      .from('irrigation_zones')
+      .select('zone_code')
+      .eq('id', job.zone_id)
+      .maybeSingle();
+    const deviceCode = zone?.zone_code
+      ? `ZONE-${String(zone.zone_code).toUpperCase()}`
+      : null;
+    if (deviceCode) {
+      await enqueueIrrigationCommand({
+        farmId,
+        deviceCode,
+        action: 'stop',
+        jobId: job.id,
+        zoneId: job.zone_id,
+        payload: { reason: 'job_cancelled' },
+      });
+    }
+    await supabase.from('irrigation_zone_status').update({
+      pending_command: 'stop',
+      pending_command_at: now,
+      updated_at: now,
+    }).eq('zone_id', job.zone_id);
+  }
+
+  const { error } = await supabase
+    .from('irrigation_jobs')
+    .update({
+      status: 'cancelled',
+      completed_at: now,
+      updated_at: now,
+    })
+    .eq('id', job.id);
+
+  return { error };
+}
+
 
 export function jobProgressLabel(job) {
   if (!job) return '—';

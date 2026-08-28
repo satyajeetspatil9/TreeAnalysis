@@ -31,6 +31,7 @@ import { supabase } from '../../supabaseClient';
 import {
   createAdHocVolumeJob,
   defaultStartFromWindows,
+  deleteIrrigationJob,
   estimateMinutesFromLiters,
   estimateProgramMinutes,
   estimateStepMinutes,
@@ -42,6 +43,7 @@ import {
   scheduleTableHint,
   suggestStartsFromAllowedWindows,
   timeToInputValue,
+  updateIrrigationJob,
   WEEKDAY_LABELS,
 } from '../../utils/irrigationSchedule';
 
@@ -76,6 +78,10 @@ function IrrigationProgramsPanel({
     injector_ids: [],
   });
   const [jobForm, setJobForm] = useState({ zone_id: '', target_liters: '6000' });
+  const [creatingJob, setCreatingJob] = useState(false);
+  const [editJob, setEditJob] = useState(null);
+  const [editJobForm, setEditJobForm] = useState({ zone_id: '', target_liters: '' });
+  const [jobBusy, setJobBusy] = useState(false);
 
   const motors = (devices || []).filter((d) =>
     d.kind === 'irrigation_motor' || d.kind === 'bore_motor');
@@ -110,7 +116,10 @@ function IrrigationProgramsPanel({
         .from('irrigation_jobs')
         .select('*')
         .eq('farm_id', farmId)
-        .eq('job_type', programType === 'fertigation' ? 'fertigation' : 'water')
+        .in(
+          'job_type',
+          programType === 'fertigation' ? ['fertigation'] : ['water', 'manual'],
+        )
         .in('status', ['planned', 'running', 'paused_outside_window'])
         .order('created_at', { ascending: false }),
       supabase
@@ -378,14 +387,17 @@ function IrrigationProgramsPanel({
       setMessage({ type: 'error', text: 'Pick a zone and target liters.' });
       return;
     }
+    setCreatingJob(true);
     const { error } = await createAdHocVolumeJob({
       farmId,
       zoneId: Number(jobForm.zone_id),
       targetLiters: Number(jobForm.target_liters),
-      jobType: programType === 'fertigation' ? 'fertigation' : 'water',
-      windowMode: true,
+      jobType: 'manual',
+      windowMode: false,
+      immediate: true,
       deviceIds: [],
     });
+    setCreatingJob(false);
     if (error) {
       setMessage({
         type: isMissingScheduleTable(error) ? 'warning' : 'error',
@@ -395,7 +407,54 @@ function IrrigationProgramsPanel({
     }
     setMessage({
       type: 'success',
-      text: 'Volume job created. It waits if another program is already watering.',
+      text: 'Quick job started now. Other programs were paused and will resume after this job finishes.',
+    });
+    await load();
+  };
+
+  const openEditJob = (job) => {
+    setEditJob(job);
+    setEditJobForm({
+      zone_id: String(job.zone_id || ''),
+      target_liters: job.target_liters != null ? String(job.target_liters) : '',
+    });
+  };
+
+  const saveEditJob = async () => {
+    if (!editJob) return;
+    if (!editJobForm.zone_id || !editJobForm.target_liters) {
+      setMessage({ type: 'error', text: 'Zone and target liters are required.' });
+      return;
+    }
+    setJobBusy(true);
+    const { error } = await updateIrrigationJob(editJob.id, {
+      zoneId: Number(editJobForm.zone_id),
+      targetLiters: Number(editJobForm.target_liters),
+    });
+    setJobBusy(false);
+    if (error) {
+      setMessage({ type: 'error', text: scheduleTableHint(error.message) });
+      return;
+    }
+    setEditJob(null);
+    setMessage({ type: 'success', text: 'Job updated.' });
+    await load();
+  };
+
+  const removeJob = async (job) => {
+    setJobBusy(true);
+    const { error } = await deleteIrrigationJob(farmId, job);
+    setJobBusy(false);
+    if (error) {
+      setMessage({ type: 'error', text: scheduleTableHint(error.message) });
+      return;
+    }
+    setEditJob(null);
+    setMessage({
+      type: 'success',
+      text: job.job_type === 'manual'
+        ? 'Quick job cancelled. Paused programs can resume.'
+        : 'Job cancelled.',
     });
     await load();
   };
@@ -434,7 +493,7 @@ function IrrigationProgramsPanel({
           Quick volume job
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-          One-off target (e.g. 6000 L). Runs only in MSEB allowed hours, and only when no other program is watering.
+          Starts immediately and pauses other programs. When this job finishes or is deleted, paused programs resume in order.
         </Typography>
         <Grid container spacing={2} alignItems="center">
           <Grid item xs={12} sm={4}>
@@ -468,8 +527,14 @@ function IrrigationProgramsPanel({
             </Typography>
           </Grid>
           <Grid item xs={12} sm={3}>
-            <Button variant="outlined" startIcon={<PlayArrowIcon />} onClick={createQuickJob}>
-              Create job
+            <Button
+              variant="contained"
+              color="warning"
+              startIcon={creatingJob ? <CircularProgress size={16} color="inherit" /> : <PlayArrowIcon />}
+              disabled={creatingJob}
+              onClick={createQuickJob}
+            >
+              Start now
             </Button>
           </Grid>
         </Grid>
@@ -484,19 +549,44 @@ function IrrigationProgramsPanel({
             {jobs.map((job) => {
               const zone = (zones || []).find((z) => z.id === job.zone_id);
               const est = estimateMinutesFromLiters(job.target_liters, zone?.flow_rate_lph);
+              const isManual = job.job_type === 'manual';
               return (
                 <Grid item xs={12} sm={6} key={job.id}>
-                  <Paper variant="outlined" sx={{ p: 1.5 }}>
+                  <Paper
+                    variant="outlined"
+                    sx={(theme) => ({
+                      p: 1.5,
+                      borderColor: isManual ? theme.palette.warning.main : undefined,
+                    })}
+                  >
                     <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1 }}>
                       <Typography fontWeight={700}>
                         {zone?.zone_code || `Zone ${job.zone_id}`}
+                        {isManual ? ' · Quick job' : ''}
                       </Typography>
-                      <Chip size="small" label={job.status} />
+                      <Chip
+                        size="small"
+                        color={isManual ? 'warning' : 'default'}
+                        label={job.status}
+                      />
                     </Box>
                     <Typography variant="body2" color="text.secondary">
                       {jobProgressLabel(job)}
                       {est != null ? ` · ~${formatEstimatedDuration(est)} est.` : ''}
                     </Typography>
+                    <Box sx={{ mt: 1, display: 'flex', gap: 1 }}>
+                      <Button size="small" onClick={() => openEditJob(job)} disabled={jobBusy}>
+                        Modify
+                      </Button>
+                      <Button
+                        size="small"
+                        color="error"
+                        onClick={() => removeJob(job)}
+                        disabled={jobBusy}
+                      >
+                        Delete
+                      </Button>
+                    </Box>
                   </Paper>
                 </Grid>
               );
@@ -823,6 +913,60 @@ function IrrigationProgramsPanel({
           <Button onClick={() => setDialogOpen(false)}>Cancel</Button>
           <Button variant="contained" disabled={saving} onClick={saveProgram}>
             {saving ? 'Saving…' : 'Save'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={Boolean(editJob)} onClose={() => setEditJob(null)} fullWidth maxWidth="sm">
+        <DialogTitle>
+          Modify {editJob?.job_type === 'manual' ? 'quick job' : 'job'}
+        </DialogTitle>
+        <DialogContent>
+          <Grid container spacing={2} sx={{ mt: 0.5 }}>
+            <Grid item xs={12}>
+              <FormControl fullWidth>
+                <InputLabel>Zone</InputLabel>
+                <Select
+                  label="Zone"
+                  value={editJobForm.zone_id}
+                  onChange={(e) => setEditJobForm((f) => ({ ...f, zone_id: e.target.value }))}
+                >
+                  {(zones || []).map((z) => (
+                    <MenuItem key={z.id} value={String(z.id)}>{z.zone_code}</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            </Grid>
+            <Grid item xs={12}>
+              <TextField
+                fullWidth
+                label="Target liters"
+                type="number"
+                value={editJobForm.target_liters}
+                onChange={(e) => setEditJobForm((f) => ({ ...f, target_liters: e.target.value }))}
+                helperText={(() => {
+                  const z = (zones || []).find((item) => String(item.id) === String(editJobForm.zone_id));
+                  const est = estimateMinutesFromLiters(editJobForm.target_liters, z?.flow_rate_lph);
+                  return est != null
+                    ? `Estimated ${formatEstimatedDuration(est)} at ${z.flow_rate_lph} L/h`
+                    : 'Set zone flow rate for time estimate';
+                })()}
+              />
+            </Grid>
+          </Grid>
+        </DialogContent>
+        <DialogActions>
+          <Button
+            color="error"
+            disabled={jobBusy}
+            onClick={() => editJob && removeJob(editJob)}
+          >
+            Delete job
+          </Button>
+          <Box sx={{ flex: 1 }} />
+          <Button onClick={() => setEditJob(null)}>Cancel</Button>
+          <Button variant="contained" disabled={jobBusy} onClick={saveEditJob}>
+            {jobBusy ? 'Saving…' : 'Save'}
           </Button>
         </DialogActions>
       </Dialog>

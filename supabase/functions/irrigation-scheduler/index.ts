@@ -370,15 +370,19 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
     .eq('farm_id', farmId)
     .in('status', ['planned', 'running', 'paused_outside_window']);
 
-  // Only one job may actively water; prefer running, else earliest by program run_order
+  // Only one job may actively water: manual/quick jobs first, then program run_order
   const programOrder = new Map(sortedPrograms.map((p, idx) => [p.id, Number(p.run_order) || idx]));
   const sortedOpenJobs = [...(openJobs || [])].sort((a, b) => {
+    const manualA = a.job_type === 'manual' ? 0 : 1;
+    const manualB = b.job_type === 'manual' ? 0 : 1;
+    if (manualA !== manualB) return manualA - manualB;
     const oa = programOrder.get(a.program_id) ?? 9999;
     const ob = programOrder.get(b.program_id) ?? 9999;
     if (oa !== ob) return oa - ob;
     return Number(a.id) - Number(b.id);
   });
-  const primaryJob = sortedOpenJobs.find((j) => j.status === 'running')
+  const primaryJob = sortedOpenJobs.find((j) => j.job_type === 'manual')
+    || sortedOpenJobs.find((j) => j.status === 'running')
     || sortedOpenJobs[0]
     || null;
 
@@ -447,7 +451,7 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
     const target = job.target_liters != null ? Number(job.target_liters) : null;
     const delivered = Number(job.liters_delivered) || 0;
     const hitTarget = target != null && delivered >= target;
-    const windowBlocks = job.window_mode && !inWindow;
+    const windowBlocks = job.window_mode && !inWindow && job.job_type !== 'manual';
 
     if (hitTarget) {
       await cancelPendingForDevices(supabase, farmId, allCodes);
