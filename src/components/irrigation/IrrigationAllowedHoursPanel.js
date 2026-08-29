@@ -4,11 +4,13 @@ import {
   Box,
   Button,
   CircularProgress,
-  FormControlLabel,
-  Grid,
   IconButton,
   Paper,
-  Switch,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableRow,
   TextField,
   Typography,
 } from '@mui/material';
@@ -25,21 +27,18 @@ import {
 const DEFAULT_START = '06:00';
 const DEFAULT_END = '14:00';
 
-function defaultSlot() {
-  return { start_time: DEFAULT_START, end_time: DEFAULT_END };
-}
-
-function emptyDay(weekday, label, enabled = false) {
-  return {
-    weekday,
-    label,
-    enabled,
-    slots: enabled ? [defaultSlot()] : [],
-  };
+/** Flat list of power slots: { key, weekday, start_time, end_time } */
+function rowsFromWindows(data) {
+  return (data || []).map((row, idx) => ({
+    key: `${row.id || 'n'}-${idx}`,
+    weekday: Number(row.weekday),
+    start_time: timeToInputValue(row.start_time || DEFAULT_START),
+    end_time: timeToInputValue(row.end_time || DEFAULT_END),
+  }));
 }
 
 function IrrigationAllowedHoursPanel({ farmId }) {
-  const [days, setDays] = useState([]);
+  const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState(null);
@@ -61,31 +60,12 @@ function IrrigationAllowedHoursPanel({ farmId }) {
           ? 'Run migration 039_irrigation_schedule_control.sql in Supabase, then reload.'
           : scheduleTableHint(error.message),
       });
-      setDays([]);
+      setRows([]);
       setLoading(false);
       return;
     }
 
-    const byDay = new Map();
-    (data || []).forEach((row) => {
-      const list = byDay.get(row.weekday) || [];
-      list.push({
-        start_time: timeToInputValue(row.start_time || DEFAULT_START),
-        end_time: timeToInputValue(row.end_time || DEFAULT_END),
-      });
-      byDay.set(row.weekday, list);
-    });
-
-    const merged = WEEKDAY_LABELS.map((label, weekday) => {
-      const slots = byDay.get(weekday) || [];
-      return {
-        weekday,
-        label,
-        enabled: slots.length > 0,
-        slots: slots.length > 0 ? slots : [],
-      };
-    });
-    setDays(merged);
+    setRows(rowsFromWindows(data));
     setMessage(null);
     setLoading(false);
   }, [farmId]);
@@ -94,76 +74,50 @@ function IrrigationAllowedHoursPanel({ farmId }) {
     load();
   }, [load]);
 
-  const toggleDay = (weekday, enabled) => {
-    setDays((prev) => prev.map((d) => {
-      if (d.weekday !== weekday) return d;
-      if (!enabled) return { ...d, enabled: false, slots: [] };
-      return {
-        ...d,
-        enabled: true,
-        slots: d.slots.length ? d.slots : [defaultSlot()],
-      };
-    }));
+  const updateRow = (key, patch) => {
+    setRows((prev) => prev.map((r) => (r.key === key ? { ...r, ...patch } : r)));
   };
 
-  const updateSlot = (weekday, index, patch) => {
-    setDays((prev) => prev.map((d) => {
-      if (d.weekday !== weekday) return d;
-      const slots = d.slots.map((slot, i) => (i === index ? { ...slot, ...patch } : slot));
-      return { ...d, slots };
-    }));
+  const addRow = () => {
+    setRows((prev) => [
+      ...prev,
+      {
+        key: `new-${Date.now()}`,
+        weekday: 1,
+        start_time: DEFAULT_START,
+        end_time: DEFAULT_END,
+      },
+    ]);
   };
 
-  const addSlot = (weekday) => {
-    setDays((prev) => prev.map((d) => {
-      if (d.weekday !== weekday) return d;
-      return {
-        ...d,
-        enabled: true,
-        slots: [...(d.slots.length ? d.slots : []), defaultSlot()],
-      };
-    }));
+  const removeRow = (key) => {
+    setRows((prev) => prev.filter((r) => r.key !== key));
   };
 
-  const removeSlot = (weekday, index) => {
-    setDays((prev) => prev.map((d) => {
-      if (d.weekday !== weekday) return d;
-      const slots = d.slots.filter((_, i) => i !== index);
-      return {
-        ...d,
-        slots,
-        enabled: slots.length > 0,
-      };
-    }));
-  };
-
-  const validateSlots = () => {
-    for (const day of days) {
-      if (!day.enabled) continue;
-      for (const slot of day.slots) {
-        if (!slot.start_time || !slot.end_time) {
-          return `${day.label}: each MSEB slot needs start and end.`;
-        }
-        if (slot.end_time <= slot.start_time) {
-          return `${day.label}: end time must be after start (${slot.start_time}–${slot.end_time}). Overnight slots are not supported yet.`;
-        }
-      }
-      const sorted = [...day.slots].sort((a, b) => a.start_time.localeCompare(b.start_time));
-      for (let i = 1; i < sorted.length; i += 1) {
-        if (sorted[i].start_time < sorted[i - 1].end_time) {
-          return `${day.label}: MSEB slots overlap (${sorted[i - 1].start_time}–${sorted[i - 1].end_time} and ${sorted[i].start_time}–${sorted[i].end_time}).`;
-        }
-      }
-    }
-    return null;
+  const applyMonThu = () => {
+    setRows([1, 2, 3, 4].map((weekday) => ({
+      key: `preset-${weekday}`,
+      weekday,
+      start_time: DEFAULT_START,
+      end_time: DEFAULT_END,
+    })));
   };
 
   const save = async () => {
     if (!farmId) return;
-    const validationError = validateSlots();
-    if (validationError) {
-      setMessage({ type: 'error', text: validationError });
-      return;
+
+    for (const row of rows) {
+      if (!row.start_time || !row.end_time) {
+        setMessage({ type: 'error', text: 'Each row needs start and end time.' });
+        return;
+      }
+      if (row.end_time <= row.start_time) {
+        setMessage({
+          type: 'error',
+          text: `${WEEKDAY_LABELS[row.weekday]}: end must be after start.`,
+        });
+        return;
+      }
     }
 
     setSaving(true);
@@ -183,22 +137,15 @@ function IrrigationAllowedHoursPanel({ farmId }) {
       return;
     }
 
-    const inserts = [];
-    days.forEach((day) => {
-      if (!day.enabled) return;
-      day.slots.forEach((slot) => {
-        inserts.push({
-          farm_id: farmId,
-          weekday: day.weekday,
-          start_time: `${slot.start_time}:00`,
-          end_time: `${slot.end_time}:00`,
-          enabled: true,
-          updated_at: new Date().toISOString(),
-        });
-      });
-    });
-
-    if (inserts.length) {
+    if (rows.length) {
+      const inserts = rows.map((r) => ({
+        farm_id: farmId,
+        weekday: r.weekday,
+        start_time: `${r.start_time}:00`,
+        end_time: `${r.end_time}:00`,
+        enabled: true,
+        updated_at: new Date().toISOString(),
+      }));
       const { error } = await supabase.from('irrigation_allowed_windows').insert(inserts);
       if (error) {
         setMessage({ type: 'error', text: scheduleTableHint(error.message) });
@@ -208,31 +155,8 @@ function IrrigationAllowedHoursPanel({ farmId }) {
     }
 
     setSaving(false);
-    setMessage({ type: 'success', text: 'MSEB allowed hours saved.' });
+    setMessage({ type: 'success', text: 'Allowed hours saved.' });
     await load();
-  };
-
-  const applyWeekdaysPreset = () => {
-    setDays(WEEKDAY_LABELS.map((label, weekday) => (
-      [1, 2, 3, 4].includes(weekday)
-        ? emptyDay(weekday, label, true)
-        : emptyDay(weekday, label, false)
-    )));
-  };
-
-  const applyTwoSlotPreset = () => {
-    setDays(WEEKDAY_LABELS.map((label, weekday) => {
-      if (![1, 2, 3, 4].includes(weekday)) return emptyDay(weekday, label, false);
-      return {
-        weekday,
-        label,
-        enabled: true,
-        slots: [
-          { start_time: '06:00', end_time: '10:00' },
-          { start_time: '18:00', end_time: '22:00' },
-        ],
-      };
-    }));
   };
 
   if (loading) {
@@ -252,97 +176,89 @@ function IrrigationAllowedHoursPanel({ farmId }) {
       )}
 
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        These are MSEB electricity-available hours (farm timezone Asia/Kolkata).
-        Add multiple slots per day when power comes in more than one window.
-        Watering jobs only run inside these slots; they pause when power ends and continue in the next allowed slot until liters are done.
+        When MSEB power is available. Watering only runs in these times.
       </Typography>
 
       <Box sx={{ display: 'flex', gap: 1, mb: 2, flexWrap: 'wrap' }}>
-        <Button size="small" variant="outlined" onClick={applyWeekdaysPreset}>
-          Preset Mon–Thu one slot (6–2)
+        <Button size="small" variant="outlined" onClick={applyMonThu}>
+          Mon–Thu 6am–2pm
         </Button>
-        <Button size="small" variant="outlined" onClick={applyTwoSlotPreset}>
-          Preset Mon–Thu two slots (6–10 & 6–10pm)
+        <Button size="small" startIcon={<AddIcon />} onClick={addRow}>
+          Add time
         </Button>
         <Button size="small" variant="contained" disabled={saving} onClick={save}>
-          {saving ? 'Saving…' : 'Save allowed hours'}
+          {saving ? 'Saving…' : 'Save'}
         </Button>
       </Box>
 
-      <Grid container spacing={1.5}>
-        {days.map((day) => (
-          <Grid item xs={12} sm={6} md={6} lg={4} key={day.weekday}>
-            <Paper variant="outlined" sx={{ p: 1.5, height: '100%' }}>
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 1 }}>
-                <FormControlLabel
-                  control={(
-                    <Switch
-                      checked={day.enabled}
-                      onChange={(e) => toggleDay(day.weekday, e.target.checked)}
-                    />
-                  )}
-                  label={<Typography fontWeight={700}>{day.label}</Typography>}
-                />
-                <Button
-                  size="small"
-                  startIcon={<AddIcon />}
-                  onClick={() => addSlot(day.weekday)}
-                >
-                  Add slot
-                </Button>
-              </Box>
-
-              {!day.enabled && (
-                <Typography variant="caption" color="text.secondary">
-                  No MSEB power window this day
-                </Typography>
-              )}
-
-              {day.enabled && day.slots.map((slot, index) => (
-                <Box key={`${day.weekday}-${index}`} sx={{ display: 'flex', gap: 1, mt: 1, alignItems: 'center' }}>
+      <Paper variant="outlined">
+        <Table size="small">
+          <TableHead>
+            <TableRow>
+              <TableCell>Day</TableCell>
+              <TableCell>From</TableCell>
+              <TableCell>To</TableCell>
+              <TableCell align="right" width={56} />
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {rows.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={4}>
+                  <Typography color="text.secondary" sx={{ py: 2 }}>
+                    No times set. Tap “Add time” or use Mon–Thu 6am–2pm.
+                  </Typography>
+                </TableCell>
+              </TableRow>
+            )}
+            {rows.map((row) => (
+              <TableRow key={row.key}>
+                <TableCell>
                   <TextField
+                    select
                     size="small"
-                    label={`Slot ${index + 1} start`}
-                    type="time"
-                    value={slot.start_time}
-                    onChange={(e) => updateSlot(day.weekday, index, { start_time: e.target.value })}
-                    InputLabelProps={{ shrink: true }}
-                    fullWidth
-                  />
-                  <TextField
-                    size="small"
-                    label="End"
-                    type="time"
-                    value={slot.end_time}
-                    onChange={(e) => updateSlot(day.weekday, index, { end_time: e.target.value })}
-                    InputLabelProps={{ shrink: true }}
-                    fullWidth
-                  />
-                  <IconButton
-                    aria-label="Remove slot"
-                    size="small"
-                    disabled={day.slots.length <= 1}
-                    onClick={() => removeSlot(day.weekday, index)}
+                    value={row.weekday}
+                    onChange={(e) => updateRow(row.key, { weekday: Number(e.target.value) })}
+                    SelectProps={{ native: true }}
+                    sx={{ minWidth: 88 }}
                   >
+                    {WEEKDAY_LABELS.map((label, day) => (
+                      <option key={label} value={day}>{label}</option>
+                    ))}
+                  </TextField>
+                </TableCell>
+                <TableCell>
+                  <TextField
+                    size="small"
+                    type="time"
+                    value={row.start_time}
+                    onChange={(e) => updateRow(row.key, { start_time: e.target.value })}
+                    InputLabelProps={{ shrink: true }}
+                  />
+                </TableCell>
+                <TableCell>
+                  <TextField
+                    size="small"
+                    type="time"
+                    value={row.end_time}
+                    onChange={(e) => updateRow(row.key, { end_time: e.target.value })}
+                    InputLabelProps={{ shrink: true }}
+                  />
+                </TableCell>
+                <TableCell align="right">
+                  <IconButton size="small" onClick={() => removeRow(row.key)} aria-label="Remove">
                     <DeleteIcon fontSize="small" />
                   </IconButton>
-                </Box>
-              ))}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </Paper>
 
-              {day.enabled && (
-                <Button
-                  size="small"
-                  sx={{ mt: 1 }}
-                  startIcon={<AddIcon />}
-                  onClick={() => addSlot(day.weekday)}
-                >
-                  Another MSEB timing
-                </Button>
-              )}
-            </Paper>
-          </Grid>
-        ))}
-      </Grid>
+      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1.5 }}>
+        Need two power slots on the same day? Add two rows for that day.
+      </Typography>
     </Box>
   );
 }
