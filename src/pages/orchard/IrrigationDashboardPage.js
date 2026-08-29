@@ -95,16 +95,6 @@ function SignalBadge({ on, onLabel, offLabel, color }) {
   );
 }
 
-function zoneStatusCopy(row) {
-  if (!row.hasTelemetry) {
-    return { label: 'No signal', color: 'default', helper: 'Controller has not reported this zone yet' };
-  }
-  if (row.isIrrigating) {
-    return { label: 'Watering now', color: 'info', helper: 'Pump is running on this zone' };
-  }
-  return { label: 'Idle', color: 'success', helper: 'Not watering' };
-}
-
 function TabPanel({ value, index, children }) {
   if (value !== index) return null;
   return <Box sx={{ pt: 2 }}>{children}</Box>;
@@ -306,172 +296,6 @@ function IrrigationDashboardPage() {
       </Paper>
 
       <TabPanel value={tab} index={0}>
-        <Paper
-          sx={(theme) => ({
-            p: { xs: 2, sm: 3 },
-            mb: 3,
-            border: '2px solid',
-            borderColor: activeZone ? theme.palette.info.main : alpha(theme.palette.success.main, 0.5),
-            borderLeftWidth: 10,
-            borderLeftColor: activeZone ? theme.palette.info.dark : theme.palette.success.main,
-            bgcolor: activeZone
-              ? alpha(theme.palette.info.main, 0.12)
-              : alpha(theme.palette.success.main, 0.08),
-          })}
-          variant="outlined"
-        >
-          <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 2, flexWrap: 'wrap' }}>
-            <Box>
-              <Typography variant="overline" sx={{ fontWeight: 800, letterSpacing: 1 }}>
-                Right now
-              </Typography>
-              {activeZone ? (
-                <>
-                  <Typography variant="h4" fontWeight={800} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <WaterDropIcon color="info" fontSize="large" />
-                    Watering {activeZone.zone.zone_code}
-                  </Typography>
-                  {activeZone.zone.description && (
-                    <Typography variant="body1" color="text.secondary" sx={{ mt: 0.5 }}>
-                      {activeZone.zone.description}
-                    </Typography>
-                  )}
-                </>
-              ) : (
-                <>
-                  <Typography variant="h4" fontWeight={800} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <PauseCircleOutlineIcon color="success" fontSize="large" />
-                    No watering
-                  </Typography>
-                  <Typography variant="body1" color="text.secondary" sx={{ mt: 0.5 }}>
-                    All zones are idle. Use Programs or start a zone below.
-                  </Typography>
-                </>
-              )}
-            </Box>
-            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-              <Chip color="info" label={`${counts.irrigating} watering`} />
-              <Chip color="success" variant="outlined" label={`${counts.idle} idle`} />
-              {counts.noData > 0 && (
-                <Chip variant="outlined" label={`${counts.noData} no signal`} />
-              )}
-            </Box>
-          </Box>
-
-          {activeZone && (
-            <Grid container spacing={1.5} sx={{ mt: 2 }}>
-              <Grid item xs={6} sm={4} md={2}>
-                <MetricTile
-                  label="Running for"
-                  value={formatIrrigationDurationLong(activeZone.status?.started_at, nowMs)}
-                  emphasize
-                />
-              </Grid>
-              <Grid item xs={6} sm={4} md={2}>
-                <MetricTile label="Started" value={formatDateTime(activeZone.status?.started_at)} />
-              </Grid>
-              <Grid item xs={6} sm={4} md={2}>
-                <MetricTile
-                  label="Voltage"
-                  value={formatVoltage(activeZone.status?.voltage_v)}
-                  icon={<ElectricBoltIcon fontSize="small" color="action" />}
-                />
-              </Grid>
-              <Grid item xs={6} sm={4} md={2}>
-                <MetricTile label="Current" value={formatAmperage(activeZone.status?.current_amp)} />
-              </Grid>
-              <Grid item xs={6} sm={4} md={2}>
-                <MetricTile
-                  label="Flow now"
-                  value={formatDischargeRate(activeZone.status?.current_discharge_lpm)}
-                  icon={<SpeedIcon fontSize="small" color="action" />}
-                />
-              </Grid>
-              <Grid item xs={6} sm={4} md={2}>
-                <MetricTile
-                  label="Water used"
-                  value={formatTotalDischarge(activeZone.status?.total_discharge_liters)}
-                />
-              </Grid>
-            </Grid>
-          )}
-
-          {activeZone && (
-            <Button
-              color="error"
-              variant="contained"
-              startIcon={<StopIcon />}
-              sx={{ mt: 2 }}
-              disabled={commanding}
-              onClick={() => stopWatering(activeZone)}
-            >
-              Stop watering
-            </Button>
-          )}
-        </Paper>
-
-        {rows.length > 0 && (
-          <Paper variant="outlined" sx={{ p: { xs: 2, sm: 3 }, mb: 3 }}>
-            <Typography variant="h6" fontWeight={800} gutterBottom>
-              Control irrigation
-            </Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-              Choose a drip zone, then start or stop watering. Only one zone runs at a time.
-              Commands go to the farm queue (controller polls GET).
-            </Typography>
-            <Grid container spacing={2} alignItems="center">
-              <Grid item xs={12} sm={6} md={4}>
-                <FormControl fullWidth>
-                  <InputLabel>Zone</InputLabel>
-                  <Select
-                    value={controlRow ? String(controlRow.zone.id) : ''}
-                    label="Zone"
-                    onChange={(e) => setControlZoneId(e.target.value)}
-                  >
-                    {rows.map((row) => (
-                      <MenuItem key={row.zone.id} value={String(row.zone.id)}>
-                        {row.zone.zone_code}
-                        {row.zone.description ? ` — ${row.zone.description}` : ''}
-                        {row.isIrrigating ? ' (watering)' : ''}
-                      </MenuItem>
-                    ))}
-                  </Select>
-                </FormControl>
-              </Grid>
-              <Grid item xs={12} sm={6} md={8}>
-                <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-                  <Button
-                    variant="contained"
-                    color="info"
-                    size="large"
-                    startIcon={commanding ? <CircularProgress size={18} color="inherit" /> : <PlayArrowIcon />}
-                    disabled={!controlRow || commanding || controlRow.isIrrigating}
-                    onClick={() => setConfirmStart(controlRow)}
-                  >
-                    Start watering
-                  </Button>
-                  <Button
-                    variant="contained"
-                    color="error"
-                    size="large"
-                    startIcon={<StopIcon />}
-                    disabled={!controlRow || commanding || (!controlRow.isIrrigating && controlRow.status?.pending_command !== 'start')}
-                    onClick={() => stopWatering(controlRow)}
-                  >
-                    Stop watering
-                  </Button>
-                </Box>
-              </Grid>
-            </Grid>
-            {controlRow?.status?.pending_command && (
-              <Alert severity="info" sx={{ mt: 2 }}>
-                {controlRow.status.pending_command === 'start' ? 'Start' : 'Stop'} sent to{' '}
-                {controlRow.zone.zone_code} — waiting for the controller to apply it.
-              </Alert>
-            )}
-          </Paper>
-        )}
-
         {rows.length === 0 ? (
           <Paper variant="outlined" sx={{ p: 4, textAlign: 'center' }}>
             <WaterDropIcon sx={{ fontSize: 48, color: 'text.disabled', mb: 1 }} />
@@ -485,120 +309,283 @@ function IrrigationDashboardPage() {
           </Paper>
         ) : (
           <>
-            <Typography variant="h6" fontWeight={700} sx={{ mb: 1.5 }}>
-              Zones
-            </Typography>
-            <Grid container spacing={2}>
-              {rows.map((row) => {
-                const copy = zoneStatusCopy(row);
-                const status = row.status;
-
-                return (
-                  <Grid item xs={12} md={6} key={row.zone.id}>
-                    <Paper
-                      variant="outlined"
-                      sx={(theme) => ({
-                        p: 2,
-                        height: '100%',
-                        borderWidth: 2,
-                        borderColor: row.isIrrigating
-                          ? theme.palette.info.main
-                          : theme.palette.divider,
-                        bgcolor: row.isIrrigating
-                          ? alpha(theme.palette.info.main, 0.06)
-                          : undefined,
-                      })}
-                    >
-                      <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1, mb: 1.5 }}>
-                        <Box>
-                          <Typography variant="h6" fontWeight={800}>
-                            {row.zone.zone_code}
-                          </Typography>
-                          <Typography variant="body2" color="text.secondary">
-                            {row.zone.description || 'Drip zone'}
-                          </Typography>
-                        </Box>
-                        <Chip label={copy.label} color={copy.color} sx={{ fontWeight: 700 }} />
-                      </Box>
-
-                      <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1.5 }}>
-                        {copy.helper}
-                        {row.hasTelemetry ? ` · Updated ${formatRelativeTime(status?.reported_at, nowMs)}` : ''}
+            <Paper
+              sx={(theme) => ({
+                p: { xs: 2, sm: 3 },
+                mb: 3,
+                border: '2px solid',
+                borderColor: activeZone ? theme.palette.info.main : alpha(theme.palette.success.main, 0.5),
+                borderLeftWidth: 10,
+                borderLeftColor: activeZone ? theme.palette.info.dark : theme.palette.success.main,
+                bgcolor: activeZone
+                  ? alpha(theme.palette.info.main, 0.12)
+                  : alpha(theme.palette.success.main, 0.08),
+              })}
+              variant="outlined"
+            >
+              <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 2, flexWrap: 'wrap' }}>
+                <Box sx={{ minWidth: 0, flex: 1 }}>
+                  <Typography variant="overline" sx={{ fontWeight: 800, letterSpacing: 1 }}>
+                    Right now
+                  </Typography>
+                  {activeZone ? (
+                    <>
+                      <Typography variant="h4" fontWeight={800} sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                        <WaterDropIcon color="info" fontSize="large" />
+                        Watering now
                       </Typography>
-
-                      {row.isIrrigating && (
-                        <Typography variant="h5" fontWeight={800} sx={{ mb: 1.5 }}>
-                          {formatIrrigationDurationLong(status?.started_at, nowMs)}
-                        </Typography>
-                      )}
-
-                      <Grid container spacing={1}>
-                        <Grid item xs={6}>
-                          <MetricTile label="Started" value={row.isIrrigating ? formatDateTime(status?.started_at) : '—'} />
-                        </Grid>
-                        <Grid item xs={6}>
-                          <MetricTile label="Voltage" value={formatVoltage(status?.voltage_v)} />
-                        </Grid>
-                        <Grid item xs={6}>
-                          <MetricTile label="Current" value={formatAmperage(status?.current_amp)} />
-                        </Grid>
-                        <Grid item xs={6}>
-                          <MetricTile label="Flow now" value={formatDischargeRate(status?.current_discharge_lpm)} />
-                        </Grid>
-                        <Grid item xs={12}>
-                          <MetricTile label="Total water this run" value={formatTotalDischarge(status?.total_discharge_liters)} />
-                        </Grid>
-                      </Grid>
-
-                      {row.hasTelemetry && (
-                        <Box sx={{ display: 'flex', gap: 1, mt: 1.5, flexWrap: 'wrap' }}>
-                          <SignalBadge
-                            on={status?.start_indicator}
-                            onLabel="Pump start ON"
-                            offLabel="Pump start off"
-                            color="success"
-                          />
-                          <SignalBadge
-                            on={status?.stop_indicator}
-                            onLabel="Pump stop ON"
-                            offLabel="Pump stop off"
-                            color="error"
-                          />
-                        </Box>
-                      )}
-
-                      <Box sx={{ display: 'flex', gap: 1, mt: 2, flexWrap: 'wrap' }}>
-                        <Button
-                          variant="contained"
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1, flexWrap: 'wrap' }}>
+                        <Chip
                           color="info"
-                          startIcon={<PlayArrowIcon />}
-                          disabled={commanding || row.isIrrigating}
-                          onClick={() => setConfirmStart(row)}
-                        >
-                          Start
-                        </Button>
-                        <Button
-                          variant="outlined"
-                          color="error"
-                          startIcon={<StopIcon />}
-                          disabled={commanding || (!row.isIrrigating && status?.pending_command !== 'start')}
-                          onClick={() => stopWatering(row)}
-                        >
-                          Stop
-                        </Button>
-                        {status?.pending_command && (
-                          <Chip
-                            size="small"
-                            color="warning"
-                            label={status.pending_command === 'start' ? 'Start pending' : 'Stop pending'}
-                          />
+                          label={`Running zone: ${activeZone.zone.zone_code}`}
+                          sx={{ fontWeight: 800, fontSize: '1rem', height: 36 }}
+                        />
+                        {activeZone.zone.description && (
+                          <Typography variant="body1" color="text.secondary">
+                            {activeZone.zone.description}
+                          </Typography>
                         )}
                       </Box>
-                    </Paper>
-                  </Grid>
-                );
-              })}
-            </Grid>
+                      {activeZones.length > 1 && (
+                        <Typography variant="body2" color="warning.main" sx={{ mt: 1 }}>
+                          Also reporting watering:{' '}
+                          {activeZones.slice(1).map((row) => row.zone.zone_code).join(', ')}
+                        </Typography>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <Typography variant="h4" fontWeight={800} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <PauseCircleOutlineIcon color="success" fontSize="large" />
+                        No watering
+                      </Typography>
+                      <Chip
+                        color="success"
+                        variant="outlined"
+                        label="Running zone: none"
+                        sx={{ fontWeight: 700, mt: 1 }}
+                      />
+                      <Typography variant="body1" color="text.secondary" sx={{ mt: 1 }}>
+                        Pump is idle. Use Start below or a program to begin watering.
+                      </Typography>
+                    </>
+                  )}
+                </Box>
+                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                  <Chip color="info" label={`${counts.irrigating} watering`} />
+                  <Chip color="success" variant="outlined" label={`${counts.idle} idle`} />
+                  {counts.noData > 0 && (
+                    <Chip variant="outlined" label={`${counts.noData} no signal`} />
+                  )}
+                </Box>
+              </Box>
+
+              <Typography variant="subtitle2" fontWeight={800} sx={{ mt: 3, mb: 1 }}>
+                Live readings
+                {activeZone ? ` · ${activeZone.zone.zone_code}` : ''}
+              </Typography>
+              <Grid container spacing={1.5}>
+                <Grid item xs={6} sm={4} md={3}>
+                  <MetricTile
+                    label="Running zone"
+                    value={activeZone ? activeZone.zone.zone_code : 'None'}
+                    emphasize={Boolean(activeZone)}
+                  />
+                </Grid>
+                <Grid item xs={6} sm={4} md={3}>
+                  <MetricTile
+                    label="Running for"
+                    value={activeZone
+                      ? formatIrrigationDurationLong(activeZone.status?.started_at, nowMs)
+                      : '—'}
+                    emphasize={Boolean(activeZone)}
+                  />
+                </Grid>
+                <Grid item xs={6} sm={4} md={3}>
+                  <MetricTile
+                    label="Started"
+                    value={activeZone ? formatDateTime(activeZone.status?.started_at) : '—'}
+                  />
+                </Grid>
+                <Grid item xs={6} sm={4} md={3}>
+                  <MetricTile
+                    label="Last update"
+                    value={activeZone?.status?.reported_at
+                      ? formatRelativeTime(activeZone.status.reported_at, nowMs)
+                      : (controlRow?.status?.reported_at
+                        ? formatRelativeTime(controlRow.status.reported_at, nowMs)
+                        : 'Never')}
+                  />
+                </Grid>
+                <Grid item xs={6} sm={4} md={3}>
+                  <MetricTile
+                    label="Voltage"
+                    value={formatVoltage(
+                      activeZone?.status?.voltage_v ?? controlRow?.status?.voltage_v,
+                    )}
+                    icon={<ElectricBoltIcon fontSize="small" color="action" />}
+                  />
+                </Grid>
+                <Grid item xs={6} sm={4} md={3}>
+                  <MetricTile
+                    label="Current"
+                    value={formatAmperage(
+                      activeZone?.status?.current_amp ?? controlRow?.status?.current_amp,
+                    )}
+                  />
+                </Grid>
+                <Grid item xs={6} sm={4} md={3}>
+                  <MetricTile
+                    label="Flow now"
+                    value={formatDischargeRate(
+                      activeZone?.status?.current_discharge_lpm
+                        ?? controlRow?.status?.current_discharge_lpm,
+                    )}
+                    icon={<SpeedIcon fontSize="small" color="action" />}
+                  />
+                </Grid>
+                <Grid item xs={6} sm={4} md={3}>
+                  <MetricTile
+                    label="Water used"
+                    value={formatTotalDischarge(
+                      activeZone?.status?.total_discharge_liters
+                        ?? controlRow?.status?.total_discharge_liters,
+                    )}
+                  />
+                </Grid>
+                <Grid item xs={6} sm={4} md={3}>
+                  <MetricTile
+                    label="Zone flow rate"
+                    value={
+                      (activeZone?.zone?.flow_rate_lph ?? controlRow?.zone?.flow_rate_lph) != null
+                        ? `${activeZone?.zone?.flow_rate_lph ?? controlRow.zone.flow_rate_lph} L/h`
+                        : '—'
+                    }
+                  />
+                </Grid>
+                <Grid item xs={6} sm={4} md={3}>
+                  <MetricTile
+                    label="Device"
+                    value={
+                      activeZone?.status?.device_code
+                        || controlRow?.status?.device_code
+                        || '—'
+                    }
+                  />
+                </Grid>
+                <Grid item xs={6} sm={4} md={3}>
+                  <MetricTile
+                    label="Pending command"
+                    value={
+                      (activeZone?.status?.pending_command
+                        || controlRow?.status?.pending_command
+                        || 'None')
+                    }
+                  />
+                </Grid>
+                <Grid item xs={6} sm={4} md={3}>
+                  <MetricTile
+                    label="Reported at"
+                    value={formatDateTime(
+                      activeZone?.status?.reported_at ?? controlRow?.status?.reported_at,
+                    )}
+                  />
+                </Grid>
+              </Grid>
+
+              <Box sx={{ display: 'flex', gap: 1, mt: 2, flexWrap: 'wrap' }}>
+                <SignalBadge
+                  on={Boolean(activeZone?.status?.start_indicator ?? controlRow?.status?.start_indicator)}
+                  onLabel="Pump start ON"
+                  offLabel="Pump start off"
+                  color="success"
+                />
+                <SignalBadge
+                  on={Boolean(activeZone?.status?.stop_indicator ?? controlRow?.status?.stop_indicator)}
+                  onLabel="Pump stop ON"
+                  offLabel="Pump stop off"
+                  color="error"
+                />
+                {activeZone && (
+                  <Chip color="info" variant="outlined" label={`Status: watering ${activeZone.zone.zone_code}`} />
+                )}
+                {!activeZone && (
+                  <Chip color="success" variant="outlined" label="Status: idle" />
+                )}
+              </Box>
+
+              {activeZone && (
+                <Button
+                  color="error"
+                  variant="contained"
+                  startIcon={<StopIcon />}
+                  sx={{ mt: 2 }}
+                  disabled={commanding}
+                  onClick={() => stopWatering(activeZone)}
+                >
+                  Stop watering {activeZone.zone.zone_code}
+                </Button>
+              )}
+            </Paper>
+
+            <Paper variant="outlined" sx={{ p: { xs: 2, sm: 3 }, mb: 3 }}>
+              <Typography variant="h6" fontWeight={800} gutterBottom>
+                Control irrigation
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                Choose a drip zone, then start or stop. Only one zone should run at a time.
+              </Typography>
+              <Grid container spacing={2} alignItems="center">
+                <Grid item xs={12} sm={6} md={4}>
+                  <FormControl fullWidth>
+                    <InputLabel>Zone</InputLabel>
+                    <Select
+                      value={controlRow ? String(controlRow.zone.id) : ''}
+                      label="Zone"
+                      onChange={(e) => setControlZoneId(e.target.value)}
+                    >
+                      {rows.map((row) => (
+                        <MenuItem key={row.zone.id} value={String(row.zone.id)}>
+                          {row.zone.zone_code}
+                          {row.zone.description ? ` — ${row.zone.description}` : ''}
+                          {row.isIrrigating ? ' (running now)' : ''}
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                </Grid>
+                <Grid item xs={12} sm={6} md={8}>
+                  <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                    <Button
+                      variant="contained"
+                      color="info"
+                      size="large"
+                      startIcon={commanding ? <CircularProgress size={18} color="inherit" /> : <PlayArrowIcon />}
+                      disabled={!controlRow || commanding || controlRow.isIrrigating}
+                      onClick={() => setConfirmStart(controlRow)}
+                    >
+                      Start watering
+                    </Button>
+                    <Button
+                      variant="contained"
+                      color="error"
+                      size="large"
+                      startIcon={<StopIcon />}
+                      disabled={!controlRow || commanding || (!controlRow.isIrrigating && controlRow.status?.pending_command !== 'start')}
+                      onClick={() => stopWatering(controlRow)}
+                    >
+                      Stop watering
+                    </Button>
+                  </Box>
+                </Grid>
+              </Grid>
+              {controlRow?.status?.pending_command && (
+                <Alert severity="info" sx={{ mt: 2 }}>
+                  {controlRow.status.pending_command === 'start' ? 'Start' : 'Stop'} sent to{' '}
+                  {controlRow.zone.zone_code} — waiting for the controller to apply it.
+                </Alert>
+              )}
+            </Paper>
           </>
         )}
       </TabPanel>
