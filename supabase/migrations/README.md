@@ -26,4 +26,5 @@
 -- 033_rename_sensor_method_7in1.sql — update legacy 8-in-1 method labels in soil_observations
 -- 034_lot_ids_for_farm.sql — public add-tree bootstrap helper
 -- 042_irrigation_device_io.sql — device wired to controller input (X0–X8) or output (Y0–Y8)
+-- 043_irrigation_job_duration.sql — fertigation jobs stop after on_duration_minutes
 -- =============================================================================

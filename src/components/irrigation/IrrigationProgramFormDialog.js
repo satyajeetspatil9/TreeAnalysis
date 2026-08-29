@@ -39,6 +39,10 @@ function stepHasZoneAndLiters(step) {
   return Boolean(step?.zone_id) && Number(step?.target_liters) > 0;
 }
 
+function stepHasZoneAndDuration(step) {
+  return Boolean(step?.zone_id) && Number(step?.on_duration_minutes) > 0;
+}
+
 function minutesOf(hhmm) {
   const [h, m] = String(hhmm || '').split(':').map(Number);
   return (h || 0) * 60 + (m || 0);
@@ -81,10 +85,12 @@ export default function IrrigationProgramFormDialog({
 }) {
   const [error, setError] = useState(null);
   const [submitted, setSubmitted] = useState(false);
-  const motorRequired = programType !== 'fertigation';
+  const isFertigation = programType === 'fertigation';
 
   const startTime = formatTimeInput(form.start_times?.[0]) || '';
-  const hasCompleteStep = (form.steps || []).some(stepHasZoneAndLiters);
+  const hasCompleteStep = (form.steps || []).some(
+    isFertigation ? stepHasZoneAndDuration : stepHasZoneAndLiters,
+  );
 
   const totalMinutes = useMemo(
     () => estimateProgramMinutes(form.steps, zones),
@@ -120,6 +126,16 @@ export default function IrrigationProgramFormDialog({
       return { ...f, motor_device_ids: [motors[0].id] };
     });
   }, [open, editing, motors, form.motor_device_ids, setForm]);
+
+  useEffect(() => {
+    if (!open || editing || !isFertigation) return;
+    if ((form.injector_ids || []).length) return;
+    if (injectors.length !== 1) return;
+    setForm((f) => {
+      if ((f.injector_ids || []).length) return f;
+      return { ...f, injector_ids: [injectors[0].id] };
+    });
+  }, [open, editing, isFertigation, injectors, form.injector_ids, setForm]);
 
   const toggleDay = (day) => {
     setForm((prev) => {
@@ -158,12 +174,18 @@ export default function IrrigationProgramFormDialog({
       setError('Enter a start time.');
       return;
     }
-    if (motorRequired && !(form.motor_device_ids || []).length) {
+    if (!(form.motor_device_ids || []).length) {
       setError('Select an irrigation motor.');
       return;
     }
+    if (isFertigation && !(form.injector_ids || []).length) {
+      setError('Select a fertigation injector.');
+      return;
+    }
     if (!hasCompleteStep) {
-      setError('Add at least one zone with target liters.');
+      setError(isFertigation
+        ? 'Add at least one zone with duration in minutes.'
+        : 'Add at least one zone with target liters.');
       return;
     }
     setError(null);
@@ -301,8 +323,8 @@ export default function IrrigationProgramFormDialog({
           <Grid item xs={12} sm={6}>
             <FormControl
               fullWidth
-              required={motorRequired}
-              error={submitted && motorRequired && !(form.motor_device_ids || []).length}
+              required
+              error={submitted && !(form.motor_device_ids || []).length}
               disabled={motors.length === 0}
             >
               <InputLabel>Irrigation motor</InputLabel>
@@ -314,9 +336,6 @@ export default function IrrigationProgramFormDialog({
                   motor_device_ids: e.target.value ? [Number(e.target.value)] : [],
                 }))}
               >
-                {!motorRequired && (
-                  <MenuItem value="">None</MenuItem>
-                )}
                 {motors.map((m) => (
                   <MenuItem key={m.id} value={String(m.id)}>
                     {m.name}{m.device_code ? ` · ${m.device_code}` : ''}
@@ -326,12 +345,46 @@ export default function IrrigationProgramFormDialog({
               <FormHelperText>
                 {motors.length === 0
                   ? 'Add an irrigation motor under Devices first.'
-                  : (submitted && motorRequired && !(form.motor_device_ids || []).length
+                  : (submitted && !(form.motor_device_ids || []).length
                     ? 'Required'
                     : ' ')}
               </FormHelperText>
             </FormControl>
           </Grid>
+
+          {isFertigation && (
+            <Grid item xs={12} sm={6}>
+              <FormControl
+                fullWidth
+                required
+                error={submitted && !(form.injector_ids || []).length}
+                disabled={injectors.length === 0}
+              >
+                <InputLabel>Injector</InputLabel>
+                <Select
+                  label="Injector"
+                  value={form.injector_ids[0] != null ? String(form.injector_ids[0]) : ''}
+                  onChange={(e) => setForm((f) => ({
+                    ...f,
+                    injector_ids: e.target.value ? [Number(e.target.value)] : [],
+                  }))}
+                >
+                  {injectors.map((m) => (
+                    <MenuItem key={m.id} value={String(m.id)}>
+                      {m.name}{m.device_code ? ` · ${m.device_code}` : ''}
+                    </MenuItem>
+                  ))}
+                </Select>
+                <FormHelperText>
+                  {injectors.length === 0
+                    ? 'Add a fertigation injector under Devices first.'
+                    : (submitted && !(form.injector_ids || []).length
+                      ? 'Required'
+                      : 'Runs with the irrigation motor for the zone duration.')}
+                </FormHelperText>
+              </FormControl>
+            </Grid>
+          )}
 
           <Grid item xs={12}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
@@ -362,7 +415,7 @@ export default function IrrigationProgramFormDialog({
                       {idx + 1}
                     </Typography>
                   </Grid>
-                  <Grid item xs={10} sm={5}>
+                  <Grid item xs={10} sm={isFertigation ? 6 : 5}>
                     <FormControl fullWidth size="small" required error={showStepError && !step.zone_id}>
                       <InputLabel>Zone</InputLabel>
                       <Select
@@ -370,6 +423,10 @@ export default function IrrigationProgramFormDialog({
                         value={step.zone_id}
                         onChange={(e) => {
                           const zone_id = e.target.value;
+                          if (isFertigation) {
+                            updateStep(idx, { zone_id });
+                            return;
+                          }
                           const z = (zones || []).find((item) => String(item.id) === String(zone_id));
                           const computed = estimateMinutesFromLiters(step.target_liters, z?.flow_rate_lph);
                           updateStep(idx, {
@@ -387,31 +444,55 @@ export default function IrrigationProgramFormDialog({
                       )}
                     </FormControl>
                   </Grid>
-                  <Grid item xs={6} sm={3}>
-                    <TextField
-                      fullWidth
-                      size="small"
-                      required
-                      label="Liters"
-                      type="number"
-                      value={step.target_liters}
-                      error={showStepError && !(Number(step.target_liters) > 0)}
-                      helperText={showStepError && !(Number(step.target_liters) > 0) ? 'Required' : ' '}
-                      onChange={(e) => {
-                        const target_liters = e.target.value;
-                        const computed = estimateMinutesFromLiters(target_liters, zone?.flow_rate_lph);
-                        updateStep(idx, {
-                          target_liters,
-                          on_duration_minutes: computed != null ? String(computed) : '',
-                        });
-                      }}
-                    />
-                  </Grid>
-                  <Grid item xs={4} sm={2}>
-                    <Typography variant="body2" color="text.secondary">
-                      {est != null ? `~${formatEstimatedDuration(est)}` : '—'}
-                    </Typography>
-                  </Grid>
+                  {isFertigation ? (
+                    <Grid item xs={8} sm={4}>
+                      <TextField
+                        fullWidth
+                        size="small"
+                        required
+                        label="Duration (min)"
+                        type="number"
+                        value={step.on_duration_minutes}
+                        error={showStepError && !(Number(step.on_duration_minutes) > 0)}
+                        helperText={showStepError && !(Number(step.on_duration_minutes) > 0)
+                          ? 'Required'
+                          : ' '}
+                        inputProps={{ min: 1, step: 1 }}
+                        onChange={(e) => updateStep(idx, {
+                          on_duration_minutes: e.target.value,
+                          target_liters: '',
+                        })}
+                      />
+                    </Grid>
+                  ) : (
+                    <>
+                      <Grid item xs={6} sm={3}>
+                        <TextField
+                          fullWidth
+                          size="small"
+                          required
+                          label="Liters"
+                          type="number"
+                          value={step.target_liters}
+                          error={showStepError && !(Number(step.target_liters) > 0)}
+                          helperText={showStepError && !(Number(step.target_liters) > 0) ? 'Required' : ' '}
+                          onChange={(e) => {
+                            const target_liters = e.target.value;
+                            const computed = estimateMinutesFromLiters(target_liters, zone?.flow_rate_lph);
+                            updateStep(idx, {
+                              target_liters,
+                              on_duration_minutes: computed != null ? String(computed) : '',
+                            });
+                          }}
+                        />
+                      </Grid>
+                      <Grid item xs={4} sm={2}>
+                        <Typography variant="body2" color="text.secondary">
+                          {est != null ? `~${formatEstimatedDuration(est)}` : '—'}
+                        </Typography>
+                      </Grid>
+                    </>
+                  )}
                   <Grid item xs={2} sm={1} sx={{ textAlign: 'right' }}>
                     <IconButton
                       size="small"
@@ -439,27 +520,6 @@ export default function IrrigationProgramFormDialog({
               Add zone
             </Button>
           </Grid>
-
-          {programType === 'fertigation' && injectors.length > 0 && (
-            <Grid item xs={12} sm={6}>
-              <FormControl fullWidth size="small">
-                <InputLabel>Injector</InputLabel>
-                <Select
-                  label="Injector"
-                  value={form.injector_ids[0] || ''}
-                  onChange={(e) => setForm((f) => ({
-                    ...f,
-                    injector_ids: e.target.value ? [e.target.value] : [],
-                  }))}
-                >
-                  <MenuItem value="">None</MenuItem>
-                  {injectors.map((m) => (
-                    <MenuItem key={m.id} value={m.id}>{m.name}</MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-            </Grid>
-          )}
         </Grid>
       </DialogContent>
       <DialogActions sx={{ px: 3, py: 2 }}>

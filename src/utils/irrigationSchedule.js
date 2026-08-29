@@ -44,6 +44,9 @@ export function isMissingScheduleTable(error) {
 
 export function scheduleTableHint(message) {
   if (!message) return message;
+  if (/duration_elapsed_minutes/.test(message) || /column .*on_duration_minutes.*irrigation_jobs/.test(message)) {
+    return `${message} Run migration 043_irrigation_job_duration.sql in Supabase SQL Editor.`;
+  }
   if (/io_type/.test(message)) {
     return `${message} Run migration 042_irrigation_device_io.sql in Supabase SQL Editor.`;
   }

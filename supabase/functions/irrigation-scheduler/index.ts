@@ -135,15 +135,15 @@ async function resolveStepTargetLiters(
     on_duration_minutes: number | null;
     zone_id: number | null;
   },
-  zonesById: Map<number, { flow_rate_lph: number | null }>,
 ) {
   if (step.target_liters != null) return Number(step.target_liters);
-  if (step.on_duration_minutes != null && step.zone_id) {
-    const zone = zonesById.get(step.zone_id);
-    const flow = Number(zone?.flow_rate_lph);
-    if (flow > 0) return (flow * Number(step.on_duration_minutes)) / 60;
-  }
   return null;
+}
+
+function resolveStepDuration(step: { on_duration_minutes: number | null }) {
+  return step.on_duration_minutes != null && Number(step.on_duration_minutes) > 0
+    ? Number(step.on_duration_minutes)
+    : null;
 }
 
 async function createJobFromProgram(
@@ -180,11 +180,18 @@ async function createJobFromProgram(
     .limit(1);
   if (openFarmJobs?.length) return null;
 
-  const first = activeSteps[0];
-  const target = await resolveStepTargetLiters(
-    first as { target_liters: number | null; on_duration_minutes: number | null; zone_id: number | null },
-    zonesById,
-  );
+  const first = activeSteps[0] as {
+    id: number;
+    zone_id: number | null;
+    seq: number;
+    target_liters: number | null;
+    on_duration_minutes: number | null;
+  };
+  const isFertigation = program.program_type === 'fertigation';
+  const target = isFertigation
+    ? null
+    : await resolveStepTargetLiters(first);
+  const duration = isFertigation ? resolveStepDuration(first) : null;
 
   const now = new Date().toISOString();
   const { data: job, error } = await supabase
@@ -194,9 +201,11 @@ async function createJobFromProgram(
       program_id: program.id,
       program_step_id: first.id,
       zone_id: first.zone_id,
-      job_type: program.program_type === 'fertigation' ? 'fertigation' : 'water',
+      job_type: isFertigation ? 'fertigation' : 'water',
       status: 'planned',
       target_liters: target,
+      on_duration_minutes: duration,
+      duration_elapsed_minutes: 0,
       liters_delivered: 0,
       current_step_seq: Number(first.seq) || 0,
       window_mode: true,
@@ -243,19 +252,30 @@ async function advanceOrCompleteJob(
     return null;
   }
 
-  const target = await resolveStepTargetLiters(
-    next as { target_liters: number | null; on_duration_minutes: number | null; zone_id: number | null },
-    zonesById,
-  );
+  const nextStep = next as {
+    id: number;
+    zone_id: number | null;
+    seq: number;
+    target_liters: number | null;
+    on_duration_minutes: number | null;
+  };
+  const isFertigation = job.job_type === 'fertigation';
+  const target = isFertigation
+    ? null
+    : await resolveStepTargetLiters(nextStep);
+  const duration = isFertigation ? resolveStepDuration(nextStep) : null;
 
   const { data: updated } = await supabase.from('irrigation_jobs').update({
     program_step_id: next.id,
     zone_id: next.zone_id,
     current_step_seq: Number(next.seq) || 0,
     target_liters: target,
+    on_duration_minutes: duration,
+    duration_elapsed_minutes: 0,
     liters_delivered: 0,
     liters_baseline: null,
     status: 'planned',
+    started_at: null,
     updated_at: new Date().toISOString(),
   }).eq('id', job.id).select('*').single();
 
@@ -449,8 +469,24 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
     }
 
     const target = job.target_liters != null ? Number(job.target_liters) : null;
+    const durationMinutes = job.on_duration_minutes != null ? Number(job.on_duration_minutes) : null;
     const delivered = Number(job.liters_delivered) || 0;
-    const hitTarget = target != null && delivered >= target;
+
+    if (job.status === 'running' && durationMinutes != null) {
+      const last = new Date(String(job.updated_at || job.started_at || now.toISOString())).getTime();
+      const deltaMin = Math.max(0, (now.getTime() - last) / 60000);
+      const elapsed = Number(job.duration_elapsed_minutes || 0) + deltaMin;
+      await supabase.from('irrigation_jobs').update({
+        duration_elapsed_minutes: elapsed,
+        updated_at: now.toISOString(),
+      }).eq('id', job.id);
+      job.duration_elapsed_minutes = elapsed;
+    }
+
+    const hitLiters = target != null && delivered >= target;
+    const hitDuration = durationMinutes != null
+      && Number(job.duration_elapsed_minutes || 0) >= durationMinutes;
+    const hitTarget = hitLiters || hitDuration;
     const windowBlocks = job.window_mode && !inWindow && job.job_type !== 'manual';
 
     if (hitTarget) {
@@ -534,14 +570,15 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
       }).eq('id', job.id);
     }
 
-    const untilPayload = target != null
-      ? { until: { liters: target } }
-      : {};
+    const untilPayload = durationMinutes != null
+      ? { until: { minutes: durationMinutes } }
+      : (target != null ? { until: { liters: target } } : {});
 
     for (const code of extraCodes) {
       await enqueueCommand(supabase, farmId, code, 'start', {
         jobId: job.id,
         zoneId: job.zone_id,
+        payload: untilPayload,
       });
     }
     if (valveCode) {

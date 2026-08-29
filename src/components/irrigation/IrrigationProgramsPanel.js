@@ -82,6 +82,9 @@ function IrrigationProgramsPanel({
   const defaultMotorIds = () => (
     motors.length === 1 ? [motors[0].id] : []
   );
+  const defaultInjectorIds = () => (
+    injectors.length === 1 ? [injectors[0].id] : []
+  );
 
   const load = useCallback(async () => {
     if (!farmId) return;
@@ -160,7 +163,7 @@ function IrrigationProgramsPanel({
       use_allowed_windows: true,
       motor_device_ids: defaultMotorIds(),
       steps: [emptyStep(0)],
-      injector_ids: [],
+      injector_ids: programType === 'fertigation' ? defaultInjectorIds() : [],
     });
     setDialogOpen(true);
   };
@@ -205,12 +208,24 @@ function IrrigationProgramsPanel({
       setMessage({ type: 'error', text: 'Start time is required.' });
       return;
     }
-    if (programType !== 'fertigation' && !(form.motor_device_ids || []).length) {
+    if (!(form.motor_device_ids || []).length) {
       setMessage({ type: 'error', text: 'Select an irrigation motor.' });
       return;
     }
-    if (!(form.steps || []).some((s) => s.zone_id && Number(s.target_liters) > 0)) {
-      setMessage({ type: 'error', text: 'Add at least one zone with target liters.' });
+    if (programType === 'fertigation' && !(form.injector_ids || []).length) {
+      setMessage({ type: 'error', text: 'Select a fertigation injector.' });
+      return;
+    }
+    const hasCompleteStep = programType === 'fertigation'
+      ? (form.steps || []).some((s) => s.zone_id && Number(s.on_duration_minutes) > 0)
+      : (form.steps || []).some((s) => s.zone_id && Number(s.target_liters) > 0);
+    if (!hasCompleteStep) {
+      setMessage({
+        type: 'error',
+        text: programType === 'fertigation'
+          ? 'Add at least one zone with duration in minutes.'
+          : 'Add at least one zone with target liters.',
+      });
       return;
     }
     setSaving(true);
@@ -263,10 +278,22 @@ function IrrigationProgramsPanel({
     }
 
     const stepRows = form.steps
-      .filter((s) => s.zone_id && Number(s.target_liters) > 0)
+      .filter((s) => (programType === 'fertigation'
+        ? s.zone_id && Number(s.on_duration_minutes) > 0
+        : s.zone_id && Number(s.target_liters) > 0))
       .map((s, idx) => {
         const zone = (zones || []).find((z) => String(z.id) === String(s.zone_id));
         const est = estimateMinutesFromLiters(s.target_liters, zone?.flow_rate_lph);
+        if (programType === 'fertigation') {
+          return {
+            program_id: programId,
+            seq: idx,
+            zone_id: Number(s.zone_id),
+            target_liters: null,
+            on_duration_minutes: Number(s.on_duration_minutes),
+            is_active: s.is_active !== false,
+          };
+        }
         return {
           program_id: programId,
           seq: idx,
@@ -288,19 +315,21 @@ function IrrigationProgramsPanel({
       }
     }
 
-    if (programType === 'fertigation' && form.injector_ids.length) {
-      const deviceRows = form.injector_ids.map((deviceId) => ({
+    if (programType === 'fertigation') {
+      const deviceRows = (form.injector_ids || []).map((deviceId) => ({
         program_id: programId,
-        device_id: deviceId,
+        device_id: Number(deviceId),
         role: 'injector',
       }));
-      const { error: deviceError } = await supabase
-        .from('irrigation_program_devices')
-        .insert(deviceRows);
-      if (deviceError) {
-        setMessage({ type: 'error', text: scheduleTableHint(deviceError.message) });
-        setSaving(false);
-        return;
+      if (deviceRows.length) {
+        const { error: deviceError } = await supabase
+          .from('irrigation_program_devices')
+          .insert(deviceRows);
+        if (deviceError) {
+          setMessage({ type: 'error', text: scheduleTableHint(deviceError.message) });
+          setSaving(false);
+          return;
+        }
       }
     }
 
@@ -633,7 +662,9 @@ function IrrigationProgramsPanel({
                       return (
                         <Typography key={step.id || step.seq} variant="body2">
                           {stepIdx + 1}. {zone?.zone_code || 'Zone'} —{' '}
-                          {step.target_liters != null ? `${step.target_liters} L` : `${step.on_duration_minutes} min`}
+                          {step.target_liters != null
+                            ? `${step.target_liters} L`
+                            : `${step.on_duration_minutes} min (motor + injector)`}
                           {stepMins != null ? ` (~${formatEstimatedDuration(stepMins)})` : ''}
                           {stepIdx < steps.length - 1 ? ' → then next zone' : ''}
                         </Typography>
