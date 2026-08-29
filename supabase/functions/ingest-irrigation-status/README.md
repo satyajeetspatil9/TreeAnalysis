@@ -33,6 +33,8 @@ Identify the zone with a Devices `device_code` (preferred) and/or `zone_code` (L
   "current_discharge_lpm": 12.5,
   "total_discharge_liters": 450,
   "power_present": true,
+  "outage_started_at": null,
+  "outage_ended_at": null,
   "ack_command": true,
   "command_id": 12
 }
@@ -50,11 +52,38 @@ nothing else in it:
 `power`, `mains`, `electricity`, and `power_available` are accepted as aliases, as are the
 strings `"on"` / `"off"` / `"present"` / `"absent"`.
 
-While power is absent the scheduler stops and pauses every running job
-(`status = paused_no_power`), creates no new jobs, and leaves other schedules alone. When
-`power_present` turns true again the paused jobs resume with their delivered litres and
-elapsed minutes intact, and scheduled devices are switched back on. Nothing needs to be
-re-armed by hand.
+**Outage start and end come from the controller.** Do not omit them; the farm clock is not
+used as a substitute.
+
+When mains drops:
+
+```json
+{
+  "power_present": false,
+  "outage_started_at": "2026-08-31T06:00:00+05:30"
+}
+```
+
+When mains returns, send both ends of the outage (start may be repeated):
+
+```json
+{
+  "power_present": true,
+  "outage_started_at": "2026-08-31T06:00:00+05:30",
+  "outage_ended_at": "2026-08-31T07:00:00+05:30"
+}
+```
+
+Aliases: `outage_start` / `power_lost_at` / `electricity_off_at` for start;
+`outage_end` / `power_restored_at` / `electricity_on_at` for end.
+
+The scheduler uses **those two timestamps** to measure the outage:
+
+- a job that was running is extended by that many minutes (10 minutes off → 10 minutes extra run);
+- remaining programs today start that many minutes later (listed 6:00, outage until 7:00 → remaining starts +1 hour).
+
+Programs stay paused until `outage_ended_at` arrives. Other (weekly device) schedules follow
+`power_present` only.
 
 Ack a command without zone telemetry (motors, injectors, scheduled devices):
 
@@ -137,3 +166,5 @@ after 30 minutes and are never retried, so the pin's own `until` is the real saf
 - `043_irrigation_job_duration.sql`
 - `044_irrigation_event_notes.sql`
 - `045_irrigation_power_and_per_pin.sql`
+- `046_irrigation_power_day_shift.sql`
+- `047_irrigation_controller_outage_times.sql`

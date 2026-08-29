@@ -61,8 +61,11 @@ export function scheduleTableHint(message) {
   if (!message) return message;
   if (/irrigation_power_status/.test(message)
     || /paused_no_power/.test(message)
-    || /max_duration_minutes/.test(message)) {
-    return `${message} Run migration 045_irrigation_power_and_per_pin.sql in Supabase SQL Editor.`;
+    || /max_duration_minutes/.test(message)
+    || /shift_minutes/.test(message)
+    || /outage_started_at/.test(message)
+    || /outage_ended_at/.test(message)) {
+    return `${message} Run migration 047_irrigation_controller_outage_times.sql (or 046) in Supabase SQL Editor.`;
   }
   if (/duration_elapsed_minutes/.test(message) || /column .*on_duration_minutes.*irrigation_jobs/.test(message)) {
     return `${message} Run migration 043_irrigation_job_duration.sql in Supabase SQL Editor.`;
@@ -250,6 +253,8 @@ export function buildLivePostTelemetryJson(rows = [], { emptyNote } = {}) {
       total_discharge_liters: status.total_discharge_liters,
       device_code: status.device_code,
       power_present: true,
+      outage_started_at: null,
+      outage_ended_at: null,
       ack_command: Boolean(status.pending_command),
     }));
 
@@ -268,6 +273,8 @@ export function buildLivePostTelemetryJson(rows = [], { emptyNote } = {}) {
       total_discharge_liters: null,
       device_code: 'Y0',
       power_present: true,
+      outage_started_at: null,
+      outage_ended_at: null,
     }, null, 2);
   }
 
@@ -324,7 +331,7 @@ export async function fetchPowerStatus(farmId) {
   if (!farmId) return { power: null, error: null };
   const { data, error } = await supabase
     .from('irrigation_power_status')
-    .select('power_present, changed_at, reported_at')
+    .select('power_present, changed_at, reported_at, shift_minutes, local_date, outage_started_at, outage_ended_at')
     .eq('farm_id', farmId)
     .maybeSingle();
   if (error && !isMissingScheduleTable(error)) return { power: null, error };
@@ -498,7 +505,7 @@ export async function createAdHocVolumeJob({
   targetLiters = null,
   onDurationMinutes = null,
   jobType = 'manual',
-  windowMode = true,
+  windowMode = false,
   deviceIds = [],
   motorDeviceId = null,
   injectorDeviceIds = [],
@@ -756,7 +763,7 @@ export function formatClockDisplay(time) {
 export function jobStatusLabel(status) {
   if (status === 'running') return 'Running now';
   if (status === 'planned') return 'Waiting its turn';
-  if (status === 'paused_outside_window') return 'Outside allowed hours';
+  if (status === 'paused_outside_window') return 'Waiting';
   if (status === 'paused_no_power') return 'Paused — no mains power';
   if (status === 'completed') return 'Done';
   if (status === 'cancelled') return 'Cancelled';
@@ -788,7 +795,7 @@ export function programDaysLabel(daysOfWeek) {
 
 export function programTimesLabel(startTimes) {
   const times = Array.isArray(startTimes) ? startTimes : [];
-  if (!times.length) return 'Power hours';
+  if (!times.length) return 'No start time';
   return times.map((t) => formatClockDisplay(t) || formatTimeInput(t)).join(', ');
 }
 
@@ -801,43 +808,6 @@ export function formatEstimatedDuration(minutes) {
   if (hours > 0 && rem > 0) return `${hours}h ${rem}m`;
   if (hours > 0) return `${hours}h`;
   return `${rem}m`;
-}
-
-/**
- * Suggest program start times from MSEB allowed windows for selected weekdays.
- * Returns sorted unique HH:MM starts (and optionally ends for display).
- */
-export function suggestStartsFromAllowedWindows(windows, daysOfWeek = []) {
-  const days = (daysOfWeek || []).map(Number);
-  const starts = new Set();
-  const slots = [];
-
-  (windows || [])
-    .filter((w) => w.enabled !== false)
-    .filter((w) => !days.length || days.includes(Number(w.weekday)))
-    .forEach((w) => {
-      const start = timeToInputValue(w.start_time);
-      const end = timeToInputValue(w.end_time);
-      if (!start) return;
-      starts.add(start);
-      slots.push({
-        weekday: Number(w.weekday),
-        start,
-        end,
-        label: `${WEEKDAY_LABELS[Number(w.weekday)] || '?'} ${start}–${end}`,
-      });
-    });
-
-  return {
-    starts: [...starts].sort(),
-    slots: slots.sort((a, b) => a.weekday - b.weekday || a.start.localeCompare(b.start)),
-  };
-}
-
-/** Earliest suggested start for new programs; falls back to 06:00 */
-export function defaultStartFromWindows(windows, daysOfWeek = []) {
-  const { starts } = suggestStartsFromAllowedWindows(windows, daysOfWeek);
-  return starts[0] || '06:00';
 }
 
 export function estimateStepMinutes(step, zones) {

@@ -21,13 +21,10 @@ import {
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
 import {
-  defaultStartFromWindows,
   estimateMinutesFromLiters,
   estimateProgramMinutes,
-  formatClockDisplay,
   formatEstimatedDuration,
   formatTimeInput,
-  suggestStartsFromAllowedWindows,
   WEEKDAY_LABELS,
 } from '../../utils/irrigationSchedule';
 
@@ -41,33 +38,6 @@ function stepHasZoneAndLiters(step) {
 
 function stepHasZoneAndDuration(step) {
   return Boolean(step?.zone_id) && Number(step?.on_duration_minutes) > 0;
-}
-
-function minutesOf(hhmm) {
-  const [h, m] = String(hhmm || '').split(':').map(Number);
-  return (h || 0) * 60 + (m || 0);
-}
-
-function groupAllowedRanges(windows, daysOfWeek) {
-  const { slots } = suggestStartsFromAllowedWindows(windows, daysOfWeek);
-  const byRange = new Map();
-
-  slots.forEach((slot) => {
-    const start = formatClockDisplay(slot.start) || slot.start;
-    const end = formatClockDisplay(slot.end) || slot.end;
-    const key = `${start} – ${end}`;
-    const days = byRange.get(key) || [];
-    days.push(slot.weekday);
-    byRange.set(key, days);
-  });
-
-  return [...byRange.entries()].map(([range, days]) => ({
-    range,
-    days: [...new Set(days)]
-      .sort((a, b) => a - b)
-      .map((d) => WEEKDAY_LABELS[d])
-      .join(', '),
-  }));
 }
 
 const fieldsetSx = {
@@ -95,7 +65,6 @@ export default function IrrigationProgramFormDialog({
   form,
   setForm,
   zones,
-  windows,
   motors,
   injectors,
   programType,
@@ -115,19 +84,6 @@ export default function IrrigationProgramFormDialog({
     () => estimateProgramMinutes(form.steps, zones),
     [form.steps, zones],
   );
-
-  const allowedRanges = useMemo(
-    () => groupAllowedRanges(windows, form.days_of_week),
-    [windows, form.days_of_week],
-  );
-
-  const startOutsideAllowed = useMemo(() => {
-    if (!startTime) return false;
-    const { slots } = suggestStartsFromAllowedWindows(windows, form.days_of_week);
-    if (!slots.length) return false;
-    const now = minutesOf(startTime);
-    return !slots.some((s) => now >= minutesOf(s.start) && now < minutesOf(s.end));
-  }, [windows, form.days_of_week, startTime]);
 
   useEffect(() => {
     if (open) {
@@ -160,8 +116,6 @@ export default function IrrigationProgramFormDialog({
     setForm((prev) => ({
       ...prev,
       days_of_week,
-      start_times: [defaultStartFromWindows(windows, days_of_week)],
-      use_allowed_windows: true,
     }));
   };
 
@@ -174,8 +128,6 @@ export default function IrrigationProgramFormDialog({
       return {
         ...prev,
         days_of_week,
-        start_times: [defaultStartFromWindows(windows, days_of_week)],
-        use_allowed_windows: true,
       };
     });
   };
@@ -231,7 +183,7 @@ export default function IrrigationProgramFormDialog({
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
           {isFertigation
             ? 'Selected equipment terminals (motor, injector, zone valve) start and stop together. Next zone starts when that time is over.'
-            : 'Each zone waters until the liters are done, then the next zone starts. Only runs during power hours.'}
+            : 'Each zone waters until the liters are done, then the next zone starts. If mains is late, remaining programs today move by that delay. A mid-run outage extends this program and shifts later ones.'}
         </Typography>
 
         {error && (
@@ -299,7 +251,6 @@ export default function IrrigationProgramFormDialog({
                     onChange={(e) => setForm((f) => ({
                       ...f,
                       start_times: [e.target.value],
-                      use_allowed_windows: true,
                     }))}
                     InputLabelProps={{ shrink: true }}
                     inputProps={{ step: 300 }}
@@ -307,33 +258,9 @@ export default function IrrigationProgramFormDialog({
                     helperText={submitted && !startTime ? 'Required' : undefined}
                   />
                 </Grid>
-                <Grid item xs={12} sm={8}>
-                  <FormControl component="fieldset" variant="standard" fullWidth sx={{ ...fieldsetSx, pb: 1.25 }}>
-                    <FormLabel component="legend" sx={legendSx}>Allowed timing</FormLabel>
-                    {allowedRanges.length === 0 ? (
-                      <Typography variant="body2" color="text.secondary">
-                        No power hours for these days. Set them under Allowed hours.
-                      </Typography>
-                    ) : (
-                      allowedRanges.map((item) => (
-                        <Typography key={item.range} variant="body2">
-                          {item.days}: {item.range}
-                        </Typography>
-                      ))
-                    )}
-                  </FormControl>
-                </Grid>
               </Grid>
             </FormControl>
           </Grid>
-
-          {startOutsideAllowed && (
-            <Grid item xs={12}>
-              <Alert severity="info">
-                {formatClockDisplay(startTime)} is outside power hours. It will wait until power is on.
-              </Alert>
-            </Grid>
-          )}
 
           <Grid item xs={12}>
             <FormControl component="fieldset" variant="standard" fullWidth sx={fieldsetSx}>

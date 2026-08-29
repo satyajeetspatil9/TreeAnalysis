@@ -27,7 +27,9 @@ Omit `farm_id` to process all farms.
 1. `039_irrigation_schedule_control.sql`
 2. `040_irrigation_scheduler_cron.sql`
 3. `045_irrigation_power_and_per_pin.sql`
-4. Insert/update cron settings:
+4. `046_irrigation_power_day_shift.sql`
+5. `047_irrigation_controller_outage_times.sql`
+6. Insert/update cron settings:
 
 ```sql
 INSERT INTO irrigation_scheduler_cron_settings (singleton_id, anon_key, cron_secret, enabled)
@@ -44,11 +46,16 @@ SET anon_key = EXCLUDED.anon_key,
 Every pass makes **one round of reads** for the farm, decides everything in memory, then
 flushes batched writes. A minute with nothing to do performs no writes at all.
 
-- Creates a job when a program's `start_times` is reached in Asia/Kolkata, within a
-  15-minute grace for a missed tick. It never starts hours late on a later tick.
-- Creation no longer waits for the farm to be free. A program due at 08:00 gets its job at
-  08:00 and waits its turn, so `scheduled_for` records the real program time and the
-  Programs tab shows it as "Waiting its turn" instead of silently skipping the day.
+- Creates a job when a program's `start_times` plus today's `shift_minutes` is reached
+  in Asia/Kolkata, within a 15-minute grace. Allowed hours are not used.
+- If mains is still off at the first unstarted start time, the controller's
+  `outage_ended_at` postpones **every remaining program today** by the lateness
+  (listed 6:00, outage ended 7:00 → remaining starts +60 minutes). The duration is
+  `outage_ended_at − outage_started_at` from the controller, not the time we received the POST.
+- If mains drops while a program is running, that job's duration/cap grows by that same
+  outage length and remaining programs today shift by it.
+- Creation no longer waits for the farm to be free. A program due at its (shifted) start
+  gets its job then and waits its turn.
 - Only one job holds the pump: manual first, then the running job, then `run_order`.
 - Enqueues **one command per terminal**, each with its own `until`. The metered zone valve
   gets `liters`; motors and injectors get `minutes`. Motors are queued first so firmware
@@ -58,9 +65,8 @@ flushes batched writes. A minute with nothing to do performs no writes at all.
   keeping the job — and therefore every later program — open forever.
 - Elapsed time is derived from `started_at` plus banked `duration_elapsed_minutes`, so it
   needs no per-minute write and does not drift when the ingest function touches the job.
-- Pauses outside `irrigation_allowed_windows` and resumes with progress intact.
-- Pauses on mains loss (`irrigation_power_status.power_present = false`) as
-  `paused_no_power` and resumes automatically when power returns.
+- Pauses on mains loss (`power_present = false`) as `paused_no_power`. Programs resume
+  after the controller sends `outage_ended_at`.
 - Weekly `irrigation_device_schedules` run on desired state, not the exact minute: any tick
   recovers a missed start or stop, and every start carries an `until.minutes` fail-safe
   sized to the remaining window (or to `cyclic_on_minutes`). A pin is treated as off if its

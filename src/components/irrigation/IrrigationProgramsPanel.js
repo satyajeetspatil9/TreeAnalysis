@@ -35,7 +35,6 @@ import IrrigationProgramFormDialog, { emptyStep } from './IrrigationProgramFormD
 import {
   OPEN_JOB_STATUSES,
   createAdHocVolumeJob,
-  defaultStartFromWindows,
   deleteIrrigationJob,
   estimateMinutesFromLiters,
   estimateProgramMinutes,
@@ -59,7 +58,6 @@ function IrrigationProgramsPanel({
 }) {
   const [programs, setPrograms] = useState([]);
   const [jobs, setJobs] = useState([]);
-  const [windows, setWindows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState(null);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -71,7 +69,6 @@ function IrrigationProgramsPanel({
     run_order: 0,
     days_of_week: [1, 2, 3, 4],
     start_times: ['06:00'],
-    use_allowed_windows: true,
     motor_device_ids: [],
     steps: [emptyStep(0)],
     injector_ids: [],
@@ -109,7 +106,6 @@ function IrrigationProgramsPanel({
     const [
       { data: progData, error: progError },
       { data: jobData, error: jobError },
-      { data: windowData },
     ] = await Promise.all([
       supabase
         .from('irrigation_programs')
@@ -128,13 +124,6 @@ function IrrigationProgramsPanel({
         )
         .in('status', OPEN_JOB_STATUSES)
         .order('created_at', { ascending: false }),
-      supabase
-        .from('irrigation_allowed_windows')
-        .select('*')
-        .eq('farm_id', farmId)
-        .eq('enabled', true)
-        .order('weekday')
-        .order('start_time'),
     ]);
 
     if (progError || jobError) {
@@ -152,7 +141,6 @@ function IrrigationProgramsPanel({
       setJobs(jobData || []);
       setMessage(null);
     }
-    setWindows(windowData || []);
     setLoading(false);
   }, [farmId, programType]);
 
@@ -175,7 +163,6 @@ function IrrigationProgramsPanel({
 
   const openCreate = () => {
     const days = [1, 2, 3, 4];
-    const start = defaultStartFromWindows(windows, days);
     setEditing(null);
     setForm({
       name: programType === 'fertigation'
@@ -184,8 +171,7 @@ function IrrigationProgramsPanel({
       is_active: true,
       run_order: nextRunOrder(),
       days_of_week: days,
-      start_times: [start],
-      use_allowed_windows: true,
+      start_times: ['06:00'],
       motor_device_ids: defaultMotorIds(),
       steps: [emptyStep(0)],
       injector_ids: programType === 'fertigation' ? defaultInjectorIds() : [],
@@ -212,7 +198,6 @@ function IrrigationProgramsPanel({
       run_order: program.run_order ?? 0,
       days_of_week: program.days_of_week || [],
       start_times: (program.start_times || []).map((t) => timeToInputValue(t)),
-      use_allowed_windows: program.use_allowed_windows !== false,
       motor_device_ids: program.motor_device_ids || [],
       steps: steps.length ? steps : [emptyStep(0)],
       injector_ids: (program.irrigation_program_devices || []).map((d) => d.device_id),
@@ -262,7 +247,6 @@ function IrrigationProgramsPanel({
       run_order: Number(form.run_order) || 0,
       days_of_week: form.days_of_week,
       start_times: form.start_times.filter(Boolean).map((t) => `${timeToInputValue(t)}:00`),
-      use_allowed_windows: form.use_allowed_windows,
       motor_device_ids: form.motor_device_ids,
       updated_at: new Date().toISOString(),
     };
@@ -568,7 +552,7 @@ function IrrigationProgramsPanel({
           <Typography variant="body2" color="text.secondary">
             {programType === 'fertigation'
               ? 'Fertigation programs run one after another. Selected equipment terminals start and stop together for the minutes on each zone.'
-              : 'Water programs run one after another. Each zone finishes its liters before the next starts. Watering only happens during power hours.'}
+              : 'Water programs run one after another. Each zone finishes its liters before the next starts. Programs wait for mains; a late restore shifts remaining starts today, and a mid-run outage extends that job.'}
           </Typography>
         </Box>
         <Button variant="contained" startIcon={<AddIcon />} onClick={openCreate}>
@@ -803,7 +787,6 @@ function IrrigationProgramsPanel({
         form={form}
         setForm={setForm}
         zones={zones}
-        windows={windows}
         motors={motors}
         injectors={injectors}
         programType={programType}

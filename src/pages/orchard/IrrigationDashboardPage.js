@@ -36,7 +36,6 @@ import { supabase } from '../../supabaseClient';
 import { useFarm } from '../../hooks/useFarm';
 import PageHeader from '../../components/common/PageHeader';
 import IrrigationProgramsPanel from '../../components/irrigation/IrrigationProgramsPanel';
-import IrrigationAllowedHoursPanel from '../../components/irrigation/IrrigationAllowedHoursPanel';
 import IrrigationDevicesPanel from '../../components/irrigation/IrrigationDevicesPanel';
 import IrrigationDeviceSchedulesPanel from '../../components/irrigation/IrrigationDeviceSchedulesPanel';
 import {
@@ -62,6 +61,7 @@ import {
   deviceCodesFromQueueRow,
   expandQueuedCommands,
   fetchPowerStatus,
+  formatEstimatedDuration,
   powerStatusLabel,
   sendZoneControlCommand,
 } from '../../utils/irrigationSchedule';
@@ -279,7 +279,7 @@ function IrrigationDashboardPage() {
   }, [load, loadDevices, farmLoading]);
 
   useEffect(() => {
-    if (tab !== 4 || !farm?.id) return undefined;
+    if (tab !== 3 || !farm?.id) return undefined;
     const id = window.setInterval(refreshQueue, 10000);
     return () => window.clearInterval(id);
   }, [tab, farm?.id, refreshQueue]);
@@ -407,7 +407,7 @@ function IrrigationDashboardPage() {
       <PageHeader
         section="Orchard"
         title="Irrigation"
-        subtitle="Live control, programs, allowed hours, and device schedules. Status updates every 3 minutes."
+        subtitle="Live control, programs, and device schedules. Status updates every 3 minutes."
       />
 
       {message && tab === 0 && (
@@ -422,6 +422,13 @@ function IrrigationDashboardPage() {
         </Alert>
       )}
 
+      {Number(power?.shift_minutes) > 0 && power?.power_present !== false && (
+        <Alert severity="info" sx={{ mb: 2 }}>
+          Remaining programs today start {formatEstimatedDuration(Number(power.shift_minutes))} later
+          than listed. Mains was off; listed times are shifted for the rest of the day.
+        </Alert>
+      )}
+
       <Paper variant="outlined" sx={{ mb: 2 }}>
         <Tabs
           value={tab}
@@ -431,7 +438,6 @@ function IrrigationDashboardPage() {
         >
           <Tab label="Now" />
           <Tab label="Programs" />
-          <Tab label="Allowed hours" />
           <Tab label="Devices" />
           <Tab label="Technician" />
         </Tabs>
@@ -755,10 +761,6 @@ function IrrigationDashboardPage() {
       </TabPanel>
 
       <TabPanel value={tab} index={2}>
-        <IrrigationAllowedHoursPanel farmId={farm?.id} />
-      </TabPanel>
-
-      <TabPanel value={tab} index={3}>
         <IrrigationDevicesPanel
           farmId={farm?.id}
           zones={zones}
@@ -766,7 +768,7 @@ function IrrigationDashboardPage() {
         />
       </TabPanel>
 
-      <TabPanel value={tab} index={4}>
+      <TabPanel value={tab} index={3}>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
           Live JSON for Programs tab jobs (water, fertigation, Water now, Fertigation now) and Other schedules.
           Now-tab start/stop is omitted. This tab refreshes every 10 seconds.
@@ -774,8 +776,9 @@ function IrrigationDashboardPage() {
 
         {!power && (
           <Alert severity="info" sx={{ mb: 2 }}>
-            {powerStatusLabel(null)}. Send <code>power_present</code> on any POST and programs will pause
-            during an outage and resume by themselves.
+            {powerStatusLabel(null)}. Send <code>power_present</code>, <code>outage_started_at</code>,
+            and <code>outage_ended_at</code> from the controller. Programs pause until the end time
+            is posted, then they resume and remaining starts move by that outage.
           </Alert>
         )}
 
@@ -806,8 +809,9 @@ function IrrigationDashboardPage() {
           <Typography variant="subtitle1" fontWeight={700}>POST — controller sends</Typography>
           <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
             Telemetry for the zone of an active Programs-tab job. <code>ack_command</code> is true when a
-            pending command is waiting. Include <code>power_present</code> on every POST so an outage
-            pauses the programs.
+            pending command is waiting. Include <code>power_present</code>, <code>outage_started_at</code>,
+            and <code>outage_ended_at</code> so an outage pauses programs and shifts remaining starts
+            by the controller&apos;s outage window.
           </Typography>
           <Box
             component="pre"

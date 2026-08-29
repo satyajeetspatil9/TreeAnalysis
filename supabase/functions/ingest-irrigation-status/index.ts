@@ -70,6 +70,15 @@ function parseTimestamp(raw: unknown) {
   return date.toISOString();
 }
 
+function readTimestamp(body: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    if (body[key] === undefined || body[key] === null || body[key] === '') continue;
+    const parsed = parseTimestamp(body[key]);
+    if (parsed) return parsed;
+  }
+  return null;
+}
+
 /** Mains presence, accepted under any of the names firmware tends to use. */
 function readPowerFlag(body: Record<string, unknown>) {
   const candidates = [
@@ -137,7 +146,7 @@ function expandQueueRow(row: QueueRow, zoneCodeById: Map<number, string>) {
 async function readPowerStatus(supabase: Supabase, farmId: number) {
   const { data } = await supabase
     .from('irrigation_power_status')
-    .select('power_present, changed_at, reported_at')
+    .select('power_present, changed_at, reported_at, outage_started_at, outage_ended_at, shift_minutes, local_date')
     .eq('farm_id', farmId)
     .maybeSingle();
   return data || null;
@@ -146,18 +155,40 @@ async function readPowerStatus(supabase: Supabase, farmId: number) {
 async function writePowerStatus(
   supabase: Supabase,
   farmId: number,
-  powerPresent: boolean,
-  reportedAt: string,
+  opts: {
+    powerPresent: boolean | null;
+    reportedAt: string;
+    outageStartedAt: string | null;
+    outageEndedAt: string | null;
+  },
 ) {
   const previous = await readPowerStatus(supabase, farmId);
+  const powerPresent = opts.powerPresent != null
+    ? opts.powerPresent
+    : (previous ? previous.power_present !== false : true);
   const changed = !previous || previous.power_present !== powerPresent;
   const now = new Date().toISOString();
+
+  // Start/end come from the controller. Never invent them from the POST arrival time.
+  let outageStartedAt = previous?.outage_started_at ?? null;
+  let outageEndedAt = previous?.outage_ended_at ?? null;
+
+  if (opts.outageStartedAt) outageStartedAt = opts.outageStartedAt;
+  if (opts.outageEndedAt) outageEndedAt = opts.outageEndedAt;
+
+  if (!powerPresent) {
+    outageEndedAt = opts.outageEndedAt || null;
+  }
 
   await supabase.from('irrigation_power_status').upsert({
     farm_id: farmId,
     power_present: powerPresent,
-    changed_at: changed ? reportedAt : (previous?.changed_at ?? reportedAt),
-    reported_at: reportedAt,
+    changed_at: changed ? opts.reportedAt : (previous?.changed_at ?? opts.reportedAt),
+    reported_at: opts.reportedAt,
+    outage_started_at: outageStartedAt,
+    outage_ended_at: outageEndedAt,
+    shift_minutes: previous?.shift_minutes ?? 0,
+    local_date: previous?.local_date ?? null,
     updated_at: now,
   }, { onConflict: 'farm_id' });
 
@@ -182,7 +213,7 @@ async function fetchControllerWork(supabase: Supabase, farmId: number) {
       .limit(50),
     supabase
       .from('irrigation_power_status')
-      .select('power_present, changed_at, reported_at')
+      .select('power_present, changed_at, reported_at, outage_started_at, outage_ended_at')
       .eq('farm_id', farmId)
       .maybeSingle(),
     supabase
@@ -374,6 +405,8 @@ Deno.serve(async (req) => {
       updated_at: new Date().toISOString(),
       power_present: work.power ? work.power.power_present !== false : true,
       power_reported_at: work.power?.reported_at ?? null,
+      outage_started_at: work.power?.outage_started_at ?? null,
+      outage_ended_at: work.power?.outage_ended_at ?? null,
       commands: work.commands,
       pending_commands: work.pending,
       queue_available: !work.missingQueue,
@@ -390,12 +423,24 @@ Deno.serve(async (req) => {
   const now = new Date().toISOString();
   const reportedAt = parseTimestamp(body.reported_at) ?? now;
 
-  // Mains presence is farm-wide and accepted on any POST, including one that
-  // carries nothing else. Losing power pauses every running job.
   const powerFlag = readPowerFlag(body);
+  const outageStartedAt = readTimestamp(body, [
+    'outage_started_at', 'outage_start', 'outage_start_time',
+    'power_lost_at', 'electricity_off_at',
+  ]);
+  const outageEndedAt = readTimestamp(body, [
+    'outage_ended_at', 'outage_end', 'outage_end_time',
+    'power_restored_at', 'electricity_on_at',
+  ]);
+
   let powerResult: { changed: boolean; powerPresent: boolean } | null = null;
-  if (powerFlag !== null) {
-    powerResult = await writePowerStatus(supabase, keyRow.farm_id, powerFlag, reportedAt);
+  if (powerFlag !== null || outageStartedAt || outageEndedAt) {
+    powerResult = await writePowerStatus(supabase, keyRow.farm_id, {
+      powerPresent: powerFlag,
+      reportedAt,
+      outageStartedAt,
+      outageEndedAt,
+    });
   }
 
   await supabase
@@ -469,12 +514,14 @@ Deno.serve(async (req) => {
     if (ackCommand) {
       await ackQueueCommands(supabase, keyRow.farm_id, body, null);
     }
-    if (powerFlag !== null || ackCommand) {
+    if (powerFlag !== null || ackCommand || outageStartedAt || outageEndedAt) {
       const work = await fetchControllerWork(supabase, keyRow.farm_id);
       return jsonResponse({
         ok: true,
         power_present: work.power ? work.power.power_present !== false : true,
         power_changed: powerResult?.changed ?? false,
+        outage_started_at: work.power?.outage_started_at ?? null,
+        outage_ended_at: work.power?.outage_ended_at ?? null,
         commands: work.commands,
       });
     }
@@ -539,6 +586,8 @@ Deno.serve(async (req) => {
     is_irrigating: isIrrigating,
     power_present: work.power ? work.power.power_present !== false : true,
     power_changed: powerResult?.changed ?? false,
+    outage_started_at: work.power?.outage_started_at ?? null,
+    outage_ended_at: work.power?.outage_ended_at ?? null,
     commands: work.commands,
     pending_commands: work.pending,
   });

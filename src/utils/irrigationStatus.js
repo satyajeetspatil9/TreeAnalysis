@@ -16,6 +16,9 @@ export function buildIrrigationStatusSampleJson(zoneCode = 'Z01') {
     current_discharge_lpm: 12.5,
     total_discharge_liters: 450,
     device_code: 'Y0',
+    power_present: true,
+    outage_started_at: null,
+    outage_ended_at: null,
   }, null, 2);
 }
 

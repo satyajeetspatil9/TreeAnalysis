@@ -255,6 +255,17 @@ function stepFieldsFor(step: Job, isFertigation: boolean, zone: Job | undefined)
   };
 }
 
+function outageMinutesBetween(startedAt: string | null | undefined, endedAt: Date) {
+  if (!startedAt) return 0;
+  const ms = endedAt.getTime() - new Date(startedAt).getTime();
+  if (!Number.isFinite(ms) || ms <= 0) return 0;
+  return Math.max(1, Math.round(ms / 60000));
+}
+
+function originalStartMinutes(program: Job) {
+  return ((program.start_times || []) as string[]).map((t) => timeToMinutes(t));
+}
+
 // ---------------------------------------------------------------------------
 // Main per-farm pass
 // ---------------------------------------------------------------------------
@@ -269,7 +280,6 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
 
   // One round of reads for everything this pass can possibly need.
   const [
-    { data: windows },
     { data: programs },
     { data: openJobs },
     { data: devices },
@@ -278,13 +288,11 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
     { data: statusRows },
     { data: powerRows },
     { data: recentQueue },
-    { data: todayProgramJobs },
+    { data: todayProgramJobsRows },
     { data: steps },
     { data: programDevices },
     { data: jobDevices },
   ] = await Promise.all([
-    supabase.from('irrigation_allowed_windows').select('weekday, start_time, end_time, enabled')
-      .eq('farm_id', farmId),
     supabase.from('irrigation_programs').select('*').eq('farm_id', farmId).eq('is_active', true),
     supabase.from('irrigation_jobs').select('*').eq('farm_id', farmId).in('status', OPEN_STATUSES),
     supabase.from('irrigation_devices').select('id, device_code, kind, zone_id, is_active')
@@ -324,6 +332,20 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
   const powerPresent = power ? power.power_present !== false : true;
   const powerChangedAt = power?.changed_at ? new Date(String(power.changed_at)) : null;
 
+  let shiftMinutes = 0;
+  if (power) {
+    if (String(power.local_date || '') === local.dateKey) {
+      shiftMinutes = Math.max(0, Number(power.shift_minutes) || 0);
+    }
+  }
+  let powerClockDirty = false;
+  const markClock = () => { powerClockDirty = true; };
+
+  if (power && String(power.local_date || '') !== local.dateKey) {
+    shiftMinutes = 0;
+    markClock();
+  }
+
   // A pin is believed on only if its last acked command was a start that
   // survived the most recent power transition.
   const lastAckedByCode = new Map<string, QueueRow>();
@@ -340,13 +362,6 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
     return true;
   };
 
-  const windowsToday = (windows || []).filter(
-    (w) => w.enabled !== false && Number(w.weekday) === local.weekday,
-  );
-  const inWindow = windowsToday.some(
-    (w) => nowMin >= timeToMinutes(w.start_time) && nowMin < timeToMinutes(w.end_time),
-  );
-
   const jobPatches = new Map<number, Record<string, unknown>>();
   const patchJob = (job: Job, patch: Record<string, unknown>) => {
     const merged = { ...(jobPatches.get(Number(job.id)) || {}), ...patch, updated_at: now.toISOString() };
@@ -355,6 +370,76 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
   };
 
   const zonePendingPatches = new Map<number, string>();
+  const todayProgramJobs = [...(todayProgramJobsRows || [])];
+
+  const programHasJobToday = (programId: number) => (
+    todayProgramJobs.some((j) => Number(j.program_id) === Number(programId) && j.status !== 'cancelled')
+  );
+
+  const earliestUnstartedEffectiveMin = () => {
+    let earliest: number | null = null;
+    for (const program of programs || []) {
+      const days = ((program.days_of_week || []) as number[]).map(Number);
+      if (days.length && !days.includes(local.weekday)) continue;
+      if (programHasJobToday(Number(program.id))) continue;
+      for (const original of originalStartMinutes(program)) {
+        const effective = original + shiftMinutes;
+        if (effective >= 24 * 60) continue;
+        if (earliest == null || effective < earliest) earliest = effective;
+      }
+    }
+    return earliest;
+  };
+
+  // -------------------------------------------------------------------------
+  // Apply a completed outage: extend the paused running job and/or shift
+  // remaining program starts for the rest of today.
+  // -------------------------------------------------------------------------
+  if (power?.outage_started_at && power?.outage_ended_at) {
+    const restoredAt = new Date(String(power.outage_ended_at));
+    const outageMin = outageMinutesBetween(String(power.outage_started_at), restoredAt);
+
+    const pausedRunning = (openJobs || []).find((j) => (
+      j.status === 'paused_no_power' && j.started_at && j.job_type !== 'manual'
+    ));
+
+    if (outageMin > 0 && pausedRunning) {
+      const elapsed = elapsedMinutes(pausedRunning, now);
+      const duration = pausedRunning.on_duration_minutes != null ? Number(pausedRunning.on_duration_minutes) : null;
+      const cap = pausedRunning.max_duration_minutes != null ? Number(pausedRunning.max_duration_minutes) : null;
+      const nextDuration = duration != null && duration > 0 ? duration + outageMin : duration;
+      const nextCap = (cap != null && cap > 0 ? cap : Math.max(1, Math.ceil(elapsed))) + outageMin;
+      patchJob(pausedRunning, {
+        on_duration_minutes: nextDuration,
+        max_duration_minutes: nextCap,
+      });
+      shiftMinutes += outageMin;
+      markClock();
+      actions.push(`extended_job:${pausedRunning.id}:${outageMin}m:shift:${shiftMinutes}`);
+    } else if (outageMin > 0) {
+      const restoreLocal = partsInTz(restoredAt, FARM_TZ);
+      const restoreMin = restoreLocal.dateKey === local.dateKey
+        ? timeToMinutes(restoreLocal.timeStr)
+        : nowMin;
+      const earliest = earliestUnstartedEffectiveMin();
+      if (earliest != null && restoreMin > earliest) {
+        const delay = Math.round(restoreMin - earliest);
+        if (delay > 0) {
+          shiftMinutes += delay;
+          markClock();
+          actions.push(`late_mains:${delay}m:shift:${shiftMinutes}`);
+        }
+      }
+    }
+
+    markClock();
+    if (power) {
+      power.outage_started_at = null;
+      power.outage_ended_at = null;
+    }
+  }
+
+  const programsMayRun = powerPresent && !(power?.outage_started_at && !power?.outage_ended_at);
 
   // -------------------------------------------------------------------------
   // Terminals for a job: zone valve + linked devices + program motors
@@ -391,36 +476,20 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
   // -------------------------------------------------------------------------
   const scheduledForOf = (hhmm: string) => `${local.dateKey}T${hhmm}:00+05:30`;
 
-  const dueStartsFor = (program: Job) => {
-    const times = (program.start_times || []) as string[];
-    if (times.length) return times.map((t) => timeToMinutes(t));
-    // No explicit times: follow the allowed window opening.
-    if (program.use_allowed_windows) {
-      return windowsToday.map((w) => timeToMinutes(w.start_time));
-    }
-    return [];
-  };
-
   const createdJobs: Job[] = [];
 
-  if (powerPresent) {
+  if (programsMayRun) {
     for (const program of programs || []) {
       const days = ((program.days_of_week || []) as number[]).map(Number);
       if (days.length && !days.includes(local.weekday)) continue;
+      if (programHasJobToday(Number(program.id))) continue;
 
-      const dueMin = dueStartsFor(program).find(
-        (m) => nowMin >= m && nowMin < m + START_GRACE_MINUTES,
-      );
+      const dueMin = originalStartMinutes(program)
+        .map((original) => original + shiftMinutes)
+        .find((m) => m < 24 * 60 && nowMin >= m && nowMin < m + START_GRACE_MINUTES);
       if (dueMin == null) continue;
-      if (program.use_allowed_windows && !inWindow) continue;
 
       const scheduledFor = scheduledForOf(minutesToClock(dueMin));
-      const already = (todayProgramJobs || []).some((j) => (
-        Number(j.program_id) === Number(program.id)
-        && j.scheduled_for
-        && new Date(String(j.scheduled_for)).getTime() === new Date(scheduledFor).getTime()
-      ));
-      if (already) continue;
 
       const programSteps = activeStepsOf(steps || [], Number(program.id));
       if (!programSteps.length) {
@@ -441,7 +510,7 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
           status: 'planned',
           liters_delivered: 0,
           duration_elapsed_minutes: 0,
-          window_mode: program.use_allowed_windows !== false,
+          window_mode: false,
           scheduled_for: scheduledFor,
           created_at: now.toISOString(),
           updated_at: now.toISOString(),
@@ -476,6 +545,12 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
       }
 
       createdJobs.push(job);
+      todayProgramJobs.push({
+        id: job.id,
+        program_id: job.program_id,
+        status: job.status,
+        scheduled_for: job.scheduled_for,
+      });
       actions.push(`created_job:${job.id}:program:${program.id}:due:${minutesToClock(dueMin)}`);
     }
   }
@@ -528,8 +603,8 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
       patchJob(job, patch);
     };
 
-    // Mains gone: stop everything and remember to resume later.
-    if (!powerPresent) {
+    // Mains gone, or controller has not yet sent outage end: stop programs.
+    if (!programsMayRun) {
       if (job.status === 'running') {
         stopJob('no_power', 'paused_no_power');
         actions.push(`paused_no_power:${job.id}`);
@@ -593,15 +668,6 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
       } else {
         stopJob(reason, 'completed');
         actions.push(`completed_job:${job.id}:${reason}`);
-      }
-      continue;
-    }
-
-    // Outside allowed hours: hold, keep progress.
-    if (job.window_mode && !inWindow && job.job_type !== 'manual') {
-      if (job.status === 'running') {
-        stopJob('outside_window', 'paused_outside_window');
-        actions.push(`paused_outside_window:${job.id}`);
       }
       continue;
     }
@@ -718,12 +784,27 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
     }, { onConflict: 'zone_id' });
   }
 
+  if (powerClockDirty) {
+    await supabase.from('irrigation_power_status').upsert({
+      farm_id: farmId,
+      power_present: powerPresent,
+      changed_at: power?.changed_at ?? now.toISOString(),
+      reported_at: power?.reported_at ?? now.toISOString(),
+      local_date: local.dateKey,
+      shift_minutes: shiftMinutes,
+      outage_started_at: power?.outage_started_at ?? null,
+      outage_ended_at: power?.outage_ended_at ?? null,
+      updated_at: now.toISOString(),
+    }, { onConflict: 'farm_id' });
+  }
+
   return {
     farmId,
     time: local.hhmm,
     weekday: local.weekday,
-    in_window: inWindow,
     power_present: powerPresent,
+    programs_may_run: programsMayRun,
+    shift_minutes: shiftMinutes,
     open_jobs: sortedOpen.length,
     primary_job: primary?.id ?? null,
     commands_queued: queueWrite.inserted,
