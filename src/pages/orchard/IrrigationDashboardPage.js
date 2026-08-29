@@ -59,6 +59,7 @@ import {
   buildLiveGetCommandJson,
   buildLivePostTelemetryJson,
   coalesceQueuedCommands,
+  deviceCodesFromQueueRow,
   mapQueueRowToGetCommand,
   sendZoneControlCommand,
 } from '../../utils/irrigationSchedule';
@@ -118,6 +119,7 @@ function IrrigationDashboardPage() {
   const [confirmStart, setConfirmStart] = useState(null);
   const [queueCommands, setQueueCommands] = useState([]);
   const [programJobs, setProgramJobs] = useState([]);
+  const [scheduleDeviceCodes, setScheduleDeviceCodes] = useState([]);
 
   const loadDevices = useCallback(async () => {
     if (!farm?.id) {
@@ -138,6 +140,7 @@ function IrrigationDashboardPage() {
       setZones([]);
       setQueueCommands([]);
       setProgramJobs([]);
+      setScheduleDeviceCodes([]);
       setLoading(false);
       return;
     }
@@ -157,6 +160,7 @@ function IrrigationDashboardPage() {
       setZones([]);
       setQueueCommands([]);
       setProgramJobs([]);
+      setScheduleDeviceCodes([]);
       setLoading(false);
       return;
     }
@@ -180,13 +184,14 @@ function IrrigationDashboardPage() {
       setRows(mergeZoneStatusRows(zoneRows, []));
       setQueueCommands([]);
       setProgramJobs([]);
+      setScheduleDeviceCodes([]);
       setLoading(false);
       return;
     }
 
     setRows(mergeZoneStatusRows(zoneRows, statusRows));
 
-    const [{ data: queueRows }, { data: jobRows }] = await Promise.all([
+    const [{ data: queueRows }, { data: jobRows }, { data: scheduleRows }] = await Promise.all([
       supabase
         .from('irrigation_command_queue')
         .select('id, device_code, action, job_id, zone_id, payload, created_at, expires_at, status')
@@ -200,9 +205,21 @@ function IrrigationDashboardPage() {
         .eq('farm_id', farm.id)
         .in('job_type', ['water', 'fertigation', 'manual'])
         .in('status', ['planned', 'running', 'paused_outside_window']),
+      supabase
+        .from('irrigation_device_schedules')
+        .select('irrigation_devices(device_code)')
+        .eq('farm_id', farm.id)
+        .eq('enabled', true),
     ]);
     setQueueCommands(queueRows || []);
     setProgramJobs(jobRows || []);
+    setScheduleDeviceCodes(
+      [...new Set(
+        (scheduleRows || [])
+          .map((row) => String(row.irrigation_devices?.device_code || '').trim().toUpperCase())
+          .filter(Boolean),
+      )],
+    );
 
     setLoading(false);
   }, [farm?.id]);
@@ -248,11 +265,20 @@ function IrrigationDashboardPage() {
     [rows, programZoneIds],
   );
 
+  const scheduleCodeSet = useMemo(
+    () => new Set(scheduleDeviceCodes || []),
+    [scheduleDeviceCodes],
+  );
+
   const liveGetJson = useMemo(() => {
     const zoneCodeById = new Map((zones || []).map((z) => [z.id, z.zone_code]));
     const commands = coalesceQueuedCommands(
       (queueCommands || [])
-        .filter((row) => programJobIds.has(Number(row.job_id)))
+        .filter((row) => {
+          if (programJobIds.has(Number(row.job_id))) return true;
+          if (row.job_id != null) return false;
+          return deviceCodesFromQueueRow(row).some((code) => scheduleCodeSet.has(code));
+        })
         .map((row) => mapQueueRowToGetCommand(row, zoneCodeById)),
     );
     const pendingCommands = programRows
@@ -264,7 +290,7 @@ function IrrigationDashboardPage() {
         is_irrigating: row.isIrrigating,
       }));
     return buildLiveGetCommandJson({ commands, pendingCommands });
-  }, [queueCommands, programRows, zones, programJobIds]);
+  }, [queueCommands, programRows, zones, programJobIds, scheduleCodeSet]);
 
   const livePostJson = useMemo(
     () => buildLivePostTelemetryJson(programRows, {
@@ -702,14 +728,14 @@ function IrrigationDashboardPage() {
 
       <TabPanel value={tab} index={5}>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Live JSON for jobs on the Programs tab (water programs, fertigation programs, Water now, and Fertigation now).
-          Other schedules and Now-tab start/stop are omitted. This tab refreshes every 5 seconds.
+          Live JSON for Programs tab jobs (water, fertigation, Water now, Fertigation now) and Other schedules.
+          Now-tab start/stop is omitted. This tab refreshes every 5 seconds.
         </Typography>
 
         <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
           <Typography variant="subtitle1" fontWeight={700}>GET — controller receives</Typography>
           <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
-            Program start/stop only. Apply <code>action</code> to every code in <code>device_codes</code> at the same time. <code>zone_code</code> is display-only.
+            Program and Other-schedule start/stop. Apply <code>action</code> to every code in <code>device_codes</code> at the same time. <code>zone_code</code> is display-only.
           </Typography>
           <Box
             component="pre"
