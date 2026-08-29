@@ -44,8 +44,10 @@ function IrrigationDeviceSchedulesPanel({ farmId, devices }) {
     cyclic_off_minutes: '',
   });
 
+  // Input terminals only sense state, so they cannot be driven on a schedule.
   const schedulable = (devices || []).filter((d) =>
-    ['irrigation_motor', 'bore_motor', 'other', 'fertigation'].includes(d.kind));
+    ['irrigation_motor', 'bore_motor', 'other', 'fertigation'].includes(d.kind)
+    && d.io_type !== 'input');
 
   const load = useCallback(async () => {
     if (!farmId) return;

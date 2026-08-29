@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Box,
@@ -9,6 +9,7 @@ import {
   DialogContent,
   DialogTitle,
   FormControl,
+  FormHelperText,
   Grid,
   InputLabel,
   MenuItem,
@@ -21,7 +22,11 @@ import {
 import AddIcon from '@mui/icons-material/Add';
 import { supabase } from '../../supabaseClient';
 import {
+  controllerPinOptions,
+  DEVICE_IO_OPTIONS,
   DEVICE_KIND_OPTIONS,
+  ioTypeFromDeviceCode,
+  ioTypeLabel,
   isMissingScheduleTable,
   scheduleTableHint,
 } from '../../utils/irrigationSchedule';
@@ -36,10 +41,24 @@ function IrrigationDevicesPanel({ farmId, zones, onChanged }) {
   const [form, setForm] = useState({
     name: '',
     device_code: '',
+    io_type: 'output',
     kind: 'irrigation_motor',
     zone_id: '',
     is_active: true,
   });
+
+  const takenCodes = useMemo(() => new Set(
+    devices
+      .filter((d) => !editing || d.id !== editing.id)
+      .map((d) => String(d.device_code || '').toUpperCase()),
+  ), [devices, editing]);
+
+  // Keep a legacy / non-standard code selectable so editing an old device can't blank it.
+  const pinOptions = useMemo(() => {
+    const pins = controllerPinOptions(form.io_type);
+    const current = String(form.device_code || '').toUpperCase();
+    return current && !pins.includes(current) ? [current, ...pins] : pins;
+  }, [form.io_type, form.device_code]);
 
   const load = useCallback(async () => {
     if (!farmId) return;
@@ -73,10 +92,12 @@ function IrrigationDevicesPanel({ farmId, zones, onChanged }) {
   }, [load]);
 
   const openCreate = () => {
+    const used = new Set(devices.map((d) => String(d.device_code || '').toUpperCase()));
     setEditing(null);
     setForm({
       name: '',
-      device_code: '',
+      device_code: controllerPinOptions('output').find((pin) => !used.has(pin)) || '',
+      io_type: 'output',
       kind: 'irrigation_motor',
       zone_id: '',
       is_active: true,
@@ -89,6 +110,7 @@ function IrrigationDevicesPanel({ farmId, zones, onChanged }) {
     setForm({
       name: device.name,
       device_code: device.device_code,
+      io_type: device.io_type || ioTypeFromDeviceCode(device.device_code) || 'output',
       kind: device.kind,
       zone_id: device.zone_id || '',
       is_active: device.is_active !== false,
@@ -96,9 +118,27 @@ function IrrigationDevicesPanel({ farmId, zones, onChanged }) {
     setOpen(true);
   };
 
+  const changeIoType = (io_type) => {
+    setForm((f) => {
+      const pins = controllerPinOptions(io_type);
+      const current = String(f.device_code || '').toUpperCase();
+      return {
+        ...f,
+        io_type,
+        device_code: pins.includes(current)
+          ? current
+          : (pins.find((pin) => !takenCodes.has(pin)) || ''),
+      };
+    });
+  };
+
   const save = async () => {
     if (!form.name.trim() || !form.device_code.trim()) {
-      setMessage({ type: 'error', text: 'Name and device code are required.' });
+      setMessage({ type: 'error', text: 'Name and controller terminal are required.' });
+      return;
+    }
+    if (takenCodes.has(String(form.device_code).toUpperCase())) {
+      setMessage({ type: 'error', text: `${form.device_code} is already used by another device.` });
       return;
     }
     setSaving(true);
@@ -106,6 +146,7 @@ function IrrigationDevicesPanel({ farmId, zones, onChanged }) {
       farm_id: farmId,
       name: form.name.trim(),
       device_code: form.device_code.trim().toUpperCase(),
+      io_type: form.io_type,
       kind: form.kind,
       zone_id: form.kind === 'zone_valve' && form.zone_id ? Number(form.zone_id) : null,
       is_active: form.is_active,
@@ -157,7 +198,8 @@ function IrrigationDevicesPanel({ farmId, zones, onChanged }) {
 
       <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2, gap: 1, flexWrap: 'wrap' }}>
         <Typography variant="body2" color="text.secondary">
-          Register motors, fertigation injectors, and other equipment the controller addresses by device code.
+          Register motors, fertigation injectors, and other equipment, and map each one to the controller
+          terminal it is wired to — outputs Y0–Y8 drive equipment, inputs X0–X8 sense it.
         </Typography>
         <Button variant="contained" startIcon={<AddIcon />} onClick={openCreate}>
           Add device
@@ -178,7 +220,8 @@ function IrrigationDevicesPanel({ farmId, zones, onChanged }) {
                 <Paper variant="outlined" sx={{ p: 2 }}>
                   <Typography variant="h6" fontWeight={800}>{device.name}</Typography>
                   <Typography variant="body2" color="text.secondary">
-                    {kindLabel} · {device.device_code}
+                    {kindLabel} · {ioTypeLabel(device.io_type || ioTypeFromDeviceCode(device.device_code))}
+                    {' '}{device.device_code}
                     {zone ? ` · ${zone.zone_code}` : ''}
                   </Typography>
                   <Typography variant="caption" color={device.is_active ? 'success.main' : 'text.secondary'}>
@@ -207,16 +250,7 @@ function IrrigationDevicesPanel({ farmId, zones, onChanged }) {
                 onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
               />
             </Grid>
-            <Grid item xs={12} sm={6}>
-              <TextField
-                fullWidth
-                label="Device code"
-                value={form.device_code}
-                onChange={(e) => setForm((f) => ({ ...f, device_code: e.target.value }))}
-                helperText="Matches controller / queue device_code"
-              />
-            </Grid>
-            <Grid item xs={12} sm={6}>
+            <Grid item xs={12} sm={4}>
               <FormControl fullWidth>
                 <InputLabel>Kind</InputLabel>
                 <Select
@@ -228,6 +262,44 @@ function IrrigationDevicesPanel({ farmId, zones, onChanged }) {
                     <MenuItem key={opt.value} value={opt.value}>{opt.label}</MenuItem>
                   ))}
                 </Select>
+              </FormControl>
+            </Grid>
+            <Grid item xs={6} sm={4}>
+              <FormControl fullWidth>
+                <InputLabel>Connected to</InputLabel>
+                <Select
+                  label="Connected to"
+                  value={form.io_type}
+                  onChange={(e) => changeIoType(e.target.value)}
+                >
+                  {DEVICE_IO_OPTIONS.map((opt) => (
+                    <MenuItem key={opt.value} value={opt.value}>{opt.label}</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            </Grid>
+            <Grid item xs={6} sm={4}>
+              <FormControl fullWidth>
+                <InputLabel>Terminal</InputLabel>
+                <Select
+                  label="Terminal"
+                  value={form.device_code}
+                  onChange={(e) => setForm((f) => ({ ...f, device_code: e.target.value }))}
+                >
+                  {pinOptions.map((pin) => {
+                    const taken = takenCodes.has(pin);
+                    return (
+                      <MenuItem key={pin} value={pin} disabled={taken}>
+                        {taken ? `${pin} — in use` : pin}
+                      </MenuItem>
+                    );
+                  })}
+                </Select>
+                <FormHelperText>
+                  {form.io_type === 'input'
+                    ? 'Controller input terminal the device senses on.'
+                    : 'Controller output terminal that drives the device.'}
+                </FormHelperText>
               </FormControl>
             </Grid>
             {form.kind === 'zone_valve' && (

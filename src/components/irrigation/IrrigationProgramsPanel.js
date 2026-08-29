@@ -75,9 +75,10 @@ function IrrigationProgramsPanel({
   const [editJobForm, setEditJobForm] = useState({ zone_id: '', target_liters: '' });
   const [jobBusy, setJobBusy] = useState(false);
 
-  const motors = (devices || []).filter((d) =>
+  const drivable = (devices || []).filter((d) => d.io_type !== 'input');
+  const motors = drivable.filter((d) =>
     d.kind === 'irrigation_motor' || d.kind === 'bore_motor');
-  const injectors = (devices || []).filter((d) => d.kind === 'fertigation');
+  const injectors = drivable.filter((d) => d.kind === 'fertigation');
 
   const load = useCallback(async () => {
     if (!farmId) return;

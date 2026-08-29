@@ -11,6 +11,30 @@ export const DEVICE_KIND_OPTIONS = [
   { value: 'other', label: 'Other device' },
 ];
 
+export const DEVICE_IO_OPTIONS = [
+  { value: 'output', label: 'Output (Y)' },
+  { value: 'input', label: 'Input (X)' },
+];
+
+/** Controller terminals per direction: X0…X8 for inputs, Y0…Y8 for outputs. */
+export const CONTROLLER_PIN_COUNT = 9;
+
+export function controllerPinOptions(ioType) {
+  const prefix = ioType === 'input' ? 'X' : 'Y';
+  return Array.from({ length: CONTROLLER_PIN_COUNT }, (_, i) => `${prefix}${i}`);
+}
+
+export function ioTypeFromDeviceCode(deviceCode) {
+  const code = String(deviceCode || '').trim().toUpperCase();
+  if (/^X\d+$/.test(code)) return 'input';
+  if (/^Y\d+$/.test(code)) return 'output';
+  return null;
+}
+
+export function ioTypeLabel(ioType) {
+  return ioType === 'input' ? 'Input' : 'Output';
+}
+
 export function isMissingScheduleTable(error) {
   const message = error?.message || '';
   return error?.code === '42P01'
@@ -20,6 +44,9 @@ export function isMissingScheduleTable(error) {
 
 export function scheduleTableHint(message) {
   if (!message) return message;
+  if (/io_type/.test(message)) {
+    return `${message} Run migration 042_irrigation_device_io.sql in Supabase SQL Editor.`;
+  }
   if (/irrigation_/.test(message)) {
     return `${message} Run migration 039_irrigation_schedule_control.sql in Supabase SQL Editor.`;
   }
