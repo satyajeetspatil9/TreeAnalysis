@@ -197,13 +197,22 @@ export async function sendZoneControlCommand(farmId, row, command) {
 export async function createAdHocVolumeJob({
   farmId,
   zoneId,
-  targetLiters,
+  targetLiters = null,
+  onDurationMinutes = null,
   jobType = 'manual',
   windowMode = true,
   deviceIds = [],
+  motorDeviceId = null,
+  injectorDeviceIds = [],
   immediate = true,
 }) {
   const now = new Date().toISOString();
+  const duration = onDurationMinutes != null && Number(onDurationMinutes) > 0
+    ? Number(onDurationMinutes)
+    : null;
+  const liters = targetLiters != null && Number(targetLiters) > 0
+    ? Number(targetLiters)
+    : null;
 
   if (immediate) {
     const paused = await pauseOpenIrrigationJobs(farmId, { reason: 'manual_override' });
@@ -217,7 +226,9 @@ export async function createAdHocVolumeJob({
       zone_id: zoneId,
       job_type: jobType,
       status: 'planned',
-      target_liters: targetLiters,
+      target_liters: liters,
+      on_duration_minutes: duration,
+      duration_elapsed_minutes: 0,
       liters_delivered: 0,
       current_step_seq: 0,
       window_mode: windowMode,
@@ -230,15 +241,23 @@ export async function createAdHocVolumeJob({
 
   if (error) return { error, job: null };
 
-  if (deviceIds.length) {
-    const rows = deviceIds.map((deviceId) => ({
-      job_id: job.id,
-      device_id: deviceId,
-      role: 'injector',
-    }));
-    const { error: linkError } = await supabase.from('irrigation_job_devices').insert(rows);
+  const deviceRows = [];
+  if (motorDeviceId) {
+    deviceRows.push({ job_id: job.id, device_id: Number(motorDeviceId), role: 'motor' });
+  }
+  [...(injectorDeviceIds || []), ...(deviceIds || [])].forEach((deviceId) => {
+    if (!deviceId) return;
+    deviceRows.push({ job_id: job.id, device_id: Number(deviceId), role: 'injector' });
+  });
+
+  if (deviceRows.length) {
+    const { error: linkError } = await supabase.from('irrigation_job_devices').insert(deviceRows);
     if (linkError) return { error: linkError, job };
   }
+
+  const untilPayload = duration != null
+    ? { until: { minutes: duration } }
+    : (liters != null ? { until: { liters } } : {});
 
   if (immediate) {
     const { data: zone } = await supabase
@@ -256,8 +275,27 @@ export async function createAdHocVolumeJob({
       action: 'start',
       jobId: job.id,
       zoneId,
-      payload: { until: { liters: Number(targetLiters) } },
+      payload: untilPayload,
     });
+
+    const extraIds = deviceRows.map((r) => r.device_id);
+    if (extraIds.length) {
+      const { data: extraDevices } = await supabase
+        .from('irrigation_devices')
+        .select('id, device_code')
+        .in('id', extraIds);
+      for (const device of extraDevices || []) {
+        if (!device.device_code) continue;
+        await enqueueIrrigationCommand({
+          farmId,
+          deviceCode: String(device.device_code).toUpperCase(),
+          action: 'start',
+          jobId: job.id,
+          zoneId,
+          payload: untilPayload,
+        });
+      }
+    }
 
     const { data: existingStatus } = await supabase
       .from('irrigation_zone_status')
@@ -352,10 +390,11 @@ export async function pauseOpenIrrigationJobs(farmId, { exceptJobId = null, reas
   return { error: updateError || null, pausedIds: ids };
 }
 
-export async function updateIrrigationJob(jobId, { zoneId, targetLiters }) {
+export async function updateIrrigationJob(jobId, { zoneId, targetLiters, onDurationMinutes }) {
   const patch = { updated_at: new Date().toISOString() };
   if (zoneId != null) patch.zone_id = zoneId;
   if (targetLiters != null) patch.target_liters = targetLiters;
+  if (onDurationMinutes != null) patch.on_duration_minutes = onDurationMinutes;
 
   const { data, error } = await supabase
     .from('irrigation_jobs')
@@ -388,6 +427,28 @@ export async function deleteIrrigationJob(farmId, job) {
         zoneId: job.zone_id,
         payload: { reason: 'job_cancelled' },
       });
+    }
+    const { data: jobDevices } = await supabase
+      .from('irrigation_job_devices')
+      .select('device_id')
+      .eq('job_id', job.id);
+    const extraIds = (jobDevices || []).map((r) => r.device_id).filter(Boolean);
+    if (extraIds.length) {
+      const { data: extraDevices } = await supabase
+        .from('irrigation_devices')
+        .select('device_code')
+        .in('id', extraIds);
+      for (const device of extraDevices || []) {
+        if (!device.device_code) continue;
+        await enqueueIrrigationCommand({
+          farmId,
+          deviceCode: String(device.device_code).toUpperCase(),
+          action: 'stop',
+          jobId: job.id,
+          zoneId: job.zone_id,
+          payload: { reason: 'job_cancelled' },
+        });
+      }
     }
     await supabase.from('irrigation_zone_status').update({
       pending_command: 'stop',

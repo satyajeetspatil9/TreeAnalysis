@@ -17,6 +17,12 @@ import {
   Paper,
   Select,
   Switch,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
   TextField,
   Typography,
 } from '@mui/material';
@@ -32,7 +38,6 @@ import {
   deleteIrrigationJob,
   estimateMinutesFromLiters,
   estimateProgramMinutes,
-  estimateStepMinutes,
   formatEstimatedDuration,
   isMissingScheduleTable,
   jobProgressLabel,
@@ -70,10 +75,20 @@ function IrrigationProgramsPanel({
     steps: [emptyStep(0)],
     injector_ids: [],
   });
-  const [jobForm, setJobForm] = useState({ zone_id: '', target_liters: '6000' });
+  const [jobForm, setJobForm] = useState({
+    zone_id: '',
+    target_liters: '6000',
+    motor_id: '',
+    injector_id: '',
+    duration_minutes: '30',
+  });
   const [creatingJob, setCreatingJob] = useState(false);
   const [editJob, setEditJob] = useState(null);
-  const [editJobForm, setEditJobForm] = useState({ zone_id: '', target_liters: '' });
+  const [editJobForm, setEditJobForm] = useState({
+    zone_id: '',
+    target_liters: '',
+    duration_minutes: '',
+  });
   const [jobBusy, setJobBusy] = useState(false);
 
   const drivable = (devices || []).filter((d) => d.io_type !== 'input');
@@ -143,6 +158,14 @@ function IrrigationProgramsPanel({
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    setJobForm((f) => ({
+      ...f,
+      motor_id: f.motor_id || (motors.length === 1 ? String(motors[0].id) : ''),
+      injector_id: f.injector_id || (injectors.length === 1 ? String(injectors[0].id) : ''),
+    }));
+  }, [motors, injectors]);
 
   const nextRunOrder = () => {
     if (!programs.length) return 1;
@@ -396,19 +419,40 @@ function IrrigationProgramsPanel({
   };
 
   const createQuickJob = async () => {
-    if (!jobForm.zone_id || !jobForm.target_liters) {
-      setMessage({ type: 'error', text: 'Pick a zone and target liters.' });
+    const isFertigation = programType === 'fertigation';
+    if (!jobForm.zone_id) {
+      setMessage({ type: 'error', text: 'Pick a zone.' });
       return;
     }
+    if (!jobForm.motor_id) {
+      setMessage({ type: 'error', text: 'Select equipment (irrigation motor).' });
+      return;
+    }
+    if (isFertigation) {
+      if (!jobForm.injector_id) {
+        setMessage({ type: 'error', text: 'Select an injector.' });
+        return;
+      }
+      if (!(Number(jobForm.duration_minutes) > 0)) {
+        setMessage({ type: 'error', text: 'Enter duration in minutes.' });
+        return;
+      }
+    } else if (!(Number(jobForm.target_liters) > 0)) {
+      setMessage({ type: 'error', text: 'Enter target liters.' });
+      return;
+    }
+
     setCreatingJob(true);
     const { error } = await createAdHocVolumeJob({
       farmId,
       zoneId: Number(jobForm.zone_id),
-      targetLiters: Number(jobForm.target_liters),
-      jobType: 'manual',
+      targetLiters: isFertigation ? null : Number(jobForm.target_liters),
+      onDurationMinutes: isFertigation ? Number(jobForm.duration_minutes) : null,
+      jobType: isFertigation ? 'fertigation' : 'manual',
       windowMode: false,
       immediate: true,
-      deviceIds: [],
+      motorDeviceId: Number(jobForm.motor_id),
+      injectorDeviceIds: isFertigation && jobForm.injector_id ? [Number(jobForm.injector_id)] : [],
     });
     setCreatingJob(false);
     if (error) {
@@ -420,7 +464,9 @@ function IrrigationProgramsPanel({
     }
     setMessage({
       type: 'success',
-      text: 'Quick job started now. Other programs were paused and will resume after this job finishes.',
+      text: isFertigation
+        ? 'Fertigation started now. Other programs were paused and will resume after this finishes.'
+        : 'Watering started now. Other programs were paused and will resume after this job finishes.',
     });
     await load();
   };
@@ -430,20 +476,29 @@ function IrrigationProgramsPanel({
     setEditJobForm({
       zone_id: String(job.zone_id || ''),
       target_liters: job.target_liters != null ? String(job.target_liters) : '',
+      duration_minutes: job.on_duration_minutes != null ? String(job.on_duration_minutes) : '',
     });
   };
 
   const saveEditJob = async () => {
     if (!editJob) return;
-    if (!editJobForm.zone_id || !editJobForm.target_liters) {
+    const isDurationJob = Number(editJob.on_duration_minutes) > 0 && !(Number(editJob.target_liters) > 0);
+    if (!editJobForm.zone_id) {
+      setMessage({ type: 'error', text: 'Zone is required.' });
+      return;
+    }
+    if (isDurationJob && !(Number(editJobForm.duration_minutes) > 0)) {
+      setMessage({ type: 'error', text: 'Duration is required.' });
+      return;
+    }
+    if (!isDurationJob && !editJobForm.target_liters) {
       setMessage({ type: 'error', text: 'Zone and target liters are required.' });
       return;
     }
     setJobBusy(true);
-    const { error } = await updateIrrigationJob(editJob.id, {
-      zoneId: Number(editJobForm.zone_id),
-      targetLiters: Number(editJobForm.target_liters),
-    });
+    const { error } = await updateIrrigationJob(editJob.id, isDurationJob
+      ? { zoneId: Number(editJobForm.zone_id), onDurationMinutes: Number(editJobForm.duration_minutes) }
+      : { zoneId: Number(editJobForm.zone_id), targetLiters: Number(editJobForm.target_liters) });
     setJobBusy(false);
     if (error) {
       setMessage({ type: 'error', text: scheduleTableHint(error.message) });
@@ -471,6 +526,17 @@ function IrrigationProgramsPanel({
     });
     await load();
   };
+
+  const formatSteps = (steps) => (
+    (steps || []).map((step) => {
+      const zone = (zones || []).find((z) => z.id === step.zone_id);
+      const code = zone?.zone_code || 'Zone';
+      if (programType === 'fertigation' || step.target_liters == null) {
+        return `${code} ${step.on_duration_minutes || '—'} min`;
+      }
+      return `${code} ${step.target_liters} L`;
+    }).join(' → ') || '—'
+  );
 
   const quickJobZone = (zones || []).find((z) => String(z.id) === String(jobForm.zone_id));
   const quickJobEst = estimateMinutesFromLiters(jobForm.target_liters, quickJobZone?.flow_rate_lph);
@@ -509,16 +575,15 @@ function IrrigationProgramsPanel({
         </Button>
       </Box>
 
-      {programType !== 'fertigation' && (
       <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
         <Typography variant="subtitle1" fontWeight={700} gutterBottom>
-          Water now
+          {programType === 'fertigation' ? 'Fertigation now' : 'Water now'}
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
           Starts immediately. Other programs pause until this finishes or you delete it.
         </Typography>
         <Grid container spacing={2} alignItems="center">
-          <Grid item xs={12} sm={4}>
+          <Grid item xs={12} sm={programType === 'fertigation' ? 3 : 3}>
             <FormControl fullWidth size="small">
               <InputLabel>Zone</InputLabel>
               <Select
@@ -532,24 +597,72 @@ function IrrigationProgramsPanel({
               </Select>
             </FormControl>
           </Grid>
-          <Grid item xs={12} sm={3}>
-            <TextField
-              fullWidth
-              size="small"
-              label="Target liters"
-              type="number"
-              value={jobForm.target_liters}
-              onChange={(e) => setJobForm((f) => ({ ...f, target_liters: e.target.value }))}
-            />
+          <Grid item xs={12} sm={programType === 'fertigation' ? 3 : 3}>
+            <FormControl fullWidth size="small" required>
+              <InputLabel>Equipment</InputLabel>
+              <Select
+                label="Equipment"
+                value={jobForm.motor_id}
+                onChange={(e) => setJobForm((f) => ({ ...f, motor_id: e.target.value }))}
+              >
+                {motors.map((m) => (
+                  <MenuItem key={m.id} value={String(m.id)}>
+                    {m.name}{m.device_code ? ` (${m.device_code})` : ''}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+          </Grid>
+          {programType === 'fertigation' && (
+            <Grid item xs={12} sm={2}>
+              <FormControl fullWidth size="small" required>
+                <InputLabel>Injector</InputLabel>
+                <Select
+                  label="Injector"
+                  value={jobForm.injector_id}
+                  onChange={(e) => setJobForm((f) => ({ ...f, injector_id: e.target.value }))}
+                >
+                  {injectors.map((m) => (
+                    <MenuItem key={m.id} value={String(m.id)}>
+                      {m.name}{m.device_code ? ` (${m.device_code})` : ''}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            </Grid>
+          )}
+          <Grid item xs={12} sm={programType === 'fertigation' ? 2 : 3}>
+            {programType === 'fertigation' ? (
+              <TextField
+                fullWidth
+                size="small"
+                required
+                label="Minutes"
+                type="number"
+                value={jobForm.duration_minutes}
+                onChange={(e) => setJobForm((f) => ({ ...f, duration_minutes: e.target.value }))}
+                inputProps={{ min: 1, step: 1 }}
+              />
+            ) : (
+              <TextField
+                fullWidth
+                size="small"
+                required
+                label="Target liters"
+                type="number"
+                value={jobForm.target_liters}
+                onChange={(e) => setJobForm((f) => ({ ...f, target_liters: e.target.value }))}
+                helperText={
+                  quickJobEst
+                    ? `About ${formatEstimatedDuration(quickJobEst)}${quickJobZone?.flow_rate_lph ? ` at ${quickJobZone.flow_rate_lph} L/h` : ''}`
+                    : undefined
+                }
+              />
+            )}
           </Grid>
           <Grid item xs={12} sm={2}>
-            <Typography variant="body2" color="text.secondary">
-              Est. {formatEstimatedDuration(quickJobEst) || '—'}
-              {quickJobZone?.flow_rate_lph ? ` @ ${quickJobZone.flow_rate_lph} L/h` : ''}
-            </Typography>
-          </Grid>
-          <Grid item xs={12} sm={3}>
             <Button
+              fullWidth
               variant="contained"
               color="warning"
               startIcon={creatingJob ? <CircularProgress size={16} color="inherit" /> : <PlayArrowIcon />}
@@ -561,149 +674,126 @@ function IrrigationProgramsPanel({
           </Grid>
         </Grid>
       </Paper>
-      )}
 
       {jobs.length > 0 && (
-        <Box sx={{ mb: 3 }}>
-          <Typography variant="subtitle1" fontWeight={700} gutterBottom>
-            Running now
-          </Typography>
-          <Grid container spacing={1.5}>
-            {jobs.map((job) => {
-              const zone = (zones || []).find((z) => z.id === job.zone_id);
-              const est = estimateMinutesFromLiters(job.target_liters, zone?.flow_rate_lph);
-              const isManual = job.job_type === 'manual';
-              return (
-                <Grid item xs={12} sm={6} key={job.id}>
-                  <Paper
-                    variant="outlined"
-                    sx={(theme) => ({
-                      p: 1.5,
-                      borderColor: isManual ? theme.palette.warning.main : undefined,
-                    })}
-                  >
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1 }}>
-                      <Typography fontWeight={700}>
-                        {zone?.zone_code || `Zone ${job.zone_id}`}
-                        {isManual ? ' · Water now' : ''}
-                      </Typography>
+        <TableContainer component={Paper} variant="outlined" sx={{ mb: 3 }}>
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell>Zone</TableCell>
+                <TableCell>Status</TableCell>
+                <TableCell>Progress</TableCell>
+                <TableCell align="right">Actions</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {jobs.map((job) => {
+                const zone = (zones || []).find((z) => z.id === job.zone_id);
+                const est = estimateMinutesFromLiters(job.target_liters, zone?.flow_rate_lph);
+                const isManual = job.job_type === 'manual';
+                return (
+                  <TableRow key={job.id}>
+                    <TableCell>
+                      {zone?.zone_code || `Zone ${job.zone_id}`}
+                      {isManual ? ' · Water now' : ''}
+                    </TableCell>
+                    <TableCell>
                       <Chip
                         size="small"
                         color={isManual ? 'warning' : (job.status === 'running' ? 'success' : 'default')}
                         label={jobStatusLabel(job.status)}
                       />
-                    </Box>
-                    <Typography variant="body2" color="text.secondary">
+                    </TableCell>
+                    <TableCell>
                       {jobProgressLabel(job)}
-                      {est != null ? ` · ~${formatEstimatedDuration(est)} est.` : ''}
-                    </Typography>
-                    <Box sx={{ mt: 1, display: 'flex', gap: 1 }}>
-                      <Button size="small" onClick={() => openEditJob(job)} disabled={jobBusy}>
-                        Modify
-                      </Button>
-                      <Button
-                        size="small"
-                        color="error"
-                        onClick={() => removeJob(job)}
-                        disabled={jobBusy}
-                      >
-                        Delete
-                      </Button>
-                    </Box>
-                  </Paper>
-                </Grid>
-              );
-            })}
-          </Grid>
-        </Box>
+                      {est != null ? ` · about ${formatEstimatedDuration(est)}` : ''}
+                    </TableCell>
+                    <TableCell align="right">
+                      <Button size="small" onClick={() => openEditJob(job)} disabled={jobBusy}>Modify</Button>
+                      <Button size="small" color="error" onClick={() => removeJob(job)} disabled={jobBusy}>Delete</Button>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </TableContainer>
       )}
 
-      {programs.length === 0 ? (
-        <Paper variant="outlined" sx={{ p: 3, textAlign: 'center' }}>
-          <Typography color="text.secondary">
-            {programType === 'fertigation'
-              ? 'No fertigation programs yet. Create one to run motor and injector on a schedule.'
-              : 'No water programs yet. Create one to water zones on a schedule.'}
-          </Typography>
-        </Paper>
-      ) : (
-        <Grid container spacing={2}>
-            {programs.map((program, index) => {
-            const steps = (program.irrigation_program_steps || []).slice().sort((a, b) => a.seq - b.seq);
-            const totalMins = estimateProgramMinutes(steps, zones);
-            const motor = motors.find((m) => program.motor_device_ids?.some((id) => Number(id) === Number(m.id)));
-            const injector = injectors.find((m) =>
-              (program.irrigation_program_devices || []).some((d) => Number(d.device_id) === Number(m.id)));
-            return (
-              <Grid item xs={12} md={6} key={program.id}>
-                <Paper variant="outlined" sx={{ p: 2, height: '100%' }}>
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 1 }}>
-                    <Box>
-                      <Typography variant="body2" color="text.secondary">
-                        {index === 0 ? 'Runs first' : `Runs after ${programs[index - 1]?.name || 'previous'}`}
-                      </Typography>
-                      <Typography variant="h6" fontWeight={800}>{program.name}</Typography>
-                      <Typography variant="body2" color="text.secondary">
-                        {programDaysLabel(program.days_of_week)}
-                        {' · starts '}
-                        {programTimesLabel(program.start_times)}
-                        {totalMins > 0 ? ` · about ${formatEstimatedDuration(totalMins)}` : ''}
-                      </Typography>
-                      {(motor || injector) && (
-                        <Typography variant="body2" color="text.secondary">
-                          {[motor && `Motor: ${motor.name}`, injector && `Injector: ${injector.name}`]
-                            .filter(Boolean)
-                            .join(' · ')}
-                        </Typography>
-                      )}
+      <TableContainer component={Paper} variant="outlined">
+        <Table size="small">
+          <TableHead>
+            <TableRow>
+              <TableCell width={88}>Order</TableCell>
+              <TableCell>Name</TableCell>
+              <TableCell>Days</TableCell>
+              <TableCell>Start</TableCell>
+              <TableCell>Motor</TableCell>
+              {programType === 'fertigation' && <TableCell>Injector</TableCell>}
+              <TableCell>{programType === 'fertigation' ? 'Zones & minutes' : 'Zones & liters'}</TableCell>
+              <TableCell>Time</TableCell>
+              <TableCell>On</TableCell>
+              <TableCell align="right">Actions</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {programs.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={programType === 'fertigation' ? 10 : 9}>
+                  <Typography color="text.secondary">
+                    {programType === 'fertigation'
+                      ? 'No fertigation programs yet.'
+                      : 'No water programs yet.'}
+                  </Typography>
+                </TableCell>
+              </TableRow>
+            ) : programs.map((program, index) => {
+              const steps = (program.irrigation_program_steps || []).slice().sort((a, b) => a.seq - b.seq);
+              const totalMins = estimateProgramMinutes(steps, zones);
+              const motor = motors.find((m) => program.motor_device_ids?.some((id) => Number(id) === Number(m.id)));
+              const injector = injectors.find((m) =>
+                (program.irrigation_program_devices || []).some((d) => Number(d.device_id) === Number(m.id)));
+              return (
+                <TableRow key={program.id} hover>
+                  <TableCell>
+                    <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                      <IconButton size="small" disabled={index === 0} onClick={() => moveProgram(program, -1)}>
+                        <ArrowUpwardIcon fontSize="small" />
+                      </IconButton>
+                      <IconButton size="small" disabled={index === programs.length - 1} onClick={() => moveProgram(program, 1)}>
+                        <ArrowDownwardIcon fontSize="small" />
+                      </IconButton>
                     </Box>
-                    <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
-                      <Switch
-                        checked={Boolean(program.is_active)}
-                        onChange={() => toggleActive(program)}
-                        inputProps={{ 'aria-label': 'Active' }}
-                      />
-                      <Box>
-                        <IconButton size="small" disabled={index === 0} onClick={() => moveProgram(program, -1)}>
-                          <ArrowUpwardIcon fontSize="small" />
-                        </IconButton>
-                        <IconButton
-                          size="small"
-                          disabled={index === programs.length - 1}
-                          onClick={() => moveProgram(program, 1)}
-                        >
-                          <ArrowDownwardIcon fontSize="small" />
-                        </IconButton>
-                      </Box>
-                    </Box>
-                  </Box>
-                  <Box sx={{ mt: 1.5, display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-                    {steps.map((step, stepIdx) => {
-                      const zone = (zones || []).find((z) => z.id === step.zone_id);
-                      const stepMins = estimateStepMinutes(step, zones);
-                      return (
-                        <Typography key={step.id || step.seq} variant="body2">
-                          {stepIdx + 1}. {zone?.zone_code || 'Zone'}
-                          {step.target_liters != null
-                            ? ` — ${step.target_liters} L`
-                            : ` — ${step.on_duration_minutes} min`}
-                          {stepMins != null && step.target_liters != null
-                            ? ` (about ${formatEstimatedDuration(stepMins)})`
-                            : ''}
-                        </Typography>
-                      );
-                    })}
-                  </Box>
-                  <Box sx={{ mt: 2, display: 'flex', gap: 1 }}>
+                  </TableCell>
+                  <TableCell>
+                    <Typography fontWeight={700}>{program.name}</Typography>
+                  </TableCell>
+                  <TableCell>{programDaysLabel(program.days_of_week)}</TableCell>
+                  <TableCell>{programTimesLabel(program.start_times)}</TableCell>
+                  <TableCell>{motor?.name || '—'}</TableCell>
+                  {programType === 'fertigation' && (
+                    <TableCell>{injector?.name || '—'}</TableCell>
+                  )}
+                  <TableCell>{formatSteps(steps)}</TableCell>
+                  <TableCell>{totalMins > 0 ? formatEstimatedDuration(totalMins) : '—'}</TableCell>
+                  <TableCell>
+                    <Switch
+                      size="small"
+                      checked={Boolean(program.is_active)}
+                      onChange={() => toggleActive(program)}
+                      inputProps={{ 'aria-label': 'Active' }}
+                    />
+                  </TableCell>
+                  <TableCell align="right">
                     <Button size="small" onClick={() => openEdit(program)}>Edit</Button>
                     <Button size="small" color="error" onClick={() => deleteProgram(program)}>Delete</Button>
-                  </Box>
-                </Paper>
-              </Grid>
-            );
-          })}
-        </Grid>
-      )}
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </TableContainer>
 
       <IrrigationProgramFormDialog
         open={dialogOpen}
@@ -741,20 +831,31 @@ function IrrigationProgramsPanel({
               </FormControl>
             </Grid>
             <Grid item xs={12}>
-              <TextField
-                fullWidth
-                label="Target liters"
-                type="number"
-                value={editJobForm.target_liters}
-                onChange={(e) => setEditJobForm((f) => ({ ...f, target_liters: e.target.value }))}
-                helperText={(() => {
-                  const z = (zones || []).find((item) => String(item.id) === String(editJobForm.zone_id));
-                  const est = estimateMinutesFromLiters(editJobForm.target_liters, z?.flow_rate_lph);
-                  return est != null
-                    ? `Estimated ${formatEstimatedDuration(est)} at ${z.flow_rate_lph} L/h`
-                    : 'Set zone flow rate for time estimate';
-                })()}
-              />
+              {Number(editJob?.on_duration_minutes) > 0 && !(Number(editJob?.target_liters) > 0) ? (
+                <TextField
+                  fullWidth
+                  label="Minutes"
+                  type="number"
+                  value={editJobForm.duration_minutes}
+                  onChange={(e) => setEditJobForm((f) => ({ ...f, duration_minutes: e.target.value }))}
+                  inputProps={{ min: 1, step: 1 }}
+                />
+              ) : (
+                <TextField
+                  fullWidth
+                  label="Target liters"
+                  type="number"
+                  value={editJobForm.target_liters}
+                  onChange={(e) => setEditJobForm((f) => ({ ...f, target_liters: e.target.value }))}
+                  helperText={(() => {
+                    const z = (zones || []).find((item) => String(item.id) === String(editJobForm.zone_id));
+                    const est = estimateMinutesFromLiters(editJobForm.target_liters, z?.flow_rate_lph);
+                    return est != null
+                      ? `Estimated ${formatEstimatedDuration(est)} at ${z.flow_rate_lph} L/h`
+                      : 'Set zone flow rate for time estimate';
+                  })()}
+                />
+              )}
             </Grid>
           </Grid>
         </DialogContent>
