@@ -221,7 +221,7 @@ export function buildLiveGetCommandJson({ commands = [], pendingCommands = [] })
   }, null, 2);
 }
 
-export function buildLivePostTelemetryJson(rows = []) {
+export function buildLivePostTelemetryJson(rows = [], { emptyNote } = {}) {
   const bodies = (rows || [])
     .filter((row) => row.status)
     .map(({ zone, status }) => ({
@@ -241,7 +241,8 @@ export function buildLivePostTelemetryJson(rows = []) {
 
   if (!bodies.length) {
     return JSON.stringify({
-      note: 'No telemetry received yet. Controller POST body will look like this once a zone reports.',
+      note: emptyNote
+        || 'No telemetry received yet. Controller POST body will look like this once a zone reports.',
       zone_code: 'Z01',
       is_irrigating: false,
       reported_at: new Date().toISOString(),
