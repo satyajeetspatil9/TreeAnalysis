@@ -43,5 +43,6 @@ SET anon_key = EXCLUDED.anon_key,
 - Creates jobs from active programs at start times (Asia/Kolkata).
 - Runs volume jobs only inside `irrigation_allowed_windows`.
 - Stops at `target_liters`; pauses outside windows and resumes next day.
-- Enqueues start/stop for valves, motors, and fertigation injectors.
+- Enqueues **one** start/stop command per job with `device_codes` so motor, injector, and zone valve terminals switch together.
+- Logs completed water / Water now jobs into `irrigation_events`.
 - Applies weekly `irrigation_device_schedules` (optional cyclic bore on/off).

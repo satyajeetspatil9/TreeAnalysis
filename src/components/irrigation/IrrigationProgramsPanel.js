@@ -566,7 +566,7 @@ function IrrigationProgramsPanel({
         <Box sx={{ maxWidth: 640 }}>
           <Typography variant="body2" color="text.secondary">
             {programType === 'fertigation'
-              ? 'Fertigation programs run one after another. Motor and injector stay on for the minutes on each zone, then the next zone starts.'
+              ? 'Fertigation programs run one after another. Selected equipment terminals start and stop together for the minutes on each zone.'
               : 'Water programs run one after another. Each zone finishes its liters before the next starts. Watering only happens during power hours.'}
           </Typography>
         </Box>

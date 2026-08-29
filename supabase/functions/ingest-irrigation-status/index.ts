@@ -61,6 +61,78 @@ function parseTimestamp(raw: unknown) {
   return date.toISOString();
 }
 
+function uniqueDeviceCodes(codes: Array<string | null | undefined>) {
+  return [...new Set(
+    codes
+      .map((code) => String(code || '').trim().toUpperCase())
+      .filter(Boolean),
+  )];
+}
+
+function deviceCodesFromQueueRow(row: {
+  device_code?: string | null;
+  payload?: Record<string, unknown> | null;
+}) {
+  const payload = row.payload && typeof row.payload === 'object' ? row.payload : {};
+  const fromPayload = Array.isArray(payload.device_codes) ? payload.device_codes as string[] : [];
+  return uniqueDeviceCodes([...fromPayload, row.device_code]);
+}
+
+function mapQueueCommand(
+  row: {
+    id: number;
+    device_code: string;
+    action: string;
+    job_id: number | null;
+    zone_id: number | null;
+    payload: Record<string, unknown> | null;
+    created_at: string;
+    expires_at: string | null;
+  },
+  zoneCodeById: Map<number, string>,
+) {
+  const until = (row.payload as Record<string, unknown> | null)?.until ?? undefined;
+  const deviceCodes = deviceCodesFromQueueRow(row);
+  return {
+    id: row.id,
+    device_code: deviceCodes[0] || row.device_code,
+    device_codes: deviceCodes,
+    action: row.action,
+    job_id: row.job_id,
+    zone_id: row.zone_id,
+    zone_code: row.zone_id ? (zoneCodeById.get(row.zone_id) || null) : null,
+    until,
+    payload: row.payload || {},
+    created_at: row.created_at,
+    expires_at: row.expires_at,
+  };
+}
+
+function coalesceQueuedCommands(commands: Array<ReturnType<typeof mapQueueCommand>>) {
+  const groups = new Map<string, ReturnType<typeof mapQueueCommand>>();
+  const order: string[] = [];
+  for (const command of commands) {
+    const untilKey = JSON.stringify(command.until ?? null);
+    const key = command.job_id != null
+      ? `job:${command.job_id}|${command.action}|${untilKey}`
+      : `id:${command.id}`;
+    if (!groups.has(key)) {
+      groups.set(key, { ...command, device_codes: uniqueDeviceCodes(command.device_codes) });
+      order.push(key);
+      continue;
+    }
+    const grouped = groups.get(key)!;
+    grouped.device_codes = uniqueDeviceCodes([
+      ...grouped.device_codes,
+      ...command.device_codes,
+      command.device_code,
+    ]);
+    grouped.device_code = grouped.device_codes[0] || grouped.device_code;
+    if (command.id < grouped.id) grouped.id = command.id;
+  }
+  return order.map((key) => groups.get(key)!);
+}
+
 async function expireStaleCommands(supabase: ReturnType<typeof createClient>, farmId: number) {
   const now = new Date().toISOString();
   await supabase
@@ -97,21 +169,8 @@ async function fetchQueueCommands(supabase: ReturnType<typeof createClient>, far
 
   const zoneCodeById = new Map((zones || []).map((zone) => [zone.id, zone.zone_code]));
 
-  const commands = (queueRows || []).map((row) => {
-    const until = (row.payload as Record<string, unknown>)?.until ?? undefined;
-    return {
-      id: row.id,
-      device_code: row.device_code,
-      action: row.action,
-      job_id: row.job_id,
-      zone_id: row.zone_id,
-      zone_code: row.zone_id ? (zoneCodeById.get(row.zone_id) || null) : null,
-      until,
-      payload: row.payload || {},
-      created_at: row.created_at,
-      expires_at: row.expires_at,
-    };
-  });
+  const mapped = (queueRows || []).map((row) => mapQueueCommand(row, zoneCodeById));
+  const commands = coalesceQueuedCommands(mapped);
 
   return { commands, queueError: null, missingQueue: false };
 }
@@ -200,28 +259,57 @@ async function ackQueueCommands(
   const commandId = parseNumber(body.command_id ?? body.ack_command_id);
 
   if (commandId != null) {
+    const { data: row } = await supabase
+      .from('irrigation_command_queue')
+      .select('id, job_id, action')
+      .eq('id', commandId)
+      .eq('farm_id', farmId)
+      .maybeSingle();
+
     await supabase
       .from('irrigation_command_queue')
       .update({ status: 'acked', acked_at: now })
       .eq('id', commandId)
       .eq('farm_id', farmId);
+
+    if (row?.job_id) {
+      await supabase
+        .from('irrigation_command_queue')
+        .update({ status: 'acked', acked_at: now })
+        .eq('farm_id', farmId)
+        .eq('job_id', row.job_id)
+        .eq('action', row.action)
+        .eq('status', 'pending');
+    }
     return;
   }
 
   const deviceCode = body.device_code ? String(body.device_code).trim().toUpperCase() : null;
   const action = body.acked_action ? String(body.acked_action).trim().toLowerCase() : null;
 
-  let query = supabase
+  const { data: pending } = await supabase
     .from('irrigation_command_queue')
-    .update({ status: 'acked', acked_at: now })
+    .select('id, device_code, payload, zone_id, action')
     .eq('farm_id', farmId)
-    .eq('status', 'pending')
-    .eq('zone_id', zoneId);
+    .eq('status', 'pending');
 
-  if (deviceCode) query = query.eq('device_code', deviceCode);
-  if (action === 'start' || action === 'stop') query = query.eq('action', action);
+  const ids = (pending || [])
+    .filter((row) => {
+      if (action === 'start' || action === 'stop') {
+        if (row.action !== action) return false;
+      }
+      if (Number(row.zone_id) === Number(zoneId)) return true;
+      if (deviceCode && deviceCodesFromQueueRow(row).includes(deviceCode)) return true;
+      return false;
+    })
+    .map((row) => row.id);
 
-  await query;
+  if (ids.length) {
+    await supabase
+      .from('irrigation_command_queue')
+      .update({ status: 'acked', acked_at: now })
+      .in('id', ids);
+  }
 }
 
 Deno.serve(async (req) => {
@@ -316,26 +404,53 @@ Deno.serve(async (req) => {
     return jsonResponse({ ok: true, acked_command_id: commandId });
   }
 
+  const postedDeviceCode = body.device_code ? String(body.device_code).trim().toUpperCase() : null;
   const zoneCode = normalizeZoneCode(body.zone_code ?? body.zone);
-  if (!zoneCode) {
-    return jsonResponse({ error: 'Missing zone_code (must match irrigation_zones.zone_code)' }, 400);
+
+  let zoneRow: { id: number; farm_id: number; zone_code: string } | null = null;
+
+  if (postedDeviceCode) {
+    const { data: device, error: deviceError } = await supabase
+      .from('irrigation_devices')
+      .select('zone_id')
+      .eq('farm_id', keyRow.farm_id)
+      .eq('device_code', postedDeviceCode)
+      .maybeSingle();
+    if (deviceError) {
+      return jsonResponse({ error: deviceError.message }, 500);
+    }
+    if (device?.zone_id) {
+      const { data: byDevice, error: zoneByDeviceError } = await supabase
+        .from('irrigation_zones')
+        .select('id, farm_id, zone_code')
+        .eq('id', device.zone_id)
+        .maybeSingle();
+      if (zoneByDeviceError) {
+        return jsonResponse({ error: zoneByDeviceError.message }, 500);
+      }
+      zoneRow = byDevice;
+    }
   }
 
-  const { data: zoneRow, error: zoneError } = await supabase
-    .from('irrigation_zones')
-    .select('id, farm_id, zone_code')
-    .eq('farm_id', keyRow.farm_id)
-    .eq('zone_code', zoneCode)
-    .maybeSingle();
-
-  if (zoneError) {
-    return jsonResponse({ error: zoneError.message }, 500);
+  if (!zoneRow && zoneCode) {
+    const { data, error: zoneError } = await supabase
+      .from('irrigation_zones')
+      .select('id, farm_id, zone_code')
+      .eq('farm_id', keyRow.farm_id)
+      .eq('zone_code', zoneCode)
+      .maybeSingle();
+    if (zoneError) {
+      return jsonResponse({ error: zoneError.message }, 500);
+    }
+    zoneRow = data;
   }
+
   if (!zoneRow) {
     return jsonResponse({
-      error: `No irrigation zone found with code ${zoneCode} on this farm`,
+      error: 'Missing device_code linked to a zone, or zone_code matching irrigation_zones.zone_code',
+      device_code: postedDeviceCode,
       zone_code: zoneCode,
-    }, 404);
+    }, 400);
   }
 
   const startIndicator = parseBoolean(body.start_indicator) ?? false;
@@ -364,7 +479,7 @@ Deno.serve(async (req) => {
     stop_indicator: stopIndicator,
     current_discharge_lpm: parseNumber(body.current_discharge_lpm ?? body.current_discharge),
     total_discharge_liters: totalLiters,
-    device_code: body.device_code ? String(body.device_code).trim() : null,
+    device_code: postedDeviceCode,
     reported_at: reportedAt,
     updated_at: now,
   };

@@ -58,6 +58,7 @@ import {
   buildCommandQueueSampleJson,
   buildLiveGetCommandJson,
   buildLivePostTelemetryJson,
+  coalesceQueuedCommands,
   mapQueueRowToGetCommand,
   sendZoneControlCommand,
 } from '../../utils/irrigationSchedule';
@@ -223,7 +224,9 @@ function IrrigationDashboardPage() {
 
   const liveGetJson = useMemo(() => {
     const zoneCodeById = new Map((zones || []).map((z) => [z.id, z.zone_code]));
-    const commands = (queueCommands || []).map((row) => mapQueueRowToGetCommand(row, zoneCodeById));
+    const commands = coalesceQueuedCommands(
+      (queueCommands || []).map((row) => mapQueueRowToGetCommand(row, zoneCodeById)),
+    );
     const pendingCommands = (rows || [])
       .filter((row) => row.status?.pending_command)
       .map((row) => ({
@@ -673,7 +676,7 @@ function IrrigationDashboardPage() {
         <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
           <Typography variant="subtitle1" fontWeight={700}>GET — controller receives</Typography>
           <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
-            Pending start/stop commands from the queue. Empty commands means nothing to do right now.
+            Pending start/stop commands. Apply <code>action</code> to every code in <code>device_codes</code> at the same time. <code>zone_code</code> is display-only.
           </Typography>
           <Box
             component="pre"

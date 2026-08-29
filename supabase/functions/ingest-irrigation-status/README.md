@@ -1,6 +1,8 @@
 # ingest-irrigation-status
 
-POST live irrigation controller readings for a drip zone. GET pending commands (legacy + queue).
+POST live irrigation controller readings. GET pending commands.
+
+The controller acts only on **device codes** (terminals such as `Y0`–`Y8`). `zone_code` is optional display.
 
 ## Deploy
 
@@ -14,8 +16,11 @@ Same farm ingest key as soil sensors: header `x-api-key: ta_...`
 
 ## Body (telemetry)
 
+Identify the zone with a Devices `device_code` (preferred) and/or `zone_code` (LCD only).
+
 ```json
 {
+  "device_code": "Y0",
   "zone_code": "Z01",
   "is_irrigating": true,
   "started_at": "2026-08-26T09:00:00+05:30",
@@ -26,15 +31,12 @@ Same farm ingest key as soil sensors: header `x-api-key: ta_...`
   "stop_indicator": false,
   "current_discharge_lpm": 12.5,
   "total_discharge_liters": 450,
-  "device_code": "ESP32-IRR-01",
   "ack_command": true,
   "command_id": 12
 }
 ```
 
-`zone_code` must match `irrigation_zones.zone_code` for the farm tied to the API key.
-
-Ack a non-zone device command:
+Ack a command without zone telemetry:
 
 ```json
 { "ack_only": true, "command_id": 15 }
@@ -47,7 +49,7 @@ curl -H "x-api-key: ta_YOUR_KEY" \
   "https://YOUR_PROJECT.supabase.co/functions/v1/ingest-irrigation-status"
 ```
 
-Returns:
+Returns one command per job so selected terminals start and stop together:
 
 ```json
 {
@@ -56,11 +58,12 @@ Returns:
   "commands": [
     {
       "id": 1,
-      "device_code": "ZONE-Z01",
+      "device_code": "Y0",
+      "device_codes": ["Y0", "Y1", "Y2"],
       "action": "start",
       "job_id": 12,
       "zone_code": "Z01",
-      "until": { "liters": 6000 }
+      "until": { "minutes": 20 }
     }
   ],
   "pending_commands": [
@@ -69,9 +72,9 @@ Returns:
 }
 ```
 
-Prefer `commands` (farm-wide queue from migration 039). `pending_commands` remains for older controllers.
+Turn **all** `device_codes` on or off at the same time. `device_code` is the first terminal (compat). `zone_code` is visualization only.
 
-After acting, POST telemetry with `"ack_command": true` (and optional `command_id`).
+After acting, POST with `"ack_command": true` and the `command_id`.
 
 ## Migrations
 

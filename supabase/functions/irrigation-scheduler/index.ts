@@ -70,6 +70,37 @@ function matchesStartTime(startTimes: string[], hhmm: string) {
   return (startTimes || []).some((t) => String(t).slice(0, 5) === hhmm);
 }
 
+function uniqueDeviceCodes(codes: Array<string | null | undefined>) {
+  return [...new Set(
+    codes
+      .map((code) => String(code || '').trim().toUpperCase())
+      .filter(Boolean),
+  )];
+}
+
+function deviceCodesFromQueueRow(row: {
+  device_code?: string | null;
+  payload?: Record<string, unknown> | null;
+}) {
+  const payload = row.payload && typeof row.payload === 'object' ? row.payload : {};
+  const fromPayload = Array.isArray(payload.device_codes) ? payload.device_codes as string[] : [];
+  return uniqueDeviceCodes([...fromPayload, row.device_code]);
+}
+
+function zoneValveCode(
+  devices: Array<{ zone_id?: number | null; kind?: string; is_active?: boolean; device_code?: string | null }>,
+  zoneId: number | null | undefined,
+) {
+  if (!zoneId) return null;
+  const valve = devices.find((device) => (
+    Number(device.zone_id) === Number(zoneId)
+    && device.kind === 'zone_valve'
+    && device.is_active !== false
+    && device.device_code
+  ));
+  return valve?.device_code ? String(valve.device_code).trim().toUpperCase() : null;
+}
+
 async function enqueueCommand(
   supabase: Supabase,
   farmId: number,
@@ -79,35 +110,53 @@ async function enqueueCommand(
     jobId?: number | null;
     zoneId?: number | null;
     payload?: Record<string, unknown>;
+    deviceCodes?: string[];
   } = {},
 ) {
-  const code = String(deviceCode).trim().toUpperCase();
-  if (!code) return;
+  const codes = uniqueDeviceCodes(opts.deviceCodes?.length ? opts.deviceCodes : [deviceCode]);
+  if (!codes.length) return;
 
-  // Avoid duplicate pending same action for same device
-  const { data: existing } = await supabase
+  const { data: pending } = await supabase
     .from('irrigation_command_queue')
-    .select('id')
+    .select('id, device_code, payload')
     .eq('farm_id', farmId)
-    .eq('device_code', code)
     .eq('action', action)
-    .eq('status', 'pending')
-    .limit(1);
+    .eq('status', 'pending');
 
-  if (existing?.length) return;
+  const wanted = codes.slice().sort().join(',');
+  const alreadyQueued = (pending || []).some((row) => (
+    deviceCodesFromQueueRow(row).slice().sort().join(',') === wanted
+  ));
+  if (alreadyQueued) return;
 
   const now = new Date();
   await supabase.from('irrigation_command_queue').insert({
     farm_id: farmId,
-    device_code: code,
+    device_code: codes[0],
     action,
     job_id: opts.jobId ?? null,
     zone_id: opts.zoneId ?? null,
-    payload: opts.payload ?? {},
+    payload: { ...(opts.payload ?? {}), device_codes: codes },
     status: 'pending',
     created_at: now.toISOString(),
     expires_at: new Date(now.getTime() + 30 * 60 * 1000).toISOString(),
   });
+}
+
+async function enqueueCommandGroup(
+  supabase: Supabase,
+  farmId: number,
+  deviceCodes: string[],
+  action: 'start' | 'stop',
+  opts: {
+    jobId?: number | null;
+    zoneId?: number | null;
+    payload?: Record<string, unknown>;
+  } = {},
+) {
+  const codes = uniqueDeviceCodes(deviceCodes);
+  if (!codes.length) return;
+  await enqueueCommand(supabase, farmId, codes[0], action, { ...opts, deviceCodes: codes });
 }
 
 async function cancelPendingForDevices(
@@ -115,18 +164,22 @@ async function cancelPendingForDevices(
   farmId: number,
   deviceCodes: string[],
 ) {
-  if (!deviceCodes.length) return;
-  const codes = deviceCodes.map((c) => c.toUpperCase());
+  const codes = uniqueDeviceCodes(deviceCodes);
+  if (!codes.length) return;
+  const wanted = new Set(codes);
+  const { data: pending } = await supabase
+    .from('irrigation_command_queue')
+    .select('id, device_code, payload')
+    .eq('farm_id', farmId)
+    .eq('status', 'pending');
+  const ids = (pending || [])
+    .filter((row) => deviceCodesFromQueueRow(row).some((code) => wanted.has(code)))
+    .map((row) => row.id);
+  if (!ids.length) return;
   await supabase
     .from('irrigation_command_queue')
     .update({ status: 'cancelled' })
-    .eq('farm_id', farmId)
-    .eq('status', 'pending')
-    .in('device_code', codes);
-}
-
-function zoneDeviceCode(zone: { zone_code: string; device_code?: string | null }, statusDevice?: string | null) {
-  return (statusDevice || zone.device_code || `ZONE-${zone.zone_code}`).toUpperCase();
+    .in('id', ids);
 }
 
 async function resolveStepTargetLiters(
@@ -218,14 +271,21 @@ async function createJobFromProgram(
 
   if (error || !job) return null;
 
-  if (programDevices.length) {
-    await supabase.from('irrigation_job_devices').insert(
-      programDevices.map((d) => ({
-        job_id: job.id,
-        device_id: d.device_id,
-        role: d.role || 'injector',
-      })),
-    );
+  const deviceRows: Array<{ job_id: number; device_id: number; role: string }> = [];
+  (programDevices || []).forEach((d) => {
+    if (d.device_id == null) return;
+    deviceRows.push({
+      job_id: job.id,
+      device_id: Number(d.device_id),
+      role: String(d.role || 'injector'),
+    });
+  });
+  (program.motor_device_ids as number[] || []).forEach((id) => {
+    if (!id || deviceRows.some((row) => Number(row.device_id) === Number(id))) return;
+    deviceRows.push({ job_id: job.id, device_id: Number(id), role: 'motor' });
+  });
+  if (deviceRows.length) {
+    await supabase.from('irrigation_job_devices').insert(deviceRows);
   }
 
   return job;
@@ -280,6 +340,46 @@ async function advanceOrCompleteJob(
   }).eq('id', job.id).select('*').single();
 
   return updated;
+}
+
+async function recordWaterIrrigationEvent(
+  supabase: Supabase,
+  job: Record<string, unknown>,
+  zone: { id: number; flow_rate_lph: number | null } | undefined,
+  now: Date,
+) {
+  if (!job.zone_id) return;
+  if (job.job_type === 'fertigation') return;
+
+  const liters = Number(job.liters_delivered) || Number(job.target_liters) || 0;
+  const flow = zone?.flow_rate_lph != null ? Number(zone.flow_rate_lph) : null;
+  let duration = Number(job.duration_elapsed_minutes) || 0;
+  if (!(duration > 0) && liters > 0 && flow && flow > 0) {
+    duration = (liters / flow) * 60;
+  }
+  if (!(duration > 0) && job.started_at) {
+    duration = Math.max(0, (now.getTime() - new Date(String(job.started_at)).getTime()) / 60000);
+  }
+  if (!(duration > 0) && !(liters > 0)) return;
+
+  const local = partsInTz(now, FARM_TZ);
+  const notes = `irrigation_job:${job.id}:seq:${job.current_step_seq ?? 0}`;
+  const { data: existing } = await supabase
+    .from('irrigation_events')
+    .select('id')
+    .eq('zone_id', job.zone_id)
+    .eq('notes', notes)
+    .maybeSingle();
+  if (existing) return;
+
+  await supabase.from('irrigation_events').insert({
+    zone_id: job.zone_id,
+    event_date: local.dateKey,
+    duration_minutes: Math.max(1, Math.round(duration)),
+    water_liters: liters > 0 ? liters : null,
+    flow_rate_lph: flow,
+    notes,
+  });
 }
 
 async function processFarm(supabase: Supabase, farmId: number, now: Date) {
@@ -411,9 +511,7 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
 
     const zone = job.zone_id ? zonesById.get(job.zone_id) : null;
     const status = job.zone_id ? statusByZone.get(job.zone_id) : null;
-    const valveCode = zone
-      ? zoneDeviceCode(zone, status?.device_code)
-      : null;
+    const valveCode = zoneValveCode(devices || [], job.zone_id);
 
     const { data: jobDevices } = await supabase
       .from('irrigation_job_devices')
@@ -431,18 +529,28 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
       ...motorIds.map((id) => devicesById.get(id)?.device_code).filter(Boolean),
     ].map((c) => String(c).toUpperCase());
 
-    const allCodes = [valveCode, ...extraCodes].filter(Boolean) as string[];
+    const allCodes = uniqueDeviceCodes([valveCode, ...extraCodes]);
+
+    const stopAll = async (reason?: string) => {
+      await cancelPendingForDevices(supabase, farmId, allCodes);
+      await enqueueCommandGroup(supabase, farmId, allCodes, 'stop', {
+        jobId: job.id,
+        zoneId: job.zone_id,
+        payload: reason ? { reason } : {},
+      });
+      if (job.zone_id) {
+        await supabase.from('irrigation_zone_status').update({
+          pending_command: 'stop',
+          pending_command_at: now.toISOString(),
+          updated_at: now.toISOString(),
+        }).eq('zone_id', job.zone_id);
+      }
+    };
 
     // Non-primary jobs must wait (do not start another program/zone while one is active)
     if (!isPrimary) {
       if (job.status === 'running') {
-        await cancelPendingForDevices(supabase, farmId, allCodes);
-        for (const code of allCodes) {
-          await enqueueCommand(supabase, farmId, code, 'stop', {
-            jobId: job.id,
-            zoneId: job.zone_id,
-          });
-        }
+        await stopAll('queued_behind_primary');
         await supabase.from('irrigation_jobs').update({
           status: 'planned',
           liters_baseline: null,
@@ -490,21 +598,8 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
     const windowBlocks = job.window_mode && !inWindow && job.job_type !== 'manual';
 
     if (hitTarget) {
-      await cancelPendingForDevices(supabase, farmId, allCodes);
-      for (const code of allCodes) {
-        await enqueueCommand(supabase, farmId, code, 'stop', {
-          jobId: job.id,
-          zoneId: job.zone_id,
-        });
-      }
-
-      if (job.zone_id) {
-        await supabase.from('irrigation_zone_status').update({
-          pending_command: 'stop',
-          pending_command_at: now.toISOString(),
-          updated_at: now.toISOString(),
-        }).eq('zone_id', job.zone_id);
-      }
+      await recordWaterIrrigationEvent(supabase, job, zone, now);
+      await stopAll('target_reached');
 
       let steps: Array<Record<string, unknown>> = [];
       if (job.program_id) {
@@ -533,20 +628,7 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
 
     if (windowBlocks) {
       if (job.status === 'running') {
-        await cancelPendingForDevices(supabase, farmId, allCodes);
-        for (const code of allCodes) {
-          await enqueueCommand(supabase, farmId, code, 'stop', {
-            jobId: job.id,
-            zoneId: job.zone_id,
-          });
-        }
-        if (job.zone_id) {
-          await supabase.from('irrigation_zone_status').update({
-            pending_command: 'stop',
-            pending_command_at: now.toISOString(),
-            updated_at: now.toISOString(),
-          }).eq('zone_id', job.zone_id);
-        }
+        await stopAll('outside_window');
         await supabase.from('irrigation_jobs').update({
           status: 'paused_outside_window',
           liters_baseline: null,
@@ -557,8 +639,17 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
       continue;
     }
 
-    // Inside window (or no window mode): ensure running + start commands
-    if (job.status === 'planned' || job.status === 'paused_outside_window') {
+    // Inside window (or no window mode): start all selected terminals together
+    const untilPayload = durationMinutes != null
+      ? { until: { minutes: durationMinutes } }
+      : (target != null ? { until: { liters: target } } : {});
+
+    const becomingRunning = job.status === 'planned' || job.status === 'paused_outside_window';
+    if (becomingRunning) {
+      if (!allCodes.length) {
+        actions.push(`skip_start_no_terminals:${job.id}`);
+        continue;
+      }
       const baseline = status?.total_discharge_liters != null
         ? Number(status.total_discharge_liters)
         : 0;
@@ -568,49 +659,39 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
         liters_baseline: baseline,
         updated_at: now.toISOString(),
       }).eq('id', job.id);
-    }
 
-    const untilPayload = durationMinutes != null
-      ? { until: { minutes: durationMinutes } }
-      : (target != null ? { until: { liters: target } } : {});
-
-    for (const code of extraCodes) {
-      await enqueueCommand(supabase, farmId, code, 'start', {
+      await enqueueCommandGroup(supabase, farmId, allCodes, 'start', {
         jobId: job.id,
         zoneId: job.zone_id,
         payload: untilPayload,
       });
-    }
-    if (valveCode) {
-      await enqueueCommand(supabase, farmId, valveCode, 'start', {
-        jobId: job.id,
-        zoneId: job.zone_id,
-        payload: untilPayload,
-      });
-      const { data: existingStatus } = await supabase
-        .from('irrigation_zone_status')
-        .select('zone_id')
-        .eq('zone_id', job.zone_id)
-        .maybeSingle();
-      if (existingStatus) {
-        await supabase.from('irrigation_zone_status').update({
-          pending_command: 'start',
-          pending_command_at: now.toISOString(),
-          updated_at: now.toISOString(),
-        }).eq('zone_id', job.zone_id);
-      } else {
-        await supabase.from('irrigation_zone_status').insert({
-          zone_id: job.zone_id,
-          farm_id: farmId,
-          is_irrigating: false,
-          pending_command: 'start',
-          pending_command_at: now.toISOString(),
-          updated_at: now.toISOString(),
-          reported_at: now.toISOString(),
-        });
+
+      if (job.zone_id) {
+        const { data: existingStatus } = await supabase
+          .from('irrigation_zone_status')
+          .select('zone_id')
+          .eq('zone_id', job.zone_id)
+          .maybeSingle();
+        if (existingStatus) {
+          await supabase.from('irrigation_zone_status').update({
+            pending_command: 'start',
+            pending_command_at: now.toISOString(),
+            updated_at: now.toISOString(),
+          }).eq('zone_id', job.zone_id);
+        } else {
+          await supabase.from('irrigation_zone_status').insert({
+            zone_id: job.zone_id,
+            farm_id: farmId,
+            is_irrigating: false,
+            pending_command: 'start',
+            pending_command_at: now.toISOString(),
+            updated_at: now.toISOString(),
+            reported_at: now.toISOString(),
+          });
+        }
       }
+      actions.push(`ensure_start_job:${job.id}:codes:${allCodes.join(',')}`);
     }
-    actions.push(`ensure_start_job:${job.id}`);
   }
 
   // Device schedules (non-volume weekly on/off)

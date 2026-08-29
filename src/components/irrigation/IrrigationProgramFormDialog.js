@@ -230,7 +230,7 @@ export default function IrrigationProgramFormDialog({
       <DialogContent dividers>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
           {isFertigation
-            ? 'Motor and injector run together for the minutes you set on each zone. Next zone starts when that time is over.'
+            ? 'Selected equipment terminals (motor, injector, zone valve) start and stop together. Next zone starts when that time is over.'
             : 'Each zone waters until the liters are done, then the next zone starts. Only runs during power hours.'}
         </Typography>
 
@@ -413,7 +413,7 @@ export default function IrrigationProgramFormDialog({
               <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', mb: 1.5, gap: 1 }}>
                 <Typography variant="body2" color="text.secondary">
                   {isFertigation
-                    ? 'One after another. Minutes are how long motor and injector stay on.'
+                    ? 'One after another. Minutes are how long the selected terminals stay on together.'
                     : 'One after another. Enter liters for each zone.'}
                 </Typography>
                 {totalMinutes > 0 && (

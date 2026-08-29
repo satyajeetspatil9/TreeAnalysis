@@ -15,7 +15,7 @@ export function buildIrrigationStatusSampleJson(zoneCode = 'Z01') {
     stop_indicator: false,
     current_discharge_lpm: 12.5,
     total_discharge_liters: 450,
-    device_code: 'ESP32-IRR-01',
+    device_code: 'Y0',
   }, null, 2);
 }
 
