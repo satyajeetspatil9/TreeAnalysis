@@ -197,6 +197,22 @@ function IrrigationProgramsPanel({
       setMessage({ type: 'error', text: 'Name is required.' });
       return;
     }
+    if (!form.days_of_week.length) {
+      setMessage({ type: 'error', text: 'Pick at least one day.' });
+      return;
+    }
+    if (!form.start_times.filter(Boolean).length) {
+      setMessage({ type: 'error', text: 'Start time is required.' });
+      return;
+    }
+    if (programType !== 'fertigation' && !(form.motor_device_ids || []).length) {
+      setMessage({ type: 'error', text: 'Select an irrigation motor.' });
+      return;
+    }
+    if (!(form.steps || []).some((s) => s.zone_id && Number(s.target_liters) > 0)) {
+      setMessage({ type: 'error', text: 'Add at least one zone with target liters.' });
+      return;
+    }
     setSaving(true);
     const payload = {
       farm_id: farmId,
@@ -247,7 +263,7 @@ function IrrigationProgramsPanel({
     }
 
     const stepRows = form.steps
-      .filter((s) => s.zone_id)
+      .filter((s) => s.zone_id && Number(s.target_liters) > 0)
       .map((s, idx) => {
         const zone = (zones || []).find((z) => String(z.id) === String(s.zone_id));
         const est = estimateMinutesFromLiters(s.target_liters, zone?.flow_rate_lph);

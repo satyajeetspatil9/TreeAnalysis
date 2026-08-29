@@ -9,6 +9,7 @@ import {
   DialogContent,
   DialogTitle,
   FormControl,
+  FormHelperText,
   FormLabel,
   Grid,
   IconButton,
@@ -25,13 +26,17 @@ import {
   estimateMinutesFromLiters,
   estimateProgramMinutes,
   formatEstimatedDuration,
+  formatTimeInput,
   suggestStartsFromAllowedWindows,
-  timeToInputValue,
   WEEKDAY_LABELS,
 } from '../../utils/irrigationSchedule';
 
 function emptyStep(seq = 0) {
   return { zone_id: '', target_liters: '', on_duration_minutes: '', seq, is_active: true };
+}
+
+function stepHasZoneAndLiters(step) {
+  return Boolean(step?.zone_id) && Number(step?.target_liters) > 0;
 }
 
 function minutesOf(hhmm) {
@@ -75,6 +80,11 @@ export default function IrrigationProgramFormDialog({
   onSave,
 }) {
   const [error, setError] = useState(null);
+  const [submitted, setSubmitted] = useState(false);
+  const motorRequired = programType !== 'fertigation';
+
+  const startTime = formatTimeInput(form.start_times?.[0]) || '';
+  const hasCompleteStep = (form.steps || []).some(stepHasZoneAndLiters);
 
   const totalMinutes = useMemo(
     () => estimateProgramMinutes(form.steps, zones),
@@ -86,9 +96,8 @@ export default function IrrigationProgramFormDialog({
     [windows, form.days_of_week],
   );
 
-  const startTime = timeToInputValue(form.start_times[0] || '06:00');
-
   const startOutsideAllowed = useMemo(() => {
+    if (!startTime) return false;
     const { slots } = suggestStartsFromAllowedWindows(windows, form.days_of_week);
     if (!slots.length) return false;
     const now = minutesOf(startTime);
@@ -96,7 +105,10 @@ export default function IrrigationProgramFormDialog({
   }, [windows, form.days_of_week, startTime]);
 
   useEffect(() => {
-    if (open) setError(null);
+    if (open) {
+      setError(null);
+      setSubmitted(false);
+    }
   }, [open, editing?.id]);
 
   useEffect(() => {
@@ -133,6 +145,7 @@ export default function IrrigationProgramFormDialog({
   };
 
   const handleSave = () => {
+    setSubmitted(true);
     if (!form.name.trim()) {
       setError('Enter a program name.');
       return;
@@ -141,8 +154,15 @@ export default function IrrigationProgramFormDialog({
       setError('Pick at least one day.');
       return;
     }
-    const validSteps = (form.steps || []).filter((s) => s.zone_id && s.target_liters);
-    if (!validSteps.length) {
+    if (!startTime) {
+      setError('Enter a start time.');
+      return;
+    }
+    if (motorRequired && !(form.motor_device_ids || []).length) {
+      setError('Select an irrigation motor.');
+      return;
+    }
+    if (!hasCompleteStep) {
       setError('Add at least one zone with target liters.');
       return;
     }
@@ -168,16 +188,24 @@ export default function IrrigationProgramFormDialog({
           <Grid item xs={12}>
             <TextField
               fullWidth
+              required
               label="Name"
               value={form.name}
               onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+              error={submitted && !form.name.trim()}
+              helperText={submitted && !form.name.trim() ? 'Required' : ' '}
               autoFocus
             />
           </Grid>
 
           <Grid item xs={12}>
-            <Typography variant="subtitle2" fontWeight={700} gutterBottom>
-              Days
+            <Typography
+              variant="subtitle2"
+              fontWeight={700}
+              gutterBottom
+              color={submitted && !form.days_of_week.length ? 'error' : 'text.primary'}
+            >
+              Days *
             </Typography>
             <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
               {WEEKDAY_LABELS.map((label, day) => {
@@ -187,6 +215,7 @@ export default function IrrigationProgramFormDialog({
                     key={label}
                     size="small"
                     variant={selected ? 'contained' : 'outlined'}
+                    color={submitted && !form.days_of_week.length ? 'error' : 'primary'}
                     onClick={() => toggleDay(day)}
                     sx={{ minWidth: 48, px: 1 }}
                   >
@@ -195,11 +224,17 @@ export default function IrrigationProgramFormDialog({
                 );
               })}
             </Box>
+            {submitted && !form.days_of_week.length && (
+              <Typography variant="caption" color="error" sx={{ mt: 0.5, display: 'block' }}>
+                Select at least one day.
+              </Typography>
+            )}
           </Grid>
 
           <Grid item xs={12} sm={4}>
             <TextField
               fullWidth
+              required
               type="time"
               label="Start time"
               value={startTime}
@@ -210,6 +245,8 @@ export default function IrrigationProgramFormDialog({
               }))}
               InputLabelProps={{ shrink: true }}
               inputProps={{ step: 300 }}
+              error={submitted && !startTime}
+              helperText={submitted && !startTime ? 'Required' : ' '}
             />
           </Grid>
 
@@ -262,7 +299,12 @@ export default function IrrigationProgramFormDialog({
           )}
 
           <Grid item xs={12} sm={6}>
-            <FormControl fullWidth>
+            <FormControl
+              fullWidth
+              required={motorRequired}
+              error={submitted && motorRequired && !(form.motor_device_ids || []).length}
+              disabled={motors.length === 0}
+            >
               <InputLabel>Irrigation motor</InputLabel>
               <Select
                 label="Irrigation motor"
@@ -271,9 +313,8 @@ export default function IrrigationProgramFormDialog({
                   ...f,
                   motor_device_ids: e.target.value ? [Number(e.target.value)] : [],
                 }))}
-                disabled={motors.length === 0}
               >
-                {motors.length !== 1 && (
+                {!motorRequired && (
                   <MenuItem value="">None</MenuItem>
                 )}
                 {motors.map((m) => (
@@ -282,18 +323,20 @@ export default function IrrigationProgramFormDialog({
                   </MenuItem>
                 ))}
               </Select>
-              {motors.length === 0 && (
-                <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
-                  Add an irrigation motor under Devices first.
-                </Typography>
-              )}
+              <FormHelperText>
+                {motors.length === 0
+                  ? 'Add an irrigation motor under Devices first.'
+                  : (submitted && motorRequired && !(form.motor_device_ids || []).length
+                    ? 'Required'
+                    : ' ')}
+              </FormHelperText>
             </FormControl>
           </Grid>
 
           <Grid item xs={12}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
               <Typography variant="subtitle2" fontWeight={700}>
-                Zones (one after another)
+                Zones (one after another) *
               </Typography>
               {totalMinutes > 0 && (
                 <Typography variant="body2" color="text.secondary">
@@ -305,6 +348,7 @@ export default function IrrigationProgramFormDialog({
             {form.steps.map((step, idx) => {
               const zone = (zones || []).find((z) => String(z.id) === String(step.zone_id));
               const est = estimateMinutesFromLiters(step.target_liters, zone?.flow_rate_lph);
+              const showStepError = submitted && !hasCompleteStep;
               return (
                 <Grid
                   container
@@ -319,7 +363,7 @@ export default function IrrigationProgramFormDialog({
                     </Typography>
                   </Grid>
                   <Grid item xs={10} sm={5}>
-                    <FormControl fullWidth size="small">
+                    <FormControl fullWidth size="small" required error={showStepError && !step.zone_id}>
                       <InputLabel>Zone</InputLabel>
                       <Select
                         label="Zone"
@@ -338,15 +382,21 @@ export default function IrrigationProgramFormDialog({
                           <MenuItem key={z.id} value={String(z.id)}>{z.zone_code}</MenuItem>
                         ))}
                       </Select>
+                      {showStepError && !step.zone_id && (
+                        <FormHelperText>Required</FormHelperText>
+                      )}
                     </FormControl>
                   </Grid>
                   <Grid item xs={6} sm={3}>
                     <TextField
                       fullWidth
                       size="small"
+                      required
                       label="Liters"
                       type="number"
                       value={step.target_liters}
+                      error={showStepError && !(Number(step.target_liters) > 0)}
+                      helperText={showStepError && !(Number(step.target_liters) > 0) ? 'Required' : ' '}
                       onChange={(e) => {
                         const target_liters = e.target.value;
                         const computed = estimateMinutesFromLiters(target_liters, zone?.flow_rate_lph);
