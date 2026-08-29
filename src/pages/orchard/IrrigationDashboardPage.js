@@ -279,7 +279,7 @@ function IrrigationDashboardPage() {
   }, [load, loadDevices, farmLoading]);
 
   useEffect(() => {
-    if (tab !== 5 || !farm?.id) return undefined;
+    if (tab !== 4 || !farm?.id) return undefined;
     const id = window.setInterval(refreshQueue, 10000);
     return () => window.clearInterval(id);
   }, [tab, farm?.id, refreshQueue]);
@@ -433,7 +433,6 @@ function IrrigationDashboardPage() {
           <Tab label="Programs" />
           <Tab label="Allowed hours" />
           <Tab label="Devices" />
-          <Tab label="Other schedules" />
           <Tab label="Technician" />
         </Tabs>
       </Paper>
@@ -750,6 +749,9 @@ function IrrigationDashboardPage() {
             title="Fertigation programs"
           />
         </Box>
+        <Box sx={{ mt: 5 }}>
+          <IrrigationDeviceSchedulesPanel farmId={farm?.id} devices={devices} />
+        </Box>
       </TabPanel>
 
       <TabPanel value={tab} index={2}>
@@ -765,10 +767,6 @@ function IrrigationDashboardPage() {
       </TabPanel>
 
       <TabPanel value={tab} index={4}>
-        <IrrigationDeviceSchedulesPanel farmId={farm?.id} devices={devices} />
-      </TabPanel>
-
-      <TabPanel value={tab} index={5}>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
           Live JSON for Programs tab jobs (water, fertigation, Water now, Fertigation now) and Other schedules.
           Now-tab start/stop is omitted. This tab refreshes every 10 seconds.

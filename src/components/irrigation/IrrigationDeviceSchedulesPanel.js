@@ -282,8 +282,11 @@ function IrrigationDeviceSchedulesPanel({ farmId, devices }) {
         </Alert>
       )}
 
+      <Typography variant="h6" fontWeight={800} sx={{ mb: 1 }}>
+        Other schedules
+      </Typography>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2, gap: 1, flexWrap: 'wrap' }}>
-        <Typography variant="body2" color="text.secondary">
+        <Typography variant="body2" color="text.secondary" sx={{ maxWidth: 640 }}>
           Weekly on/off for motors and other devices. Pick multiple days for the same start and end time.
         </Typography>
         <Button
