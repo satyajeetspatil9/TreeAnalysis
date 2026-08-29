@@ -55,12 +55,14 @@ import {
   statusTableHint,
 } from '../../utils/irrigationStatus';
 import {
+  OPEN_JOB_STATUSES,
   buildCommandQueueSampleJson,
   buildLiveGetCommandJson,
   buildLivePostTelemetryJson,
-  coalesceQueuedCommands,
   deviceCodesFromQueueRow,
-  mapQueueRowToGetCommand,
+  expandQueuedCommands,
+  fetchPowerStatus,
+  powerStatusLabel,
   sendZoneControlCommand,
 } from '../../utils/irrigationSchedule';
 
@@ -120,6 +122,7 @@ function IrrigationDashboardPage() {
   const [queueCommands, setQueueCommands] = useState([]);
   const [programJobs, setProgramJobs] = useState([]);
   const [scheduleDeviceCodes, setScheduleDeviceCodes] = useState([]);
+  const [power, setPower] = useState(null);
 
   const loadDevices = useCallback(async () => {
     if (!farm?.id) {
@@ -148,11 +151,20 @@ function IrrigationDashboardPage() {
     if (showSpinner) setLoading(true);
     setMessage(null);
 
-    const { data: zoneRows, error: zonesError } = await supabase
-      .from('irrigation_zones')
-      .select('id, zone_code, description, flow_rate_lph')
-      .eq('farm_id', farm.id)
-      .order('zone_code');
+    const [
+      { data: zoneRows, error: zonesError },
+      { data: statusRows, error: statusError },
+    ] = await Promise.all([
+      supabase
+        .from('irrigation_zones')
+        .select('id, zone_code, description, flow_rate_lph')
+        .eq('farm_id', farm.id)
+        .order('zone_code'),
+      supabase
+        .from('irrigation_zone_status')
+        .select('*')
+        .eq('farm_id', farm.id),
+    ]);
 
     if (zonesError) {
       setMessage({ type: 'error', text: zonesError.message });
@@ -166,11 +178,6 @@ function IrrigationDashboardPage() {
     }
 
     setZones(zoneRows || []);
-
-    const { data: statusRows, error: statusError } = await supabase
-      .from('irrigation_zone_status')
-      .select('*')
-      .eq('farm_id', farm.id);
 
     if (statusError) {
       if (isMissingStatusTable(statusError)) {
@@ -191,7 +198,12 @@ function IrrigationDashboardPage() {
 
     setRows(mergeZoneStatusRows(zoneRows, statusRows));
 
-    const [{ data: queueRows }, { data: jobRows }, { data: scheduleRows }] = await Promise.all([
+    const [
+      { data: queueRows },
+      { data: jobRows },
+      { data: scheduleRows },
+      { power: powerRow },
+    ] = await Promise.all([
       supabase
         .from('irrigation_command_queue')
         .select('id, device_code, action, job_id, zone_id, payload, created_at, expires_at, status')
@@ -201,18 +213,20 @@ function IrrigationDashboardPage() {
         .limit(50),
       supabase
         .from('irrigation_jobs')
-        .select('id, zone_id, job_type, program_id')
+        .select('id, zone_id, job_type, program_id, status')
         .eq('farm_id', farm.id)
         .in('job_type', ['water', 'fertigation', 'manual'])
-        .in('status', ['planned', 'running', 'paused_outside_window']),
+        .in('status', OPEN_JOB_STATUSES),
       supabase
         .from('irrigation_device_schedules')
         .select('irrigation_devices(device_code)')
         .eq('farm_id', farm.id)
         .eq('enabled', true),
+      fetchPowerStatus(farm.id),
     ]);
     setQueueCommands(queueRows || []);
     setProgramJobs(jobRows || []);
+    setPower(powerRow);
     setScheduleDeviceCodes(
       [...new Set(
         (scheduleRows || [])
@@ -222,6 +236,26 @@ function IrrigationDashboardPage() {
     );
 
     setLoading(false);
+  }, [farm?.id]);
+
+  /**
+   * Technician tab refresh. Only the queue and the mains flag change second to
+   * second, so this avoids re-running the whole five-query page load.
+   */
+  const refreshQueue = useCallback(async () => {
+    if (!farm?.id) return;
+    const [{ data: queueRows }, { power: powerRow }] = await Promise.all([
+      supabase
+        .from('irrigation_command_queue')
+        .select('id, device_code, action, job_id, zone_id, payload, created_at, expires_at, status')
+        .eq('farm_id', farm.id)
+        .eq('status', 'pending')
+        .order('created_at', { ascending: true })
+        .limit(50),
+      fetchPowerStatus(farm.id),
+    ]);
+    setQueueCommands(queueRows || []);
+    setPower(powerRow);
   }, [farm?.id]);
 
   useEffect(() => {
@@ -246,11 +280,9 @@ function IrrigationDashboardPage() {
 
   useEffect(() => {
     if (tab !== 5 || !farm?.id) return undefined;
-    const id = window.setInterval(() => {
-      load();
-    }, 5000);
+    const id = window.setInterval(refreshQueue, 10000);
     return () => window.clearInterval(id);
-  }, [tab, farm?.id, load]);
+  }, [tab, farm?.id, refreshQueue]);
 
   const programJobIds = useMemo(
     () => new Set((programJobs || []).map((job) => Number(job.id))),
@@ -272,14 +304,13 @@ function IrrigationDashboardPage() {
 
   const liveGetJson = useMemo(() => {
     const zoneCodeById = new Map((zones || []).map((z) => [z.id, z.zone_code]));
-    const commands = coalesceQueuedCommands(
-      (queueCommands || [])
-        .filter((row) => {
-          if (programJobIds.has(Number(row.job_id))) return true;
-          if (row.job_id != null) return false;
-          return deviceCodesFromQueueRow(row).some((code) => scheduleCodeSet.has(code));
-        })
-        .map((row) => mapQueueRowToGetCommand(row, zoneCodeById)),
+    const commands = expandQueuedCommands(
+      (queueCommands || []).filter((row) => {
+        if (programJobIds.has(Number(row.job_id))) return true;
+        if (row.job_id != null) return false;
+        return deviceCodesFromQueueRow(row).some((code) => scheduleCodeSet.has(code));
+      }),
+      zoneCodeById,
     );
     const pendingCommands = programRows
       .filter((row) => row.status?.pending_command)
@@ -289,8 +320,13 @@ function IrrigationDashboardPage() {
         command_at: row.status.pending_command_at,
         is_irrigating: row.isIrrigating,
       }));
-    return buildLiveGetCommandJson({ commands, pendingCommands });
-  }, [queueCommands, programRows, zones, programJobIds, scheduleCodeSet]);
+    return buildLiveGetCommandJson({
+      commands,
+      pendingCommands,
+      powerPresent: power ? power.power_present !== false : true,
+      powerReportedAt: power?.reported_at ?? null,
+    });
+  }, [queueCommands, programRows, zones, programJobIds, scheduleCodeSet, power]);
 
   const livePostJson = useMemo(
     () => buildLivePostTelemetryJson(programRows, {
@@ -377,6 +413,12 @@ function IrrigationDashboardPage() {
       {message && tab === 0 && (
         <Alert severity={message.type} sx={{ mb: 2 }} onClose={() => setMessage(null)}>
           {message.text}
+        </Alert>
+      )}
+
+      {power?.power_present === false && (
+        <Alert severity="warning" icon={<ElectricBoltIcon />} sx={{ mb: 2 }}>
+          {powerStatusLabel(power)}
         </Alert>
       )}
 
@@ -729,13 +771,22 @@ function IrrigationDashboardPage() {
       <TabPanel value={tab} index={5}>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
           Live JSON for Programs tab jobs (water, fertigation, Water now, Fertigation now) and Other schedules.
-          Now-tab start/stop is omitted. This tab refreshes every 5 seconds.
+          Now-tab start/stop is omitted. This tab refreshes every 10 seconds.
         </Typography>
+
+        {!power && (
+          <Alert severity="info" sx={{ mb: 2 }}>
+            {powerStatusLabel(null)}. Send <code>power_present</code> on any POST and programs will pause
+            during an outage and resume by themselves.
+          </Alert>
+        )}
 
         <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
           <Typography variant="subtitle1" fontWeight={700}>GET — controller receives</Typography>
           <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
-            Program and Other-schedule start/stop. Apply <code>action</code> to every code in <code>device_codes</code> at the same time. <code>zone_code</code> is display-only.
+            One command per terminal. Switch <code>device_code</code> and stop it when that command&apos;s
+            own <code>until</code> is met — <code>liters</code> on the metered zone valve,{' '}
+            <code>minutes</code> on pumps and injectors. <code>zone_code</code> is display-only.
           </Typography>
           <Box
             component="pre"
@@ -756,7 +807,9 @@ function IrrigationDashboardPage() {
         <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
           <Typography variant="subtitle1" fontWeight={700}>POST — controller sends</Typography>
           <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
-            Telemetry for the zone of an active Programs-tab job. ack_command is true when a pending command is waiting.
+            Telemetry for the zone of an active Programs-tab job. <code>ack_command</code> is true when a
+            pending command is waiting. Include <code>power_present</code> on every POST so an outage
+            pauses the programs.
           </Typography>
           <Box
             component="pre"

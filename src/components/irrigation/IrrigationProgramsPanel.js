@@ -33,6 +33,7 @@ import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import { supabase } from '../../supabaseClient';
 import IrrigationProgramFormDialog, { emptyStep } from './IrrigationProgramFormDialog';
 import {
+  OPEN_JOB_STATUSES,
   createAdHocVolumeJob,
   defaultStartFromWindows,
   deleteIrrigationJob,
@@ -125,7 +126,7 @@ function IrrigationProgramsPanel({
           'job_type',
           programType === 'fertigation' ? ['fertigation'] : ['water', 'manual'],
         )
-        .in('status', ['planned', 'running', 'paused_outside_window'])
+        .in('status', OPEN_JOB_STATUSES)
         .order('created_at', { ascending: false }),
       supabase
         .from('irrigation_allowed_windows')
