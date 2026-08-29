@@ -9,11 +9,11 @@ import {
   DialogContent,
   DialogTitle,
   FormControl,
+  FormLabel,
   Grid,
   IconButton,
   InputLabel,
   MenuItem,
-  Paper,
   Select,
   TextField,
   Typography,
@@ -98,6 +98,16 @@ export default function IrrigationProgramFormDialog({
   useEffect(() => {
     if (open) setError(null);
   }, [open, editing?.id]);
+
+  useEffect(() => {
+    if (!open || editing) return;
+    if ((form.motor_device_ids || []).length) return;
+    if (motors.length !== 1) return;
+    setForm((f) => {
+      if ((f.motor_device_ids || []).length) return f;
+      return { ...f, motor_device_ids: [motors[0].id] };
+    });
+  }, [open, editing, motors, form.motor_device_ids, setForm]);
 
   const toggleDay = (day) => {
     setForm((prev) => {
@@ -204,16 +214,32 @@ export default function IrrigationProgramFormDialog({
           </Grid>
 
           <Grid item xs={12} sm={8}>
-            <Paper variant="outlined" sx={{ px: 1.5, py: 1.25, height: '100%' }}>
-              <Typography variant="caption" color="text.secondary" fontWeight={700} display="block">
+            <FormControl
+              component="fieldset"
+              variant="standard"
+              fullWidth
+              sx={{
+                border: 1,
+                borderColor: 'divider',
+                borderRadius: 1,
+                px: 1.5,
+                pb: 1.25,
+                minHeight: 56,
+                height: '100%',
+              }}
+            >
+              <FormLabel
+                component="legend"
+                sx={{ px: 0.5, typography: 'caption', fontWeight: 600, color: 'text.secondary' }}
+              >
                 Allowed timing
-              </Typography>
+              </FormLabel>
               {allowedRanges.length === 0 ? (
-                <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                <Typography variant="body2" color="text.secondary">
                   Not set for these days — add it in Allowed hours.
                 </Typography>
               ) : (
-                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 0.5 }}>
+                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, pt: 0.25 }}>
                   {allowedRanges.map((item) => (
                     <Chip
                       key={item.range}
@@ -224,7 +250,7 @@ export default function IrrigationProgramFormDialog({
                   ))}
                 </Box>
               )}
-            </Paper>
+            </FormControl>
           </Grid>
 
           {startOutsideAllowed && (
@@ -234,6 +260,35 @@ export default function IrrigationProgramFormDialog({
               </Alert>
             </Grid>
           )}
+
+          <Grid item xs={12} sm={6}>
+            <FormControl fullWidth>
+              <InputLabel>Irrigation motor</InputLabel>
+              <Select
+                label="Irrigation motor"
+                value={form.motor_device_ids[0] != null ? String(form.motor_device_ids[0]) : ''}
+                onChange={(e) => setForm((f) => ({
+                  ...f,
+                  motor_device_ids: e.target.value ? [Number(e.target.value)] : [],
+                }))}
+                disabled={motors.length === 0}
+              >
+                {motors.length !== 1 && (
+                  <MenuItem value="">None</MenuItem>
+                )}
+                {motors.map((m) => (
+                  <MenuItem key={m.id} value={String(m.id)}>
+                    {m.name}{m.device_code ? ` · ${m.device_code}` : ''}
+                  </MenuItem>
+                ))}
+              </Select>
+              {motors.length === 0 && (
+                <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
+                  Add an irrigation motor under Devices first.
+                </Typography>
+              )}
+            </FormControl>
+          </Grid>
 
           <Grid item xs={12}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
@@ -246,22 +301,6 @@ export default function IrrigationProgramFormDialog({
                 </Typography>
               )}
             </Box>
-
-            <Grid container spacing={1} alignItems="center" sx={{ display: { xs: 'none', sm: 'flex' }, mb: 0.5 }}>
-              <Grid item sm={1}>
-                <Typography variant="caption" color="text.secondary" fontWeight={700}>#</Typography>
-              </Grid>
-              <Grid item sm={5}>
-                <Typography variant="caption" color="text.secondary" fontWeight={700}>Zone</Typography>
-              </Grid>
-              <Grid item sm={3}>
-                <Typography variant="caption" color="text.secondary" fontWeight={700}>Liters</Typography>
-              </Grid>
-              <Grid item sm={2}>
-                <Typography variant="caption" color="text.secondary" fontWeight={700}>Time</Typography>
-              </Grid>
-              <Grid item sm={1} />
-            </Grid>
 
             {form.steps.map((step, idx) => {
               const zone = (zones || []).find((z) => String(z.id) === String(step.zone_id));
@@ -350,27 +389,6 @@ export default function IrrigationProgramFormDialog({
               Add zone
             </Button>
           </Grid>
-
-          {motors.length > 0 && (
-            <Grid item xs={12} sm={6}>
-              <FormControl fullWidth size="small">
-                <InputLabel>Motor (optional)</InputLabel>
-                <Select
-                  label="Motor (optional)"
-                  value={form.motor_device_ids[0] || ''}
-                  onChange={(e) => setForm((f) => ({
-                    ...f,
-                    motor_device_ids: e.target.value ? [e.target.value] : [],
-                  }))}
-                >
-                  <MenuItem value="">None</MenuItem>
-                  {motors.map((m) => (
-                    <MenuItem key={m.id} value={m.id}>{m.name}</MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-            </Grid>
-          )}
 
           {programType === 'fertigation' && injectors.length > 0 && (
             <Grid item xs={12} sm={6}>

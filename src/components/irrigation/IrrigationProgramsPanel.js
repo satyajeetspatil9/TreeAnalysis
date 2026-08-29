@@ -76,9 +76,12 @@ function IrrigationProgramsPanel({
   const [jobBusy, setJobBusy] = useState(false);
 
   const drivable = (devices || []).filter((d) => d.io_type !== 'input');
-  const motors = drivable.filter((d) =>
-    d.kind === 'irrigation_motor' || d.kind === 'bore_motor');
+  const motors = drivable.filter((d) => d.kind === 'irrigation_motor');
   const injectors = drivable.filter((d) => d.kind === 'fertigation');
+
+  const defaultMotorIds = () => (
+    motors.length === 1 ? [motors[0].id] : []
+  );
 
   const load = useCallback(async () => {
     if (!farmId) return;
@@ -155,7 +158,7 @@ function IrrigationProgramsPanel({
       days_of_week: days,
       start_times: [start],
       use_allowed_windows: true,
-      motor_device_ids: motors[0] ? [motors[0].id] : [],
+      motor_device_ids: defaultMotorIds(),
       steps: [emptyStep(0)],
       injector_ids: [],
     });
