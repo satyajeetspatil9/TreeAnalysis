@@ -485,6 +485,11 @@ function IrrigationProgramsPanel({
 
   return (
     <Box>
+      {title && (
+        <Typography variant="h6" fontWeight={800} sx={{ mb: 1 }}>
+          {title}
+        </Typography>
+      )}
       {message && (
         <Alert severity={message.type} sx={{ mb: 2 }} onClose={() => setMessage(null)}>
           {message.text}

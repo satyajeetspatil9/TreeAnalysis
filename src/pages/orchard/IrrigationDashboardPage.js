@@ -289,7 +289,6 @@ function IrrigationDashboardPage() {
           <Tab label="Programs" />
           <Tab label="Allowed hours" />
           <Tab label="Devices" />
-          <Tab label="Fertigation" />
           <Tab label="Other schedules" />
           <Tab label="Technician" />
         </Tabs>
@@ -596,8 +595,17 @@ function IrrigationDashboardPage() {
           zones={zones}
           devices={devices}
           programType="water"
-          title="Programs"
+          title="Water programs"
         />
+        <Box sx={{ mt: 5 }}>
+          <IrrigationProgramsPanel
+            farmId={farm?.id}
+            zones={zones}
+            devices={devices}
+            programType="fertigation"
+            title="Fertigation programs"
+          />
+        </Box>
       </TabPanel>
 
       <TabPanel value={tab} index={2}>
@@ -613,20 +621,10 @@ function IrrigationDashboardPage() {
       </TabPanel>
 
       <TabPanel value={tab} index={4}>
-        <IrrigationProgramsPanel
-          farmId={farm?.id}
-          zones={zones}
-          devices={devices}
-          programType="fertigation"
-          title="Fertigation programs"
-        />
-      </TabPanel>
-
-      <TabPanel value={tab} index={5}>
         <IrrigationDeviceSchedulesPanel farmId={farm?.id} devices={devices} />
       </TabPanel>
 
-      <TabPanel value={tab} index={6}>
+      <TabPanel value={tab} index={5}>
         <Accordion defaultExpanded disableGutters>
           <AccordionSummary expandIcon={<ExpandMoreIcon />}>
             <Typography variant="subtitle2">Controller setup</Typography>
