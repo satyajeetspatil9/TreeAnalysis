@@ -36,6 +36,7 @@ import {
   formatEstimatedDuration,
   isMissingScheduleTable,
   jobProgressLabel,
+  jobStatusLabel,
   programDaysLabel,
   programTimesLabel,
   scheduleTableHint,
@@ -490,22 +491,26 @@ function IrrigationProgramsPanel({
         </Alert>
       )}
 
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2, gap: 1, flexWrap: 'wrap' }}>
-        <Typography variant="body2" color="text.secondary">
-          Programs run one after another (by order). Inside a program, zones run in sequence —
-          next zone starts only after target liters. Estimates use zone flow rate (L/h).
-        </Typography>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2, gap: 2, flexWrap: 'wrap' }}>
+        <Box sx={{ maxWidth: 640 }}>
+          <Typography variant="body2" color="text.secondary">
+            {programType === 'fertigation'
+              ? 'Fertigation programs run one after another. Motor and injector stay on for the minutes on each zone, then the next zone starts.'
+              : 'Water programs run one after another. Each zone finishes its liters before the next starts. Watering only happens during power hours.'}
+          </Typography>
+        </Box>
         <Button variant="contained" startIcon={<AddIcon />} onClick={openCreate}>
-          New {programType === 'fertigation' ? 'fertigation' : 'program'}
+          {programType === 'fertigation' ? 'New fertigation program' : 'New water program'}
         </Button>
       </Box>
 
+      {programType !== 'fertigation' && (
       <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
         <Typography variant="subtitle1" fontWeight={700} gutterBottom>
-          Quick volume job
+          Water now
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-          Starts immediately and pauses other programs. When this job finishes or is deleted, paused programs resume in order.
+          Starts immediately. Other programs pause until this finishes or you delete it.
         </Typography>
         <Grid container spacing={2} alignItems="center">
           <Grid item xs={12} sm={4}>
@@ -551,11 +556,12 @@ function IrrigationProgramsPanel({
           </Grid>
         </Grid>
       </Paper>
+      )}
 
       {jobs.length > 0 && (
         <Box sx={{ mb: 3 }}>
           <Typography variant="subtitle1" fontWeight={700} gutterBottom>
-            Active jobs
+            Running now
           </Typography>
           <Grid container spacing={1.5}>
             {jobs.map((job) => {
@@ -574,12 +580,12 @@ function IrrigationProgramsPanel({
                     <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1 }}>
                       <Typography fontWeight={700}>
                         {zone?.zone_code || `Zone ${job.zone_id}`}
-                        {isManual ? ' · Quick job' : ''}
+                        {isManual ? ' · Water now' : ''}
                       </Typography>
                       <Chip
                         size="small"
-                        color={isManual ? 'warning' : 'default'}
-                        label={job.status}
+                        color={isManual ? 'warning' : (job.status === 'running' ? 'success' : 'default')}
+                        label={jobStatusLabel(job.status)}
                       />
                     </Box>
                     <Typography variant="body2" color="text.secondary">
@@ -609,31 +615,42 @@ function IrrigationProgramsPanel({
 
       {programs.length === 0 ? (
         <Paper variant="outlined" sx={{ p: 3, textAlign: 'center' }}>
-          <Typography color="text.secondary">No {title.toLowerCase()} yet.</Typography>
+          <Typography color="text.secondary">
+            {programType === 'fertigation'
+              ? 'No fertigation programs yet. Create one to run motor and injector on a schedule.'
+              : 'No water programs yet. Create one to water zones on a schedule.'}
+          </Typography>
         </Paper>
       ) : (
         <Grid container spacing={2}>
-          {programs.map((program, index) => {
+            {programs.map((program, index) => {
             const steps = (program.irrigation_program_steps || []).slice().sort((a, b) => a.seq - b.seq);
             const totalMins = estimateProgramMinutes(steps, zones);
+            const motor = motors.find((m) => program.motor_device_ids?.some((id) => Number(id) === Number(m.id)));
+            const injector = injectors.find((m) =>
+              (program.irrigation_program_devices || []).some((d) => Number(d.device_id) === Number(m.id)));
             return (
               <Grid item xs={12} md={6} key={program.id}>
                 <Paper variant="outlined" sx={{ p: 2, height: '100%' }}>
                   <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 1 }}>
                     <Box>
-                      <Typography variant="overline" color="text.secondary">
-                        Run order #{program.run_order ?? index + 1}
-                        {index > 0 ? ' · starts after previous finishes' : ' · runs first'}
+                      <Typography variant="body2" color="text.secondary">
+                        {index === 0 ? 'Runs first' : `Runs after ${programs[index - 1]?.name || 'previous'}`}
                       </Typography>
                       <Typography variant="h6" fontWeight={800}>{program.name}</Typography>
                       <Typography variant="body2" color="text.secondary">
                         {programDaysLabel(program.days_of_week)}
-                        {' · '}
-                        {program.use_allowed_windows
-                          ? `MSEB hours${program.start_times?.length ? ` from ${programTimesLabel(program.start_times)}` : ''}`
-                          : programTimesLabel(program.start_times)}
-                        {totalMins > 0 ? ` · ~${formatEstimatedDuration(totalMins)} total` : ''}
+                        {' · starts '}
+                        {programTimesLabel(program.start_times)}
+                        {totalMins > 0 ? ` · about ${formatEstimatedDuration(totalMins)}` : ''}
                       </Typography>
+                      {(motor || injector) && (
+                        <Typography variant="body2" color="text.secondary">
+                          {[motor && `Motor: ${motor.name}`, injector && `Injector: ${injector.name}`]
+                            .filter(Boolean)
+                            .join(' · ')}
+                        </Typography>
+                      )}
                     </Box>
                     <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
                       <Switch
@@ -661,12 +678,13 @@ function IrrigationProgramsPanel({
                       const stepMins = estimateStepMinutes(step, zones);
                       return (
                         <Typography key={step.id || step.seq} variant="body2">
-                          {stepIdx + 1}. {zone?.zone_code || 'Zone'} —{' '}
+                          {stepIdx + 1}. {zone?.zone_code || 'Zone'}
                           {step.target_liters != null
-                            ? `${step.target_liters} L`
-                            : `${step.on_duration_minutes} min (motor + injector)`}
-                          {stepMins != null ? ` (~${formatEstimatedDuration(stepMins)})` : ''}
-                          {stepIdx < steps.length - 1 ? ' → then next zone' : ''}
+                            ? ` — ${step.target_liters} L`
+                            : ` — ${step.on_duration_minutes} min`}
+                          {stepMins != null && step.target_liters != null
+                            ? ` (about ${formatEstimatedDuration(stepMins)})`
+                            : ''}
                         </Typography>
                       );
                     })}

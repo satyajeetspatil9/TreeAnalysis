@@ -409,8 +409,33 @@ export async function deleteIrrigationJob(farmId, job) {
 }
 
 
+export function formatClockDisplay(time) {
+  const text = formatTimeInput(time);
+  if (!text) return '';
+  const [h, m] = text.split(':').map(Number);
+  const hour = Number.isFinite(h) ? h : 0;
+  const min = Number.isFinite(m) ? m : 0;
+  const ampm = hour >= 12 ? 'PM' : 'AM';
+  const hour12 = hour % 12 || 12;
+  return `${hour12}:${String(min).padStart(2, '0')} ${ampm}`;
+}
+
+export function jobStatusLabel(status) {
+  if (status === 'running') return 'Running now';
+  if (status === 'planned') return 'Waiting';
+  if (status === 'paused_outside_window') return 'Waiting for power';
+  if (status === 'completed') return 'Done';
+  if (status === 'cancelled') return 'Cancelled';
+  return status || '—';
+}
+
 export function jobProgressLabel(job) {
   if (!job) return '—';
+  const duration = Number(job.on_duration_minutes);
+  if (duration > 0 && !(Number(job.target_liters) > 0)) {
+    const elapsed = Math.round(Number(job.duration_elapsed_minutes) || 0);
+    return `${elapsed} / ${duration} min`;
+  }
   const delivered = Number(job.liters_delivered) || 0;
   const target = Number(job.target_liters);
   if (!target) return `${delivered} L`;
@@ -429,8 +454,8 @@ export function programDaysLabel(daysOfWeek) {
 
 export function programTimesLabel(startTimes) {
   const times = Array.isArray(startTimes) ? startTimes : [];
-  if (!times.length) return 'Allowed windows';
-  return times.map(formatTimeInput).join(', ');
+  if (!times.length) return 'Power hours';
+  return times.map((t) => formatClockDisplay(t) || formatTimeInput(t)).join(', ');
 }
 
 /** Format minutes as "2h 15m" / "45m" */

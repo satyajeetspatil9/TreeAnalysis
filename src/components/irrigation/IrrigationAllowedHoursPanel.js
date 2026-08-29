@@ -176,7 +176,7 @@ function IrrigationAllowedHoursPanel({ farmId }) {
       )}
 
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        When MSEB power is available. Watering only runs in these times.
+        Times when farm power is on. Programs only water during these hours.
       </Typography>
 
       <Box sx={{ display: 'flex', gap: 1, mb: 2, flexWrap: 'wrap' }}>
