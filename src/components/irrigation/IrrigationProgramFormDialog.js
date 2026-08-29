@@ -3,16 +3,18 @@ import {
   Alert,
   Box,
   Button,
+  Chip,
   Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
   FormControl,
+  Grid,
   IconButton,
   InputLabel,
   MenuItem,
+  Paper,
   Select,
-  Stack,
   TextField,
   Typography,
 } from '@mui/material';
@@ -23,12 +25,39 @@ import {
   estimateMinutesFromLiters,
   estimateProgramMinutes,
   formatEstimatedDuration,
+  suggestStartsFromAllowedWindows,
   timeToInputValue,
   WEEKDAY_LABELS,
 } from '../../utils/irrigationSchedule';
 
 function emptyStep(seq = 0) {
   return { zone_id: '', target_liters: '', on_duration_minutes: '', seq, is_active: true };
+}
+
+function minutesOf(hhmm) {
+  const [h, m] = String(hhmm || '').split(':').map(Number);
+  return (h || 0) * 60 + (m || 0);
+}
+
+/** Group allowed windows into "Mon, Tue · 06:00–14:00" lines for the selected days. */
+function groupAllowedRanges(windows, daysOfWeek) {
+  const { slots } = suggestStartsFromAllowedWindows(windows, daysOfWeek);
+  const byRange = new Map();
+
+  slots.forEach((slot) => {
+    const key = `${slot.start}–${slot.end}`;
+    const days = byRange.get(key) || [];
+    days.push(slot.weekday);
+    byRange.set(key, days);
+  });
+
+  return [...byRange.entries()].map(([range, days]) => ({
+    range,
+    days: [...new Set(days)]
+      .sort((a, b) => a - b)
+      .map((d) => WEEKDAY_LABELS[d])
+      .join(', '),
+  }));
 }
 
 export default function IrrigationProgramFormDialog({
@@ -51,6 +80,20 @@ export default function IrrigationProgramFormDialog({
     () => estimateProgramMinutes(form.steps, zones),
     [form.steps, zones],
   );
+
+  const allowedRanges = useMemo(
+    () => groupAllowedRanges(windows, form.days_of_week),
+    [windows, form.days_of_week],
+  );
+
+  const startTime = timeToInputValue(form.start_times[0] || '06:00');
+
+  const startOutsideAllowed = useMemo(() => {
+    const { slots } = suggestStartsFromAllowedWindows(windows, form.days_of_week);
+    if (!slots.length) return false;
+    const now = minutesOf(startTime);
+    return !slots.some((s) => now >= minutesOf(s.start) && now < minutesOf(s.end));
+  }, [windows, form.days_of_week, startTime]);
 
   useEffect(() => {
     if (open) setError(null);
@@ -111,144 +154,206 @@ export default function IrrigationProgramFormDialog({
           </Alert>
         )}
 
-        <TextField
-          fullWidth
-          label="Name"
-          value={form.name}
-          onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-          sx={{ mb: 2.5 }}
-          autoFocus
-        />
+        <Grid container spacing={2.5}>
+          <Grid item xs={12}>
+            <TextField
+              fullWidth
+              label="Name"
+              value={form.name}
+              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+              autoFocus
+            />
+          </Grid>
 
-        <Typography variant="subtitle2" fontWeight={700} gutterBottom>
-          Days
-        </Typography>
-        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75, mb: 2.5 }}>
-          {WEEKDAY_LABELS.map((label, day) => {
-            const selected = form.days_of_week.includes(day);
-            return (
-              <Button
-                key={label}
-                size="small"
-                variant={selected ? 'contained' : 'outlined'}
-                onClick={() => toggleDay(day)}
-                sx={{ minWidth: 44, px: 1 }}
-              >
-                {label}
-              </Button>
-            );
-          })}
-        </Box>
-
-        <TextField
-          type="time"
-          label="Start time"
-          value={timeToInputValue(form.start_times[0] || '06:00')}
-          onChange={(e) => setForm((f) => ({
-            ...f,
-            start_times: [e.target.value],
-            use_allowed_windows: true,
-          }))}
-          InputLabelProps={{ shrink: true }}
-          helperText="Runs inside Allowed hours (MSEB power)"
-          sx={{ mb: 3, maxWidth: 180 }}
-        />
-
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
-          <Typography variant="subtitle2" fontWeight={700}>
-            Zones (one after another)
-          </Typography>
-          {totalMinutes > 0 && (
-            <Typography variant="body2" color="text.secondary">
-              ~{formatEstimatedDuration(totalMinutes)} total
+          <Grid item xs={12}>
+            <Typography variant="subtitle2" fontWeight={700} gutterBottom>
+              Days
             </Typography>
-          )}
-        </Box>
-
-        <Stack spacing={1.5}>
-          {form.steps.map((step, idx) => {
-            const zone = (zones || []).find((z) => String(z.id) === String(step.zone_id));
-            const est = estimateMinutesFromLiters(step.target_liters, zone?.flow_rate_lph);
-            return (
-              <Box
-                key={idx}
-                sx={{
-                  display: 'grid',
-                  gridTemplateColumns: { xs: '1fr', sm: '1.2fr 1fr auto auto' },
-                  gap: 1,
-                  alignItems: 'center',
-                }}
-              >
-                <FormControl fullWidth size="small">
-                  <InputLabel>Zone</InputLabel>
-                  <Select
-                    label="Zone"
-                    value={step.zone_id}
-                    onChange={(e) => {
-                      const zone_id = e.target.value;
-                      const z = (zones || []).find((item) => String(item.id) === String(zone_id));
-                      const computed = estimateMinutesFromLiters(step.target_liters, z?.flow_rate_lph);
-                      updateStep(idx, {
-                        zone_id,
-                        on_duration_minutes: computed != null ? String(computed) : '',
-                      });
-                    }}
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
+              {WEEKDAY_LABELS.map((label, day) => {
+                const selected = form.days_of_week.includes(day);
+                return (
+                  <Button
+                    key={label}
+                    size="small"
+                    variant={selected ? 'contained' : 'outlined'}
+                    onClick={() => toggleDay(day)}
+                    sx={{ minWidth: 48, px: 1 }}
                   >
-                    {(zones || []).map((z) => (
-                      <MenuItem key={z.id} value={String(z.id)}>{z.zone_code}</MenuItem>
-                    ))}
-                  </Select>
-                </FormControl>
-                <TextField
-                  size="small"
-                  label="Liters"
-                  type="number"
-                  value={step.target_liters}
-                  onChange={(e) => {
-                    const target_liters = e.target.value;
-                    const computed = estimateMinutesFromLiters(target_liters, zone?.flow_rate_lph);
-                    updateStep(idx, {
-                      target_liters,
-                      on_duration_minutes: computed != null ? String(computed) : '',
-                    });
-                  }}
-                  helperText={est != null ? `~${formatEstimatedDuration(est)}` : ' '}
-                />
-                <Typography variant="body2" color="text.secondary" sx={{ minWidth: 36 }}>
-                  #{idx + 1}
+                    {label}
+                  </Button>
+                );
+              })}
+            </Box>
+          </Grid>
+
+          <Grid item xs={12} sm={4}>
+            <TextField
+              fullWidth
+              type="time"
+              label="Start time"
+              value={startTime}
+              onChange={(e) => setForm((f) => ({
+                ...f,
+                start_times: [e.target.value],
+                use_allowed_windows: true,
+              }))}
+              InputLabelProps={{ shrink: true }}
+              inputProps={{ step: 300 }}
+            />
+          </Grid>
+
+          <Grid item xs={12} sm={8}>
+            <Paper variant="outlined" sx={{ px: 1.5, py: 1.25, height: '100%' }}>
+              <Typography variant="caption" color="text.secondary" fontWeight={700} display="block">
+                Allowed timing
+              </Typography>
+              {allowedRanges.length === 0 ? (
+                <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                  Not set for these days — add it in Allowed hours.
                 </Typography>
-                <IconButton
-                  size="small"
-                  disabled={form.steps.length <= 1}
-                  onClick={() => setForm((f) => ({
-                    ...f,
-                    steps: f.steps.filter((_, i) => i !== idx),
-                  }))}
+              ) : (
+                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 0.5 }}>
+                  {allowedRanges.map((item) => (
+                    <Chip
+                      key={item.range}
+                      size="small"
+                      variant="outlined"
+                      label={`${item.days} · ${item.range}`}
+                    />
+                  ))}
+                </Box>
+              )}
+            </Paper>
+          </Grid>
+
+          {startOutsideAllowed && (
+            <Grid item xs={12}>
+              <Alert severity="info">
+                Start {startTime} is outside allowed timing. Watering will begin when power hours start.
+              </Alert>
+            </Grid>
+          )}
+
+          <Grid item xs={12}>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+              <Typography variant="subtitle2" fontWeight={700}>
+                Zones (one after another)
+              </Typography>
+              {totalMinutes > 0 && (
+                <Typography variant="body2" color="text.secondary">
+                  ~{formatEstimatedDuration(totalMinutes)} total
+                </Typography>
+              )}
+            </Box>
+
+            <Grid container spacing={1} alignItems="center" sx={{ display: { xs: 'none', sm: 'flex' }, mb: 0.5 }}>
+              <Grid item sm={1}>
+                <Typography variant="caption" color="text.secondary" fontWeight={700}>#</Typography>
+              </Grid>
+              <Grid item sm={5}>
+                <Typography variant="caption" color="text.secondary" fontWeight={700}>Zone</Typography>
+              </Grid>
+              <Grid item sm={3}>
+                <Typography variant="caption" color="text.secondary" fontWeight={700}>Liters</Typography>
+              </Grid>
+              <Grid item sm={2}>
+                <Typography variant="caption" color="text.secondary" fontWeight={700}>Time</Typography>
+              </Grid>
+              <Grid item sm={1} />
+            </Grid>
+
+            {form.steps.map((step, idx) => {
+              const zone = (zones || []).find((z) => String(z.id) === String(step.zone_id));
+              const est = estimateMinutesFromLiters(step.target_liters, zone?.flow_rate_lph);
+              return (
+                <Grid
+                  container
+                  spacing={1}
+                  alignItems="center"
+                  key={idx}
+                  sx={{ mb: 1 }}
                 >
-                  <DeleteIcon fontSize="small" />
-                </IconButton>
-              </Box>
-            );
-          })}
-        </Stack>
+                  <Grid item xs={2} sm={1}>
+                    <Typography variant="body2" color="text.secondary" fontWeight={700}>
+                      {idx + 1}
+                    </Typography>
+                  </Grid>
+                  <Grid item xs={10} sm={5}>
+                    <FormControl fullWidth size="small">
+                      <InputLabel>Zone</InputLabel>
+                      <Select
+                        label="Zone"
+                        value={step.zone_id}
+                        onChange={(e) => {
+                          const zone_id = e.target.value;
+                          const z = (zones || []).find((item) => String(item.id) === String(zone_id));
+                          const computed = estimateMinutesFromLiters(step.target_liters, z?.flow_rate_lph);
+                          updateStep(idx, {
+                            zone_id,
+                            on_duration_minutes: computed != null ? String(computed) : '',
+                          });
+                        }}
+                      >
+                        {(zones || []).map((z) => (
+                          <MenuItem key={z.id} value={String(z.id)}>{z.zone_code}</MenuItem>
+                        ))}
+                      </Select>
+                    </FormControl>
+                  </Grid>
+                  <Grid item xs={6} sm={3}>
+                    <TextField
+                      fullWidth
+                      size="small"
+                      label="Liters"
+                      type="number"
+                      value={step.target_liters}
+                      onChange={(e) => {
+                        const target_liters = e.target.value;
+                        const computed = estimateMinutesFromLiters(target_liters, zone?.flow_rate_lph);
+                        updateStep(idx, {
+                          target_liters,
+                          on_duration_minutes: computed != null ? String(computed) : '',
+                        });
+                      }}
+                    />
+                  </Grid>
+                  <Grid item xs={4} sm={2}>
+                    <Typography variant="body2" color="text.secondary">
+                      {est != null ? `~${formatEstimatedDuration(est)}` : '—'}
+                    </Typography>
+                  </Grid>
+                  <Grid item xs={2} sm={1} sx={{ textAlign: 'right' }}>
+                    <IconButton
+                      size="small"
+                      disabled={form.steps.length <= 1}
+                      onClick={() => setForm((f) => ({
+                        ...f,
+                        steps: f.steps.filter((_, i) => i !== idx),
+                      }))}
+                    >
+                      <DeleteIcon fontSize="small" />
+                    </IconButton>
+                  </Grid>
+                </Grid>
+              );
+            })}
 
-        <Button
-          size="small"
-          startIcon={<AddIcon />}
-          sx={{ mt: 1.5 }}
-          onClick={() => setForm((f) => ({
-            ...f,
-            steps: [...f.steps, emptyStep(f.steps.length)],
-          }))}
-        >
-          Add zone
-        </Button>
+            <Button
+              size="small"
+              startIcon={<AddIcon />}
+              onClick={() => setForm((f) => ({
+                ...f,
+                steps: [...f.steps, emptyStep(f.steps.length)],
+              }))}
+            >
+              Add zone
+            </Button>
+          </Grid>
 
-        {/* Keep motors/injectors available but out of the way */}
-        {(motors.length > 0 || (programType === 'fertigation' && injectors.length > 0)) && (
-          <Box sx={{ mt: 3 }}>
-            {motors.length > 0 && (
-              <FormControl fullWidth size="small" sx={{ mb: 1.5 }}>
+          {motors.length > 0 && (
+            <Grid item xs={12} sm={6}>
+              <FormControl fullWidth size="small">
                 <InputLabel>Motor (optional)</InputLabel>
                 <Select
                   label="Motor (optional)"
@@ -264,8 +369,11 @@ export default function IrrigationProgramFormDialog({
                   ))}
                 </Select>
               </FormControl>
-            )}
-            {programType === 'fertigation' && injectors.length > 0 && (
+            </Grid>
+          )}
+
+          {programType === 'fertigation' && injectors.length > 0 && (
+            <Grid item xs={12} sm={6}>
               <FormControl fullWidth size="small">
                 <InputLabel>Injector</InputLabel>
                 <Select
@@ -282,9 +390,9 @@ export default function IrrigationProgramFormDialog({
                   ))}
                 </Select>
               </FormControl>
-            )}
-          </Box>
-        )}
+            </Grid>
+          )}
+        </Grid>
       </DialogContent>
       <DialogActions sx={{ px: 3, py: 2 }}>
         <Button onClick={onClose} disabled={saving}>Cancel</Button>
