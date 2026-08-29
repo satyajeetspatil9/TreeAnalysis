@@ -56,6 +56,9 @@ import {
 } from '../../utils/irrigationStatus';
 import {
   buildCommandQueueSampleJson,
+  buildLiveGetCommandJson,
+  buildLivePostTelemetryJson,
+  mapQueueRowToGetCommand,
   sendZoneControlCommand,
 } from '../../utils/irrigationSchedule';
 
@@ -112,6 +115,7 @@ function IrrigationDashboardPage() {
   const [controlZoneId, setControlZoneId] = useState('');
   const [commanding, setCommanding] = useState(false);
   const [confirmStart, setConfirmStart] = useState(null);
+  const [queueCommands, setQueueCommands] = useState([]);
 
   const loadDevices = useCallback(async () => {
     if (!farm?.id) {
@@ -130,6 +134,7 @@ function IrrigationDashboardPage() {
     if (!farm?.id) {
       setRows([]);
       setZones([]);
+      setQueueCommands([]);
       setLoading(false);
       return;
     }
@@ -147,6 +152,7 @@ function IrrigationDashboardPage() {
       setMessage({ type: 'error', text: zonesError.message });
       setRows([]);
       setZones([]);
+      setQueueCommands([]);
       setLoading(false);
       return;
     }
@@ -168,11 +174,22 @@ function IrrigationDashboardPage() {
         setMessage({ type: 'error', text: statusTableHint(statusError.message) });
       }
       setRows(mergeZoneStatusRows(zoneRows, []));
+      setQueueCommands([]);
       setLoading(false);
       return;
     }
 
     setRows(mergeZoneStatusRows(zoneRows, statusRows));
+
+    const { data: queueRows } = await supabase
+      .from('irrigation_command_queue')
+      .select('id, device_code, action, job_id, zone_id, payload, created_at, expires_at, status')
+      .eq('farm_id', farm.id)
+      .eq('status', 'pending')
+      .order('created_at', { ascending: true })
+      .limit(50);
+    setQueueCommands(queueRows || []);
+
     setLoading(false);
   }, [farm?.id]);
 
@@ -196,6 +213,29 @@ function IrrigationDashboardPage() {
     };
   }, [load, loadDevices, farmLoading]);
 
+  useEffect(() => {
+    if (tab !== 5 || !farm?.id) return undefined;
+    const id = window.setInterval(() => {
+      load();
+    }, 5000);
+    return () => window.clearInterval(id);
+  }, [tab, farm?.id, load]);
+
+  const liveGetJson = useMemo(() => {
+    const zoneCodeById = new Map((zones || []).map((z) => [z.id, z.zone_code]));
+    const commands = (queueCommands || []).map((row) => mapQueueRowToGetCommand(row, zoneCodeById));
+    const pendingCommands = (rows || [])
+      .filter((row) => row.status?.pending_command)
+      .map((row) => ({
+        zone_code: row.zone.zone_code,
+        command: row.status.pending_command,
+        command_at: row.status.pending_command_at,
+        is_irrigating: row.isIrrigating,
+      }));
+    return buildLiveGetCommandJson({ commands, pendingCommands });
+  }, [queueCommands, rows, zones]);
+
+  const livePostJson = useMemo(() => buildLivePostTelemetryJson(rows), [rows]);
   const counts = useMemo(() => countIrrigationStatusRows(rows), [rows]);
   const activeZones = useMemo(() => rows.filter((row) => row.isIrrigating), [rows]);
   const activeZone = activeZones[0] || null;
@@ -625,26 +665,70 @@ function IrrigationDashboardPage() {
       </TabPanel>
 
       <TabPanel value={tab} index={5}>
-        <Accordion defaultExpanded disableGutters>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          Live JSON the controller would receive on GET (commands to run) and send on POST (telemetry).
+          This tab refreshes every 5 seconds.
+        </Typography>
+
+        <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
+          <Typography variant="subtitle1" fontWeight={700}>GET — controller receives</Typography>
+          <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
+            Pending start/stop commands from the queue. Empty commands means nothing to do right now.
+          </Typography>
+          <Box
+            component="pre"
+            sx={{
+              m: 0,
+              p: 1.5,
+              overflow: 'auto',
+              fontSize: '0.75rem',
+              bgcolor: 'action.hover',
+              borderRadius: 1,
+              maxHeight: 360,
+            }}
+          >
+            {liveGetJson}
+          </Box>
+        </Paper>
+
+        <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
+          <Typography variant="subtitle1" fontWeight={700}>POST — controller sends</Typography>
+          <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
+            Current zone telemetry as the controller would post it. ack_command is true when a pending command is waiting.
+          </Typography>
+          <Box
+            component="pre"
+            sx={{
+              m: 0,
+              p: 1.5,
+              overflow: 'auto',
+              fontSize: '0.75rem',
+              bgcolor: 'action.hover',
+              borderRadius: 1,
+              maxHeight: 360,
+            }}
+          >
+            {livePostJson}
+          </Box>
+        </Paper>
+
+        <Accordion disableGutters>
           <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-            <Typography variant="subtitle2">Controller setup</Typography>
+            <Typography variant="subtitle2">Example format</Typography>
           </AccordionSummary>
           <AccordionDetails>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
               Controller posts telemetry with POST. Poll start/stop with GET using the same API key.
-              Prefer the farm-wide <code>commands</code> array (migration 039). After acting, POST with{' '}
-              <code>ack_command: true</code> and optional <code>command_id</code>.
-              Run migrations 038–040 and deploy <code>ingest-irrigation-status</code> +{' '}
-              <code>irrigation-scheduler</code>.
+              After acting, POST with <code>ack_command: true</code> and optional <code>command_id</code>.
             </Typography>
             <Typography variant="caption" fontWeight={700} display="block" sx={{ mt: 2 }}>
-              GET command queue sample
+              GET sample
             </Typography>
             <Box component="pre" sx={{ m: 0, overflow: 'auto', fontSize: '0.75rem' }}>
               {buildCommandQueueSampleJson()}
             </Box>
             <Typography variant="caption" fontWeight={700} display="block" sx={{ mt: 2 }}>
-              POST telemetry sample
+              POST sample
             </Typography>
             <Box component="pre" sx={{ m: 0, overflow: 'auto', fontSize: '0.75rem' }}>
               {buildIrrigationStatusSampleJson(rows[0]?.zone?.zone_code || 'Z01')}

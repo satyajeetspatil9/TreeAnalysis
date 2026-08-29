@@ -81,6 +81,69 @@ export function timeToInputValue(time) {
   return formatTimeInput(time) || '06:00';
 }
 
+export function mapQueueRowToGetCommand(row, zoneCodeById) {
+  const payload = row.payload && typeof row.payload === 'object' ? row.payload : {};
+  return {
+    id: row.id,
+    device_code: row.device_code,
+    action: row.action,
+    job_id: row.job_id,
+    zone_id: row.zone_id,
+    zone_code: row.zone_id ? (zoneCodeById.get(row.zone_id) || null) : null,
+    until: payload.until ?? undefined,
+    payload,
+    created_at: row.created_at,
+    expires_at: row.expires_at,
+  };
+}
+
+export function buildLiveGetCommandJson({ commands = [], pendingCommands = [] }) {
+  return JSON.stringify({
+    ok: true,
+    updated_at: new Date().toISOString(),
+    commands,
+    pending_commands: pendingCommands,
+    queue_available: true,
+  }, null, 2);
+}
+
+export function buildLivePostTelemetryJson(rows = []) {
+  const bodies = (rows || [])
+    .filter((row) => row.status)
+    .map(({ zone, status }) => ({
+      zone_code: zone.zone_code,
+      is_irrigating: Boolean(status.is_irrigating),
+      started_at: status.started_at,
+      reported_at: status.reported_at,
+      voltage_v: status.voltage_v,
+      current_amp: status.current_amp,
+      start_indicator: Boolean(status.start_indicator),
+      stop_indicator: Boolean(status.stop_indicator),
+      current_discharge_lpm: status.current_discharge_lpm,
+      total_discharge_liters: status.total_discharge_liters,
+      device_code: status.device_code,
+      ack_command: Boolean(status.pending_command),
+    }));
+
+  if (!bodies.length) {
+    return JSON.stringify({
+      note: 'No telemetry received yet. Controller POST body will look like this once a zone reports.',
+      zone_code: 'Z01',
+      is_irrigating: false,
+      reported_at: new Date().toISOString(),
+      voltage_v: null,
+      current_amp: null,
+      start_indicator: false,
+      stop_indicator: false,
+      current_discharge_lpm: null,
+      total_discharge_liters: null,
+      device_code: null,
+    }, null, 2);
+  }
+
+  return JSON.stringify(bodies.length === 1 ? bodies[0] : bodies, null, 2);
+}
+
 export function buildCommandQueueSampleJson() {
   return JSON.stringify({
     ok: true,
