@@ -16,6 +16,12 @@ import {
   Paper,
   Select,
   Switch,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
   TextField,
   Typography,
 } from '@mui/material';
@@ -206,37 +212,67 @@ function IrrigationDevicesPanel({ farmId, zones, onChanged }) {
         </Button>
       </Box>
 
-      {devices.length === 0 ? (
-        <Paper variant="outlined" sx={{ p: 3, textAlign: 'center' }}>
-          <Typography color="text.secondary">No devices yet.</Typography>
-        </Paper>
-      ) : (
-        <Grid container spacing={2}>
-          {devices.map((device) => {
-            const kindLabel = DEVICE_KIND_OPTIONS.find((k) => k.value === device.kind)?.label || device.kind;
-            const zone = (zones || []).find((z) => z.id === device.zone_id);
-            return (
-              <Grid item xs={12} sm={6} md={4} key={device.id}>
-                <Paper variant="outlined" sx={{ p: 2 }}>
-                  <Typography variant="h6" fontWeight={800}>{device.name}</Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    {kindLabel} · {ioTypeLabel(device.io_type || ioTypeFromDeviceCode(device.device_code))}
-                    {' '}{device.device_code}
-                    {zone ? ` · ${zone.zone_code}` : ''}
-                  </Typography>
-                  <Typography variant="caption" color={device.is_active ? 'success.main' : 'text.secondary'}>
-                    {device.is_active ? 'Active' : 'Inactive'}
-                  </Typography>
-                  <Box sx={{ mt: 1.5, display: 'flex', gap: 1 }}>
+      <TableContainer component={Paper} variant="outlined">
+        <Table size="small">
+          <TableHead>
+            <TableRow>
+              <TableCell>Name</TableCell>
+              <TableCell>Kind</TableCell>
+              <TableCell>Connected to</TableCell>
+              <TableCell>Terminal</TableCell>
+              <TableCell>Zone</TableCell>
+              <TableCell>On</TableCell>
+              <TableCell align="right">Actions</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {devices.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={7}>
+                  <Typography color="text.secondary">No devices yet.</Typography>
+                </TableCell>
+              </TableRow>
+            ) : devices.map((device) => {
+              const kindLabel = DEVICE_KIND_OPTIONS.find((k) => k.value === device.kind)?.label || device.kind;
+              const zone = (zones || []).find((z) => z.id === device.zone_id);
+              return (
+                <TableRow key={device.id} hover>
+                  <TableCell>
+                    <Typography fontWeight={700}>{device.name}</Typography>
+                  </TableCell>
+                  <TableCell>{kindLabel}</TableCell>
+                  <TableCell>{ioTypeLabel(device.io_type || ioTypeFromDeviceCode(device.device_code))}</TableCell>
+                  <TableCell>{device.device_code || '—'}</TableCell>
+                  <TableCell>{zone?.zone_code || '—'}</TableCell>
+                  <TableCell>
+                    <Switch
+                      size="small"
+                      checked={device.is_active !== false}
+                      onChange={async (e) => {
+                        const is_active = e.target.checked;
+                        const { error } = await supabase
+                          .from('irrigation_devices')
+                          .update({ is_active, updated_at: new Date().toISOString() })
+                          .eq('id', device.id);
+                        if (error) {
+                          setMessage({ type: 'error', text: scheduleTableHint(error.message) });
+                          return;
+                        }
+                        await load();
+                      }}
+                      inputProps={{ 'aria-label': 'Active' }}
+                    />
+                  </TableCell>
+                  <TableCell align="right">
                     <Button size="small" onClick={() => openEdit(device)}>Edit</Button>
                     <Button size="small" color="error" onClick={() => remove(device)}>Delete</Button>
-                  </Box>
-                </Paper>
-              </Grid>
-            );
-          })}
-        </Grid>
-      )}
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </TableContainer>
 
       <Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth="sm">
         <DialogTitle>{editing ? 'Edit device' : 'Add device'}</DialogTitle>
