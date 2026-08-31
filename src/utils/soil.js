@@ -14,6 +14,11 @@ export const SENSOR_READING_FIELDS = [
 ];
 
 export const LAB_NUTRIENT_FIELDS = [
+  { key: 'ph', label: 'pH', decimals: 1, standardKey: 'ph' },
+  { key: 'ec', label: 'EC', unit: 'dS/m', decimals: 2, standardKey: 'ec' },
+  { key: 'nitrogen', label: 'N', decimals: 2, standardKey: 'nitrogen', unit: 'kg/ha' },
+  { key: 'phosphorus', label: 'P', decimals: 2, standardKey: 'phosphorus', unit: 'kg/ha' },
+  { key: 'potassium', label: 'K', decimals: 2, standardKey: 'potassium', unit: 'kg/ha' },
   { key: 'sulphur', label: 'S', unit: 'ppm', standardKey: 'sulphur' },
   { key: 'zinc', label: 'Zn', unit: 'ppm', standardKey: 'zinc' },
   { key: 'boron', label: 'B', unit: 'ppm', standardKey: 'boron' },
@@ -227,17 +232,14 @@ export function emptySensorForm() {
 }
 
 export function emptyLabForm() {
-  return {
+  const form = {
     sample_date: new Date().toISOString().slice(0, 10),
     lab_name: '',
-    sulphur: '',
-    zinc: '',
-    iron: '',
-    manganese: '',
-    boron: '',
-    copper: '',
-    organic_carbon: '',
   };
+  LAB_NUTRIENT_FIELDS.forEach(({ key }) => {
+    form[key] = '';
+  });
+  return form;
 }
 
 export function buildSensorObservationPayload(treeId, form) {

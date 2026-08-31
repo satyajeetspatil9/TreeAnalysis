@@ -9,8 +9,8 @@ const labMetaFieldSx = {
 };
 
 const labNutrientFieldSx = {
-  minWidth: 72,
-  maxWidth: 88,
+  minWidth: 80,
+  maxWidth: 100,
   flex: '0 0 auto',
   '& .MuiInputBase-root': { fontSize: '0.875rem' },
 };

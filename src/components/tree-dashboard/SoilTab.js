@@ -233,16 +233,18 @@ function SoilTab({ tree }) {
           )}
         </Box>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Laboratory results apply to the whole farm. Add or edit reports under Farm Setting → Add Soil Report.
+          Laboratory pH, EC, NPK, and micronutrients apply to the whole farm. Add or edit reports under Farm Setting → Add Soil Report.
         </Typography>
         <Grid container spacing={2}>
-          {LAB_NUTRIENT_FIELDS.map(({ key, label, standardKey, unit }) => (
-            <Grid item xs={12} sm={6} md={4} key={key}>
+          {LAB_NUTRIENT_FIELDS.map(({ key, label, standardKey, unit, decimals }) => (
+            <Grid item xs={6} sm={4} md={3} key={key}>
               <SoilNutrientDisplay
                 standardKey={standardKey}
                 label={label}
                 unit={unit}
                 value={labReport?.[key]}
+                decimals={decimals ?? 2}
+                showRange={Boolean(standardKey)}
               />
             </Grid>
           ))}

@@ -126,11 +126,13 @@ function AddSoilReportPage() {
     setSavingLab(false);
 
     if (error) {
-      const migration = error.message.includes('copper')
-        ? '011_soil_lab_nutrients_update.sql'
-        : error.message.includes('farm_soil_lab_reports')
-          ? '009_farm_soil_lab_reports.sql'
-          : '010_fix_soil_observations_rls.sql';
+      const migration = error.message.includes('ph') || error.message.includes('nitrogen')
+        ? '048_farm_soil_lab_ph_ec_npk.sql'
+        : error.message.includes('copper')
+          ? '011_soil_lab_nutrients_update.sql'
+          : error.message.includes('farm_soil_lab_reports')
+            ? '009_farm_soil_lab_reports.sql'
+            : '010_fix_soil_observations_rls.sql';
       setMessage({ type: 'error', text: rlsHint(error.message, migration) });
       return;
     }
@@ -241,7 +243,7 @@ function AddSoilReportPage() {
       <Paper sx={{ p: 3 }} variant="outlined">
         <Typography variant="h6" gutterBottom>Lab Report — Farm-wide</Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Micronutrients from the laboratory apply to the whole farm and appear on every tree&apos;s Soil tab.
+          Laboratory pH, EC, NPK, and micronutrients apply to the whole farm and appear on every tree&apos;s Soil tab.
         </Typography>
         <LabReportFieldRow form={labForm} onChange={setLabForm} />
         <Button

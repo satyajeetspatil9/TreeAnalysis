@@ -483,14 +483,14 @@ function SoilMonitoringPage() {
               <TableRow key={r.id}>
                 <TableCell>{formatDate(r.sample_date)}</TableCell>
                 <TableCell>{r.lab_name || '—'}</TableCell>
-                {LAB_NUTRIENT_FIELDS.map(({ key, standardKey }) => {
+                {LAB_NUTRIENT_FIELDS.map(({ key, standardKey, decimals }) => {
                   const value = r[key];
                   return (
                     <TableCell
                       key={key}
                       sx={soilReadingCellSx(standardKey, value)}
                     >
-                      {value != null ? formatNumber(value, 2) : '—'}
+                      {value != null ? formatNumber(value, decimals ?? 2) : '—'}
                     </TableCell>
                   );
                 })}
@@ -505,7 +505,7 @@ function SoilMonitoringPage() {
               </TableRow>
             ))}
             {labReports.length === 0 && (
-              <TableRow><TableCell colSpan={9} align="center">No lab reports yet.</TableCell></TableRow>
+              <TableRow><TableCell colSpan={3 + LAB_NUTRIENT_FIELDS.length} align="center">No lab reports yet.</TableCell></TableRow>
             )}
           </TableBody>
         </Table>
