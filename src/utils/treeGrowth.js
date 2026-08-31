@@ -1,14 +1,26 @@
 export const GROWTH_MEASUREMENT_FIELDS = [
   { key: 'height_cm', label: 'Height', unit: 'cm' },
-  { key: 'trunk_diameter_mm', label: 'Trunk', unit: 'mm' },
+  { key: 'trunk_diameter_cm', label: 'Trunk', unit: 'cm' },
   { key: 'canopy_ns_cm', label: 'Canopy N-S', unit: 'cm' },
   { key: 'canopy_ew_cm', label: 'Canopy E-W', unit: 'cm' },
 ];
 
+export function trunkMmToCm(mm) {
+  if (mm == null || mm === '') return null;
+  const value = Number(mm);
+  return Number.isFinite(value) ? value / 10 : null;
+}
+
+export function trunkCmToMm(cm) {
+  if (cm == null || cm === '') return null;
+  const value = Number(cm);
+  return Number.isFinite(value) ? value * 10 : null;
+}
+
 export function emptyGrowthForm() {
   return {
     height_cm: '',
-    trunk_diameter_mm: '',
+    trunk_diameter_cm: '',
     canopy_ns_cm: '',
     canopy_ew_cm: '',
     measurement_date: new Date().toISOString().slice(0, 10),
@@ -20,15 +32,13 @@ export function hasGrowthMeasurement(form) {
 }
 
 export function buildGrowthPayload(form) {
-  const payload = {
+  return {
     measurement_date: form.measurement_date,
+    height_cm: form.height_cm !== '' && form.height_cm != null ? Number(form.height_cm) : null,
+    trunk_diameter_mm: trunkCmToMm(form.trunk_diameter_cm),
+    canopy_ns_cm: form.canopy_ns_cm !== '' && form.canopy_ns_cm != null ? Number(form.canopy_ns_cm) : null,
+    canopy_ew_cm: form.canopy_ew_cm !== '' && form.canopy_ew_cm != null ? Number(form.canopy_ew_cm) : null,
   };
-
-  GROWTH_MEASUREMENT_FIELDS.forEach(({ key }) => {
-    payload[key] = form[key] !== '' && form[key] != null ? Number(form[key]) : null;
-  });
-
-  return payload;
 }
 
 export function buildGrowthUpdatePayload(form) {
@@ -38,7 +48,7 @@ export function buildGrowthUpdatePayload(form) {
 export function recordToGrowthForm(record) {
   return {
     height_cm: record?.height_cm ?? '',
-    trunk_diameter_mm: record?.trunk_diameter_mm ?? '',
+    trunk_diameter_cm: trunkMmToCm(record?.trunk_diameter_mm) ?? '',
     canopy_ns_cm: record?.canopy_ns_cm ?? '',
     canopy_ew_cm: record?.canopy_ew_cm ?? '',
     measurement_date: record?.measurement_date?.slice?.(0, 10) || '',

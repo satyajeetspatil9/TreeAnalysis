@@ -42,6 +42,7 @@ import {
   hasGrowthMeasurement,
   pickLatestGrowthByTree,
   recordToGrowthForm,
+  trunkMmToCm,
 } from '../../utils/treeGrowth';
 
 function computeAverages(records) {
@@ -50,7 +51,7 @@ function computeAverages(records) {
     .map((r) => Number(r.height_cm));
   const trunkValues = records
     .filter((r) => r.trunk_diameter_mm != null && r.trunk_diameter_mm !== '')
-    .map((r) => Number(r.trunk_diameter_mm));
+    .map((r) => trunkMmToCm(r.trunk_diameter_mm));
   const canopyNsValues = records
     .filter((r) => r.canopy_ns_cm != null && r.canopy_ns_cm !== '')
     .map((r) => Number(r.canopy_ns_cm));
@@ -120,10 +121,10 @@ function TrunkTooltip({ active, payload, average }) {
   return (
     <Paper sx={{ p: 1.5 }} variant="outlined">
       <Typography variant="caption" display="block" sx={{ fontWeight: 600 }}>{row?.tree}</Typography>
-      <Typography variant="body2">Trunk: {formatNumber(row?.trunk, 1)} mm</Typography>
+      <Typography variant="body2">Trunk: {formatNumber(row?.trunk, 1)} cm</Typography>
       {average != null && (
         <Typography variant="caption" color="text.secondary">
-          vs avg: {formatNumber(Number(row?.trunk) - average, 1)} mm
+          vs avg: {formatNumber(Number(row?.trunk) - average, 1)} cm
         </Typography>
       )}
     </Paper>
@@ -198,7 +199,7 @@ function GrowthComparisonPage() {
       .filter((r) => r.trunk_diameter_mm != null && r.trunk_diameter_mm !== '')
       .map((r) => ({
         tree: getTreeDisplayId(r.trees || {}),
-        trunk: Number(r.trunk_diameter_mm),
+        trunk: trunkMmToCm(r.trunk_diameter_mm),
       })),
     [latestRecords]
   );
@@ -311,7 +312,7 @@ function GrowthComparisonPage() {
           <Grid item xs={6} sm={3}>
             <Typography variant="caption" color="text.secondary">Average trunk</Typography>
             <Typography variant="h6">
-              {averages.trunk != null ? `${formatNumber(averages.trunk, 1)} mm` : '—'}
+              {averages.trunk != null ? `${formatNumber(averages.trunk, 1)} cm` : '—'}
             </Typography>
             <Typography variant="caption" color="text.secondary">
               {averages.trunkCount} tree{averages.trunkCount === 1 ? '' : 's'}
@@ -377,7 +378,7 @@ function GrowthComparisonPage() {
                   <LineChart data={trunkChartData} margin={{ top: 12, right: 12, left: 0, bottom: 8 }}>
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis {...xAxisProps} />
-                    <YAxis tickFormatter={(value) => `${value} mm`} width={52} />
+                    <YAxis tickFormatter={(value) => `${value} cm`} width={52} />
                     <Tooltip content={<TrunkTooltip average={averages.trunk} />} />
                     {averages.trunk != null && (
                       <ReferenceLine
@@ -394,7 +395,7 @@ function GrowthComparisonPage() {
                       strokeWidth={2}
                       dot={{ r: 4 }}
                       activeDot={{ r: 6 }}
-                      name="Trunk (mm)"
+                      name="Trunk (cm)"
                     />
                   </LineChart>
                 </ResponsiveContainer>
@@ -467,7 +468,7 @@ function GrowthComparisonPage() {
               <TableCell>Tree</TableCell>
               <TableCell>Date</TableCell>
               <TableCell>Height (cm)</TableCell>
-              <TableCell>Trunk (mm)</TableCell>
+              <TableCell>Trunk (cm)</TableCell>
               <TableCell>Canopy (N-S × E-W)</TableCell>
               <TableCell>vs Avg Height</TableCell>
               <TableCell>vs Avg Trunk</TableCell>
@@ -487,15 +488,15 @@ function GrowthComparisonPage() {
                   <TableCell>{getTreeDisplayId(r.trees || {})}</TableCell>
                   <TableCell>{formatDate(r.measurement_date)}</TableCell>
                   <TableCell>{formatNumber(r.height_cm, 1)}</TableCell>
-                  <TableCell>{formatNumber(r.trunk_diameter_mm, 1)}</TableCell>
+                  <TableCell>{formatNumber(trunkMmToCm(r.trunk_diameter_mm), 1)}</TableCell>
                   <TableCell>{formatCanopyLabel(r.canopy_ns_cm, r.canopy_ew_cm)}</TableCell>
                   <TableCell>
                     {diffFromAverage(r.height_cm, averages.height)}
                     {r.height_cm != null && averages.height != null ? ' cm' : ''}
                   </TableCell>
                   <TableCell>
-                    {diffFromAverage(r.trunk_diameter_mm, averages.trunk)}
-                    {r.trunk_diameter_mm != null && averages.trunk != null ? ' mm' : ''}
+                    {diffFromAverage(trunkMmToCm(r.trunk_diameter_mm), averages.trunk)}
+                    {r.trunk_diameter_mm != null && averages.trunk != null ? ' cm' : ''}
                   </TableCell>
                   <TableCell>
                     {diffFromAverage(r.canopy_ns_cm, averages.canopyNs)}

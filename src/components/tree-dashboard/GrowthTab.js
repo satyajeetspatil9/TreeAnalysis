@@ -7,24 +7,14 @@ import {
 } from 'recharts';
 import { supabase } from '../../supabaseClient';
 import { formatNumber } from '../../utils/formatters';
-
-function growthRlsHint(message) {
-  if (!message) return message;
-  if (message?.includes('row-level security')) {
-    return `${message} Run supabase/migrations/023_fix_tree_growth_rls.sql in Supabase SQL Editor.`;
-  }
-  return message;
-}
-
-function emptyForm() {
-  return {
-    height_cm: '',
-    trunk_diameter_mm: '',
-    canopy_ns_cm: '',
-    canopy_ew_cm: '',
-    measurement_date: new Date().toISOString().slice(0, 10),
-  };
-}
+import {
+  GROWTH_MEASUREMENT_FIELDS,
+  buildGrowthPayload,
+  emptyGrowthForm,
+  growthRlsHint,
+  hasGrowthMeasurement,
+  trunkMmToCm,
+} from '../../utils/treeGrowth';
 
 function GrowthTab({ tree }) {
   const [records, setRecords] = useState([]);
@@ -32,7 +22,7 @@ function GrowthTab({ tree }) {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState(null);
   const [latest, setLatest] = useState(null);
-  const [form, setForm] = useState(emptyForm());
+  const [form, setForm] = useState(emptyGrowthForm());
 
   const fetchRecords = useCallback(async () => {
     setLoading(true);
@@ -60,18 +50,11 @@ function GrowthTab({ tree }) {
   const chartData = records.map((r) => ({
     date: new Date(r.measurement_date).toLocaleDateString('en-IN', { month: 'short', year: '2-digit' }),
     height: r.height_cm != null ? Number(r.height_cm) / 100 : null,
-    trunk: r.trunk_diameter_mm,
+    trunk: trunkMmToCm(r.trunk_diameter_mm),
   }));
 
   const handleAdd = async () => {
-    const hasMeasurement = [
-      form.height_cm,
-      form.trunk_diameter_mm,
-      form.canopy_ns_cm,
-      form.canopy_ew_cm,
-    ].some((value) => value !== '' && value != null);
-
-    if (!hasMeasurement) {
+    if (!hasGrowthMeasurement(form)) {
       setMessage({ type: 'error', text: 'Enter at least one measurement value.' });
       return;
     }
@@ -81,11 +64,7 @@ function GrowthTab({ tree }) {
 
     const { error } = await supabase.from('tree_growth').insert([{
       tree_id: tree.id,
-      height_cm: form.height_cm ? Number(form.height_cm) : null,
-      trunk_diameter_mm: form.trunk_diameter_mm ? Number(form.trunk_diameter_mm) : null,
-      canopy_ns_cm: form.canopy_ns_cm ? Number(form.canopy_ns_cm) : null,
-      canopy_ew_cm: form.canopy_ew_cm ? Number(form.canopy_ew_cm) : null,
-      measurement_date: form.measurement_date,
+      ...buildGrowthPayload(form),
     }]);
 
     if (error) {
@@ -94,7 +73,7 @@ function GrowthTab({ tree }) {
       return;
     }
 
-    setForm(emptyForm());
+    setForm(emptyGrowthForm());
     await fetchRecords();
     setMessage({ type: 'success', text: 'Measurement saved.' });
     setSaving(false);
@@ -123,7 +102,7 @@ function GrowthTab({ tree }) {
           <Paper sx={{ p: 2, textAlign: 'center' }} variant="outlined">
             <Typography variant="caption">Trunk diameter</Typography>
             <Typography variant="h5">
-              {latest?.trunk_diameter_mm != null ? `${formatNumber(latest.trunk_diameter_mm, 0)} mm` : '—'}
+              {latest?.trunk_diameter_mm != null ? `${formatNumber(trunkMmToCm(latest.trunk_diameter_mm), 1)} cm` : '—'}
             </Typography>
           </Paper>
         </Grid>
@@ -151,7 +130,7 @@ function GrowthTab({ tree }) {
               <Tooltip />
               <Legend />
               <Line yAxisId="left" type="monotone" dataKey="height" stroke="#2e7d32" name="Height (m)" />
-              <Line yAxisId="right" type="monotone" dataKey="trunk" stroke="#1565c0" name="Trunk (mm)" />
+              <Line yAxisId="right" type="monotone" dataKey="trunk" stroke="#1565c0" name="Trunk (cm)" />
             </LineChart>
           </ResponsiveContainer>
         </Paper>
@@ -160,18 +139,18 @@ function GrowthTab({ tree }) {
       <Paper sx={{ p: 3 }} variant="outlined">
         <Typography variant="h6" gutterBottom>Record Measurement</Typography>
         <Grid container spacing={2}>
-          <Grid item xs={6} md={3}>
-            <TextField label="Height (cm)" fullWidth type="number" inputProps={{ min: 0, step: 'any' }} value={form.height_cm} onChange={(e) => setForm({ ...form, height_cm: e.target.value })} />
-          </Grid>
-          <Grid item xs={6} md={3}>
-            <TextField label="Trunk (mm)" fullWidth type="number" inputProps={{ min: 0, step: 'any' }} value={form.trunk_diameter_mm} onChange={(e) => setForm({ ...form, trunk_diameter_mm: e.target.value })} />
-          </Grid>
-          <Grid item xs={6} md={3}>
-            <TextField label="Canopy N-S (cm)" fullWidth type="number" inputProps={{ min: 0, step: 'any' }} value={form.canopy_ns_cm} onChange={(e) => setForm({ ...form, canopy_ns_cm: e.target.value })} />
-          </Grid>
-          <Grid item xs={6} md={3}>
-            <TextField label="Canopy E-W (cm)" fullWidth type="number" inputProps={{ min: 0, step: 'any' }} value={form.canopy_ew_cm} onChange={(e) => setForm({ ...form, canopy_ew_cm: e.target.value })} />
-          </Grid>
+          {GROWTH_MEASUREMENT_FIELDS.map(({ key, label, unit }) => (
+            <Grid item xs={6} md={3} key={key}>
+              <TextField
+                label={unit ? `${label} (${unit})` : label}
+                fullWidth
+                type="number"
+                inputProps={{ min: 0, step: 'any' }}
+                value={form[key]}
+                onChange={(e) => setForm({ ...form, [key]: e.target.value })}
+              />
+            </Grid>
+          ))}
           <Grid item xs={12} md={3}>
             <TextField label="Date" type="date" fullWidth required InputLabelProps={{ shrink: true }} value={form.measurement_date} onChange={(e) => setForm({ ...form, measurement_date: e.target.value })} />
           </Grid>
