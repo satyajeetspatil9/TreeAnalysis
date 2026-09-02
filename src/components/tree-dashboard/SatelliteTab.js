@@ -3,9 +3,16 @@ import { Alert, Box, CircularProgress, Typography } from '@mui/material';
 import { Link as RouterLink } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
 import { formatNextMonday, getWeekMonday } from '../../utils/treeSatelliteCache';
-import { loadCachedGpsAnalysis } from '../../utils/treeGpsSatelliteCache';
+import { loadCachedGpsAnalysis, saveLastGoodRadar } from '../../utils/treeGpsSatelliteCache';
 import SatelliteAnalysisDisplay from './SatelliteAnalysisDisplay';
-import { getTreeGps } from '../../utils/schema';
+import { getPositionCode, getTreeGps } from '../../utils/schema';
+import { fetchGpsSatelliteAnalysis } from '../../utils/gpsSatelliteAnalysis';
+import {
+  extractRadarSlice,
+  hasRadarNumericValues,
+  radarObservationDate,
+  resolveRadarAnalysis,
+} from '../../utils/satelliteMonsoon';
 
 class SatelliteTabErrorBoundary extends React.Component {
   constructor(props) {
@@ -36,10 +43,13 @@ function SatelliteTab({ tree }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
+  const [radarLookup, setRadarLookup] = useState(false);
+
   const positionId = tree?.tree_positions?.id ?? null;
   const gps = getTreeGps(tree);
   const latitude = gps?.latitude ?? null;
   const longitude = gps?.longitude ?? null;
+  const positionCode = getPositionCode(tree);
 
   const loadCache = useCallback(async () => {
     if (latitude == null || longitude == null) {
@@ -48,6 +58,7 @@ function SatelliteTab({ tree }) {
     }
 
     setLoading(true);
+    setRadarLookup(false);
     setError(null);
 
     const result = await loadCachedGpsAnalysis(supabase, positionId);
@@ -56,7 +67,11 @@ function SatelliteTab({ tree }) {
       setError(result.error);
       setAnalysis(null);
       setMeta(null);
-    } else if (result.empty) {
+      setLoading(false);
+      return;
+    }
+
+    if (result.empty) {
       setAnalysis(null);
       setMeta({
         empty: true,
@@ -64,20 +79,66 @@ function SatelliteTab({ tree }) {
         nextFetchLabel: result.nextFetchLabel || formatNextMonday(),
       });
       setError(null);
-    } else {
-      setAnalysis(result.analysis);
-      setMeta({
-        fetchedAt: result.fetchedAt,
-        weekStart: result.weekStart,
-        cacheError: result.error,
-        lastGoodRadar: result.lastGoodRadar,
-        lastGoodRadarWeek: result.lastGoodRadarWeek,
-      });
-      setError(null);
+      setLoading(false);
+      return;
     }
 
+    let lastGoodRadar = result.lastGoodRadar;
+    let lastGoodRadarWeek = result.lastGoodRadarWeek;
+    const resolved = resolveRadarAnalysis(result.analysis, lastGoodRadar);
+
+    if (hasRadarNumericValues(resolved.analysis) && !hasRadarNumericValues(lastGoodRadar)) {
+      const slice = extractRadarSlice(resolved.analysis);
+      const week = radarObservationDate(resolved.analysis, lastGoodRadarWeek);
+      if (slice) {
+        lastGoodRadar = slice;
+        lastGoodRadarWeek = week;
+        saveLastGoodRadar(supabase, positionId, slice, week);
+      }
+    }
+
+    setAnalysis(result.analysis);
+    setMeta({
+      fetchedAt: result.fetchedAt,
+      weekStart: result.weekStart,
+      cacheError: result.error,
+      lastGoodRadar,
+      lastGoodRadarWeek,
+    });
+    setError(null);
     setLoading(false);
-  }, [latitude, longitude, positionId]);
+
+    if (hasRadarNumericValues(resolveRadarAnalysis(result.analysis, lastGoodRadar).analysis)) {
+      return;
+    }
+
+    setRadarLookup(true);
+    try {
+      const olderRaw = await fetchGpsSatelliteAnalysis({
+        treeId: positionCode && positionCode !== '—' ? positionCode : 'tree',
+        latitude,
+        longitude,
+        daysBack: 28,
+      });
+      const older = olderRaw?.indices || olderRaw?.radar_stress || olderRaw?.selected_images
+        ? olderRaw
+        : olderRaw?.data;
+      const slice = extractRadarSlice(older);
+      if (slice) {
+        const week = radarObservationDate(older);
+        await saveLastGoodRadar(supabase, positionId, slice, week);
+        setMeta((prev) => ({
+          ...prev,
+          lastGoodRadar: slice,
+          lastGoodRadarWeek: week,
+        }));
+      }
+    } catch {
+      /* Keep this week's cache; radar may still be No data. */
+    } finally {
+      setRadarLookup(false);
+    }
+  }, [latitude, longitude, positionId, positionCode]);
 
   useEffect(() => {
     loadCache();
@@ -130,6 +191,11 @@ function SatelliteTab({ tree }) {
         {meta?.cacheError && (
           <Alert severity="warning" sx={{ mb: 2 }}>
             Last batch refresh recorded an error for this tree: {meta.cacheError}
+          </Alert>
+        )}
+        {radarLookup && (
+          <Alert severity="info" sx={{ mb: 2 }}>
+            This week has no new Sentinel-1 pass. Looking up the latest earlier radar reading…
           </Alert>
         )}
         <SatelliteAnalysisDisplay

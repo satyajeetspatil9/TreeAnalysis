@@ -223,7 +223,10 @@ function SatelliteMonitoringPage() {
     const cache = cacheByPositionId.get(pos.id) || null;
     const hasGps = pos.latitude != null && pos.longitude != null;
     const indicators = cache?.analysis
-      ? extractSatelliteIndicators(cache.analysis, cache.last_good_radar, { hideOpticalWhenCloudy })
+      ? extractSatelliteIndicators(cache.analysis, cache.last_good_radar, {
+        hideOpticalWhenCloudy,
+        lastGoodRadarWeek: cache.last_good_radar_week,
+      })
       : null;
     const meta = getSatelliteRowMeta({ hasGps, cache, indicators });
 
@@ -548,9 +551,9 @@ function SatelliteMonitoringPage() {
                       ) : (
                         <Box>
                           <IndicatorChip friendly={row.indicators[column.key]} />
-                          {column.key === 'radar' && row.indicators.radarFromPriorWeek && row.cache?.last_good_radar_week && (
+                          {column.key === 'radar' && row.indicators.radarFromPriorWeek && (row.indicators.radarAsOf || row.cache?.last_good_radar_week) && (
                             <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>
-                              from {formatDate(row.cache.last_good_radar_week)}
+                              from {formatDate(row.indicators.radarAsOf || row.cache.last_good_radar_week)}
                             </Typography>
                           )}
                         </Box>

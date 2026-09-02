@@ -72,6 +72,23 @@ export async function loadCachedGpsAnalysis(supabase, positionId) {
   };
 }
 
+export async function saveLastGoodRadar(supabase, positionId, lastGoodRadar, lastGoodRadarWeek) {
+  if (!positionId || !lastGoodRadar) {
+    return { error: 'Missing radar cache target.' };
+  }
+
+  const { error } = await supabase
+    .from('tree_gps_satellite_cache')
+    .update({
+      last_good_radar: lastGoodRadar,
+      last_good_radar_week: lastGoodRadarWeek,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('position_id', positionId);
+
+  return { error: error?.message || null };
+}
+
 export async function fetchGpsSatelliteStats(supabase, farmId) {
   const { data, error } = await supabase.functions.invoke(BATCH_FUNCTION, {
     body: { farm_id: farmId, stats_only: true },

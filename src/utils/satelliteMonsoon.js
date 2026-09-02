@@ -32,23 +32,33 @@ export function getCloudCoverPercent(analysis) {
   return null;
 }
 
-export function isRadarUsable(analysis) {
+function isFiniteNumber(value) {
+  if (value == null || value === '') return false;
+  return Number.isFinite(Number(value));
+}
+
+export function hasRadarNumericValues(analysis) {
   if (!analysis) return false;
+  return isFiniteNumber(analysis.indices?.S1_VV)
+    || isFiniteNumber(analysis.selected_images?.sentinel1?.vv_db);
+}
+
+export function isRadarStatusNoData(analysis) {
   const status = String(
-    analysis.radar_stress?.status
-    || analysis.index_status?.S1_VV
+    analysis?.radar_stress?.status
+    || analysis?.index_status?.S1_VV
     || '',
   ).trim().toLowerCase();
-  if (!status || status === 'no data' || status === 'nodata' || status.includes('no data')) {
-    return false;
-  }
-  const vv = analysis.indices?.S1_VV;
-  const db = analysis.selected_images?.sentinel1?.vv_db;
-  return vv != null || db != null;
+  return !status || status === 'no data' || status === 'nodata' || status.includes('no data');
+}
+
+/** Fresh this-week radar: numeric values and a real status (not "No data"). */
+export function isRadarUsable(analysis) {
+  return hasRadarNumericValues(analysis) && !isRadarStatusNoData(analysis);
 }
 
 export function extractRadarSlice(analysis) {
-  if (!isRadarUsable(analysis)) return null;
+  if (!hasRadarNumericValues(analysis)) return null;
   return {
     radar_stress: analysis.radar_stress ?? null,
     index_status: { S1_VV: analysis.index_status?.S1_VV ?? null },
@@ -60,13 +70,25 @@ export function extractRadarSlice(analysis) {
   };
 }
 
-/** Current week's radar if usable; otherwise the stored last-good Sentinel-1 slice. */
+export function radarObservationDate(radarAnalysis, storedWeek = null) {
+  const s1Date = radarAnalysis?.selected_images?.sentinel1?.date;
+  return storedWeek
+    || (typeof s1Date === 'string' ? s1Date.slice(0, 10) : null)
+    || radarAnalysis?.period?.end
+    || radarAnalysis?.period?.start
+    || null;
+}
+
+/** Current week's radar if usable; otherwise last-good / stale numbers in this payload. */
 export function resolveRadarAnalysis(currentAnalysis, lastGoodRadar) {
   if (isRadarUsable(currentAnalysis)) {
     return { analysis: currentAnalysis, fromPriorWeek: false };
   }
-  if (isRadarUsable(lastGoodRadar)) {
+  if (hasRadarNumericValues(lastGoodRadar)) {
     return { analysis: lastGoodRadar, fromPriorWeek: true };
+  }
+  if (hasRadarNumericValues(currentAnalysis)) {
+    return { analysis: currentAnalysis, fromPriorWeek: true };
   }
   return { analysis: currentAnalysis, fromPriorWeek: false };
 }
@@ -100,7 +122,7 @@ export function shouldShowMonsoonDisclaimer(analysis, weekStart) {
 
 export function monsoonDisclaimer(variant) {
   if (variant === 'radar-only') {
-    return 'Cloud cover is above 45%. Optical readings are hidden by default; only Sentinel-1 radar is shown (or the latest earlier good radar if this week has none). Use Show optical to see Sentinel-2 anyway. During monsoon, confirm important decisions with a field visit or soil test.';
+    return 'Cloud cover is above 45%. Optical readings are hidden by default; Sentinel-1 radar is shown, including the latest earlier pass when this week has none. Use Show optical to see Sentinel-2 anyway. During monsoon, confirm important decisions with a field visit or soil test.';
   }
   return 'Monsoon season: heavy cloud and rain can make optical satellite readings less accurate. Use alongside soil sensor data and field inspection.';
 }

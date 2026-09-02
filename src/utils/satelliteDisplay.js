@@ -91,6 +91,11 @@ const INDEX_STATUS_FRIENDLY = {
     summary: 'Satellite could not estimate this value for the period.',
     action: 'Cloud cover or image quality may have blocked the reading.',
   },
+  'earlier radar': {
+    label: 'Earlier radar',
+    summary: 'This week had no new Sentinel-1 pass. Showing the last stored radar reading.',
+    action: 'Treat this as an older wetness signal until the next radar overpass.',
+  },
 };
 
 const STRESS_STATUS_FRIENDLY = {

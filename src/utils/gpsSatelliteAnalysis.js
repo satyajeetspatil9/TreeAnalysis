@@ -81,7 +81,18 @@ export async function fetchGpsSatelliteAnalysis({
       throw new Error(message);
     }
 
-    return response.json();
+    const payload = await response.json();
+    if (
+      payload
+      && typeof payload === 'object'
+      && payload.data
+      && !payload.indices
+      && !payload.radar_stress
+      && !payload.selected_images
+    ) {
+      return payload.data;
+    }
+    return payload;
   } catch (err) {
     if (err.name === 'AbortError') {
       throw new Error(

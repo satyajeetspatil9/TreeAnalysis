@@ -13,6 +13,7 @@ const UPSTREAM_URL = Deno.env.get('GPS_ANALYSIS_UPSTREAM_URL')
 const DEFAULT_LIMIT = 1;
 const MAX_LIMIT = 3;
 const UPSTREAM_TIMEOUT_MS = 150000;
+const RADAR_LOOKBACK_DAYS = 28;
 
 function json(body: Record<string, unknown>, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -85,40 +86,38 @@ async function loadStats(admin: ReturnType<typeof createClient>, farmId: number)
   };
 }
 
-function isRadarUsable(analysis: Record<string, unknown> | null) {
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' ? value as Record<string, unknown> : {};
+}
+
+function isFiniteNumber(value: unknown) {
+  if (value == null || value === '') return false;
+  return Number.isFinite(Number(value));
+}
+
+function hasRadarNumericValues(analysis: Record<string, unknown> | null) {
   if (!analysis) return false;
-  const radarStress = analysis.radar_stress && typeof analysis.radar_stress === 'object'
-    ? analysis.radar_stress as Record<string, unknown>
-    : {};
-  const indexStatus = analysis.index_status && typeof analysis.index_status === 'object'
-    ? analysis.index_status as Record<string, unknown>
-    : {};
+  const indices = asRecord(analysis.indices);
+  const s1 = asRecord(asRecord(analysis.selected_images).sentinel1);
+  return isFiniteNumber(indices.S1_VV) || isFiniteNumber(s1.vv_db);
+}
+
+function isRadarStatusNoData(analysis: Record<string, unknown> | null) {
+  if (!analysis) return true;
+  const radarStress = asRecord(analysis.radar_stress);
+  const indexStatus = asRecord(analysis.index_status);
   const status = String(radarStress.status ?? indexStatus.S1_VV ?? '').trim().toLowerCase();
-  if (!status || status === 'no data' || status === 'nodata' || status.includes('no data')) {
-    return false;
-  }
-  const indices = analysis.indices && typeof analysis.indices === 'object'
-    ? analysis.indices as Record<string, unknown>
-    : {};
-  const images = analysis.selected_images && typeof analysis.selected_images === 'object'
-    ? analysis.selected_images as Record<string, unknown>
-    : {};
-  const s1 = images.sentinel1 && typeof images.sentinel1 === 'object'
-    ? images.sentinel1 as Record<string, unknown>
-    : {};
-  return indices.S1_VV != null || s1.vv_db != null;
+  return !status || status === 'no data' || status === 'nodata' || status.includes('no data');
+}
+
+function isRadarUsable(analysis: Record<string, unknown> | null) {
+  return hasRadarNumericValues(analysis) && !isRadarStatusNoData(analysis);
 }
 
 function extractRadarSlice(analysis: Record<string, unknown>) {
-  const indexStatus = analysis.index_status && typeof analysis.index_status === 'object'
-    ? analysis.index_status as Record<string, unknown>
-    : {};
-  const indices = analysis.indices && typeof analysis.indices === 'object'
-    ? analysis.indices as Record<string, unknown>
-    : {};
-  const images = analysis.selected_images && typeof analysis.selected_images === 'object'
-    ? analysis.selected_images as Record<string, unknown>
-    : {};
+  const indexStatus = asRecord(analysis.index_status);
+  const indices = asRecord(analysis.indices);
+  const images = asRecord(analysis.selected_images);
   return {
     radar_stress: analysis.radar_stress ?? null,
     index_status: { S1_VV: indexStatus.S1_VV ?? null },
@@ -126,6 +125,125 @@ function extractRadarSlice(analysis: Record<string, unknown>) {
     selected_images: { sentinel1: images.sentinel1 ?? null },
     period: analysis.period ?? null,
   };
+}
+
+function radarObservationDate(
+  analysis: Record<string, unknown> | null,
+  storedWeek: string | null = null,
+) {
+  const s1 = asRecord(asRecord(analysis?.selected_images).sentinel1);
+  const s1Date = typeof s1.date === 'string' ? s1.date.slice(0, 10) : null;
+  const period = asRecord(analysis?.period);
+  const periodEnd = typeof period.end === 'string' ? period.end.slice(0, 10) : null;
+  const periodStart = typeof period.start === 'string' ? period.start.slice(0, 10) : null;
+  return storedWeek || s1Date || periodEnd || periodStart || null;
+}
+
+async function resolveLastGoodRadar(
+  analysis: Record<string, unknown> | null,
+  existingLastGood: unknown,
+  existingWeek: string | null,
+  positionCode: string,
+  latitude: number,
+  longitude: number,
+  weekStart: string,
+  daysBack: number,
+) {
+  const existing = existingLastGood && typeof existingLastGood === 'object'
+    ? existingLastGood as Record<string, unknown>
+    : null;
+  let lastGoodRadar: Record<string, unknown> | null = existing;
+  let lastGoodRadarWeek = existingWeek;
+
+  if (isRadarUsable(analysis)) {
+    return {
+      lastGoodRadar: extractRadarSlice(analysis as Record<string, unknown>),
+      lastGoodRadarWeek: radarObservationDate(analysis, weekStart),
+    };
+  }
+
+  if (hasRadarNumericValues(analysis) && !hasRadarNumericValues(lastGoodRadar)) {
+    lastGoodRadar = extractRadarSlice(analysis as Record<string, unknown>);
+    lastGoodRadarWeek = radarObservationDate(analysis, existingWeek);
+  }
+
+  if (hasRadarNumericValues(lastGoodRadar)) {
+    return { lastGoodRadar, lastGoodRadarWeek };
+  }
+
+  try {
+    const older = await fetchUpstreamAnalysis(
+      positionCode,
+      latitude,
+      longitude,
+      Math.max(daysBack, RADAR_LOOKBACK_DAYS),
+    );
+    if (hasRadarNumericValues(older)) {
+      return {
+        lastGoodRadar: extractRadarSlice(older),
+        lastGoodRadarWeek: radarObservationDate(older, null),
+      };
+    }
+  } catch {
+    /* keep existing empty last-good */
+  }
+
+  return { lastGoodRadar, lastGoodRadarWeek };
+}
+
+async function backfillMissingLastGoodRadar(
+  admin: ReturnType<typeof createClient>,
+  farmId: number,
+  weekStart: string,
+  limit: number,
+  daysBack: number,
+) {
+  const { data: rows } = await admin
+    .from('tree_gps_satellite_cache')
+    .select('position_id, position_code, latitude, longitude, analysis, last_good_radar, last_good_radar_week')
+    .eq('farm_id', farmId)
+    .eq('week_start', weekStart)
+    .is('last_good_radar', null)
+    .not('analysis', 'is', null)
+    .order('position_id', { ascending: true })
+    .limit(limit);
+
+  const processed: Array<Record<string, unknown>> = [];
+
+  for (const row of rows ?? []) {
+    const analysis = row.analysis && typeof row.analysis === 'object'
+      ? row.analysis as Record<string, unknown>
+      : null;
+    const resolved = await resolveLastGoodRadar(
+      analysis,
+      row.last_good_radar,
+      row.last_good_radar_week ?? null,
+      String(row.position_code),
+      Number(row.latitude),
+      Number(row.longitude),
+      weekStart,
+      daysBack,
+    );
+
+    const { error } = await admin
+      .from('tree_gps_satellite_cache')
+      .update({
+        last_good_radar: resolved.lastGoodRadar,
+        last_good_radar_week: resolved.lastGoodRadarWeek,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('position_id', row.position_id);
+
+    processed.push({
+      position_id: row.position_id,
+      position_code: row.position_code,
+      ok: !error && hasRadarNumericValues(resolved.lastGoodRadar),
+      error: error?.message || null,
+      radar_backfill: true,
+    });
+  }
+
+  return processed;
 }
 
 Deno.serve(async (req) => {
@@ -219,11 +337,18 @@ Deno.serve(async (req) => {
     const queue = positions ?? [];
 
     if (!queue.length) {
+      const backfilled = await backfillMissingLastGoodRadar(
+        admin,
+        farmId,
+        weekStart,
+        limit,
+        daysBack,
+      );
       const stats = await loadStats(admin, farmId);
       return json({
         ...stats,
-        processed: [],
-        processed_count: 0,
+        processed: backfilled,
+        processed_count: backfilled.length,
         next_after_position_id: afterPositionId,
       });
     }
@@ -257,12 +382,18 @@ Deno.serve(async (req) => {
         .eq('position_id', lastId)
         .maybeSingle();
 
-      let lastGoodRadar = existing?.last_good_radar ?? null;
-      let lastGoodRadarWeek = existing?.last_good_radar_week ?? null;
-      if (analysis && isRadarUsable(analysis)) {
-        lastGoodRadar = extractRadarSlice(analysis);
-        lastGoodRadarWeek = weekStart;
-      }
+      const resolvedRadar = await resolveLastGoodRadar(
+        analysis,
+        existing?.last_good_radar ?? null,
+        existing?.last_good_radar_week ?? null,
+        positionCode,
+        latitude,
+        longitude,
+        weekStart,
+        daysBack,
+      );
+      const lastGoodRadar = resolvedRadar.lastGoodRadar;
+      const lastGoodRadarWeek = resolvedRadar.lastGoodRadarWeek;
 
       const { error: upsertError } = await admin
         .from('tree_gps_satellite_cache')

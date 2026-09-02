@@ -4,7 +4,13 @@ import {
   friendlyStressStatus,
   overallStressLevel,
 } from './satelliteDisplay';
-import { isRadarOnlyMode, resolveRadarAnalysis } from './satelliteMonsoon';
+import {
+  hasRadarNumericValues,
+  isRadarOnlyMode,
+  isRadarStatusNoData,
+  radarObservationDate,
+  resolveRadarAnalysis,
+} from './satelliteMonsoon';
 
 export const SATELLITE_MONITOR_COLUMNS = [
   { key: 'overall', label: 'Overall', short: 'Combined signal' },
@@ -35,16 +41,23 @@ export function extractSatelliteIndicators(analysis, lastGoodRadar = null, optio
   const water = analysis.water_stress || {};
   const nutrient = analysis.nutrient_stress || {};
   const radarResolved = resolveRadarAnalysis(analysis, lastGoodRadar);
-  const radar = radarResolved.analysis?.radar_stress || {};
+  const radarView = radarResolved.analysis || analysis;
+  const radar = radarView.radar_stress || {};
   const overallFriendly = friendlyOverallStatus(overall.status, overall.severity);
   const cloudy = isRadarOnlyMode(analysis);
   const hideOptical = cloudy && hideOpticalWhenCloudy;
-  const radarFriendly = friendlyStressStatus(radar.status);
+  const radarFriendly = radarResolved.fromPriorWeek && isRadarStatusNoData(radarView)
+    && hasRadarNumericValues(radarView)
+    ? friendlyStressStatus('earlier radar')
+    : friendlyStressStatus(radar.status);
 
   return {
     radarOnly: cloudy,
     opticalHidden: hideOptical,
     radarFromPriorWeek: radarResolved.fromPriorWeek,
+    radarAsOf: radarResolved.fromPriorWeek
+      ? radarObservationDate(radarView, options.lastGoodRadarWeek)
+      : null,
     overall: hideOptical
       ? { label: 'Radar only', summary: null, raw: null, stressPct: null }
       : {
