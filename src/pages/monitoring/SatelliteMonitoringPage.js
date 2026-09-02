@@ -465,7 +465,7 @@ function SatelliteMonitoringPage() {
                         <Chip label="No GPS" size="small" color="default" sx={{ mt: 0.25, alignSelf: 'flex-start' }} />
                       )}
                       {row.indicators?.radarOnly && (
-                        <Chip label="S1 only" size="small" color="warning" variant="outlined" sx={{ mt: 0.25, alignSelf: 'flex-start' }} />
+                        <Chip label="Cloudy" size="small" color="warning" variant="outlined" sx={{ mt: 0.25, alignSelf: 'flex-start' }} />
                       )}
                     </Box>
                   </TableCell>
@@ -480,9 +480,9 @@ function SatelliteMonitoringPage() {
                         <Chip
                           label={row.indicators.overall.label}
                           size="small"
-                          color={row.indicators.radarOnly ? 'warning' : severityToChipColor(row.indicators.overall.label)}
+                          color={severityToChipColor(row.indicators.overall.label)}
                         />
-                        {!row.indicators.radarOnly && row.indicators.overall.stressPct != null && (
+                        {row.indicators.overall.stressPct != null && (
                           <Typography
                             variant="caption"
                             display="block"
