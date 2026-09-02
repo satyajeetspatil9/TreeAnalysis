@@ -5,7 +5,7 @@ import { supabase } from '../../supabaseClient';
 import { formatNextMonday, getWeekMonday } from '../../utils/treeSatelliteCache';
 import { loadCachedGpsAnalysis, lookupEarlierRadar, parseCachedAnalysis, saveLastGoodRadar } from '../../utils/treeGpsSatelliteCache';
 import SatelliteAnalysisDisplay from './SatelliteAnalysisDisplay';
-import { getPositionCode, getTreeGps } from '../../utils/schema';
+import { getTreeGps } from '../../utils/schema';
 import { useFarm } from '../../hooks/useFarm';
 import {
   extractRadarSlice,
@@ -51,7 +51,6 @@ function SatelliteTab({ tree }) {
   const gps = getTreeGps(tree);
   const latitude = gps?.latitude ?? null;
   const longitude = gps?.longitude ?? null;
-  const positionCode = getPositionCode(tree);
   const lookupGen = useRef(0);
 
   const loadCache = useCallback(async () => {
@@ -159,7 +158,7 @@ function SatelliteTab({ tree }) {
     } finally {
       if (lookupGen.current === gen) setRadarLookup(false);
     }
-  }, [latitude, longitude, positionId, positionCode, farm?.id]);
+  }, [latitude, longitude, positionId, farm?.id]);
 
   useEffect(() => {
     loadCache();
