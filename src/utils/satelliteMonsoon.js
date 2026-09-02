@@ -37,16 +37,31 @@ function isFiniteNumber(value) {
   return Number.isFinite(Number(value));
 }
 
+function unwrapGpsAnalysis(payload) {
+  if (!payload || typeof payload !== 'object') return payload;
+  if (payload.indices || payload.radar_stress || payload.selected_images || payload.data_quality || payload.index_status) {
+    return payload;
+  }
+  if (payload.data && typeof payload.data === 'object') {
+    return unwrapGpsAnalysis(payload.data);
+  }
+  return payload;
+}
+
 export function hasRadarNumericValues(analysis) {
-  if (!analysis) return false;
-  return isFiniteNumber(analysis.indices?.S1_VV)
-    || isFiniteNumber(analysis.selected_images?.sentinel1?.vv_db);
+  const payload = unwrapGpsAnalysis(analysis);
+  if (!payload) return false;
+  return isFiniteNumber(payload.indices?.S1_VV)
+    || isFiniteNumber(payload.indices?.s1_vv)
+    || isFiniteNumber(payload.selected_images?.sentinel1?.vv_db)
+    || isFiniteNumber(payload.selected_images?.sentinel1?.VV);
 }
 
 export function isRadarStatusNoData(analysis) {
+  const payload = unwrapGpsAnalysis(analysis);
   const status = String(
-    analysis?.radar_stress?.status
-    || analysis?.index_status?.S1_VV
+    payload?.radar_stress?.status
+    || payload?.index_status?.S1_VV
     || '',
   ).trim().toLowerCase();
   return !status || status === 'no data' || status === 'nodata' || status.includes('no data');
@@ -58,15 +73,16 @@ export function isRadarUsable(analysis) {
 }
 
 export function extractRadarSlice(analysis) {
-  if (!hasRadarNumericValues(analysis)) return null;
+  const payload = unwrapGpsAnalysis(analysis);
+  if (!hasRadarNumericValues(payload)) return null;
   return {
-    radar_stress: analysis.radar_stress ?? null,
-    index_status: { S1_VV: analysis.index_status?.S1_VV ?? null },
-    indices: { S1_VV: analysis.indices?.S1_VV ?? null },
+    radar_stress: payload.radar_stress ?? null,
+    index_status: { S1_VV: payload.index_status?.S1_VV ?? null },
+    indices: { S1_VV: payload.indices?.S1_VV ?? payload.indices?.s1_vv ?? null },
     selected_images: {
-      sentinel1: analysis.selected_images?.sentinel1 ?? null,
+      sentinel1: payload.selected_images?.sentinel1 ?? null,
     },
-    period: analysis.period ?? null,
+    period: payload.period ?? null,
   };
 }
 

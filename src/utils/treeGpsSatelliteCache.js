@@ -89,6 +89,25 @@ export async function saveLastGoodRadar(supabase, positionId, lastGoodRadar, las
   return { error: error?.message || null };
 }
 
+export async function lookupEarlierRadar(supabase, farmId, positionId, daysBack = 28) {
+  if (!farmId || !positionId) {
+    throw new Error('Farm and tree position are required for radar lookup.');
+  }
+
+  const { data, error } = await supabase.functions.invoke(BATCH_FUNCTION, {
+    body: {
+      farm_id: farmId,
+      radar_lookup_position_id: positionId,
+      days_back: daysBack,
+    },
+  });
+
+  if (error) {
+    throw new Error(data?.error || error.message);
+  }
+  return data;
+}
+
 export async function fetchGpsSatelliteStats(supabase, farmId) {
   const { data, error } = await supabase.functions.invoke(BATCH_FUNCTION, {
     body: { farm_id: farmId, stats_only: true },

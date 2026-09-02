@@ -65,7 +65,8 @@ async function fetchUpstreamAnalysis(
       throw new Error(message);
     }
 
-    return JSON.parse(text);
+    const parsed = JSON.parse(text);
+    return unwrapAnalysisPayload(parsed);
   } finally {
     clearTimeout(timeout);
   }
@@ -86,6 +87,20 @@ async function loadStats(admin: ReturnType<typeof createClient>, farmId: number)
   };
 }
 
+function unwrapAnalysisPayload(parsed: unknown): Record<string, unknown> {
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error('Upstream returned invalid analysis');
+  }
+  const rec = parsed as Record<string, unknown>;
+  if (rec.indices || rec.radar_stress || rec.selected_images || rec.data_quality || rec.index_status) {
+    return rec;
+  }
+  if (rec.data && typeof rec.data === 'object') {
+    return unwrapAnalysisPayload(rec.data);
+  }
+  return rec;
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' ? value as Record<string, unknown> : {};
 }
@@ -97,9 +112,15 @@ function isFiniteNumber(value: unknown) {
 
 function hasRadarNumericValues(analysis: Record<string, unknown> | null) {
   if (!analysis) return false;
-  const indices = asRecord(analysis.indices);
-  const s1 = asRecord(asRecord(analysis.selected_images).sentinel1);
-  return isFiniteNumber(indices.S1_VV) || isFiniteNumber(s1.vv_db);
+  let rec = analysis;
+  try {
+    rec = unwrapAnalysisPayload(analysis);
+  } catch {
+    rec = analysis;
+  }
+  const indices = asRecord(rec.indices);
+  const s1 = asRecord(asRecord(rec.selected_images).sentinel1);
+  return isFiniteNumber(indices.S1_VV) || isFiniteNumber(indices.s1_vv) || isFiniteNumber(s1.vv_db);
 }
 
 function isRadarStatusNoData(analysis: Record<string, unknown> | null) {
@@ -159,6 +180,7 @@ async function resolveLastGoodRadar(
     return {
       lastGoodRadar: extractRadarSlice(analysis as Record<string, unknown>),
       lastGoodRadarWeek: radarObservationDate(analysis, weekStart),
+      lookupError: null,
     };
   }
 
@@ -168,7 +190,7 @@ async function resolveLastGoodRadar(
   }
 
   if (hasRadarNumericValues(lastGoodRadar)) {
-    return { lastGoodRadar, lastGoodRadarWeek };
+    return { lastGoodRadar, lastGoodRadarWeek, lookupError: null };
   }
 
   try {
@@ -182,14 +204,21 @@ async function resolveLastGoodRadar(
       return {
         lastGoodRadar: extractRadarSlice(older),
         lastGoodRadarWeek: radarObservationDate(older, null),
+        lookupError: null,
       };
     }
-  } catch {
-    /* keep existing empty last-good */
+    return {
+      lastGoodRadar,
+      lastGoodRadarWeek,
+      lookupError: 'No Sentinel-1 radar in the last 28 days.',
+    };
+  } catch (err) {
+    return {
+      lastGoodRadar,
+      lastGoodRadarWeek,
+      lookupError: err instanceof Error ? err.message : 'Radar lookup failed',
+    };
   }
-
-  return { lastGoodRadar, lastGoodRadarWeek };
-}
 
 async function backfillMissingLastGoodRadar(
   admin: ReturnType<typeof createClient>,
@@ -318,6 +347,53 @@ Deno.serve(async (req) => {
     if (statsOnly) {
       const stats = await loadStats(admin, farmId);
       return json(stats);
+    }
+
+    const radarLookupPositionId = Number(body.radar_lookup_position_id ?? 0);
+    if (Number.isFinite(radarLookupPositionId) && radarLookupPositionId > 0) {
+      const { data: row, error: rowError } = await admin
+        .from('tree_gps_satellite_cache')
+        .select('position_id, position_code, latitude, longitude, analysis, last_good_radar, last_good_radar_week, farm_id')
+        .eq('position_id', radarLookupPositionId)
+        .maybeSingle();
+
+      if (rowError) {
+        return json({ error: rowError.message }, 500);
+      }
+      if (!row || Number(row.farm_id) !== farmId) {
+        return json({ error: 'No satellite cache row for this tree. Run the weekly refresh first.' }, 404);
+      }
+
+      const analysis = row.analysis && typeof row.analysis === 'object'
+        ? row.analysis as Record<string, unknown>
+        : null;
+      const resolved = await resolveLastGoodRadar(
+        analysis,
+        row.last_good_radar,
+        row.last_good_radar_week ?? null,
+        String(row.position_code),
+        Number(row.latitude),
+        Number(row.longitude),
+        weekStart,
+        Math.max(daysBack, RADAR_LOOKBACK_DAYS),
+      );
+
+      const { error: updateError } = await admin
+        .from('tree_gps_satellite_cache')
+        .update({
+          last_good_radar: resolved.lastGoodRadar,
+          last_good_radar_week: resolved.lastGoodRadarWeek,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('position_id', radarLookupPositionId);
+
+      const ok = !updateError && hasRadarNumericValues(resolved.lastGoodRadar);
+      return json({
+        ok,
+        last_good_radar: resolved.lastGoodRadar,
+        last_good_radar_week: resolved.lastGoodRadarWeek,
+        error: updateError?.message || resolved.lookupError || (ok ? null : 'No Sentinel-1 radar in the last 28 days.'),
+      });
     }
 
     const { data: positions, error: posError } = await admin.rpc(

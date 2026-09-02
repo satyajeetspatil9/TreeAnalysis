@@ -3,10 +3,10 @@ import { Alert, Box, CircularProgress, Typography } from '@mui/material';
 import { Link as RouterLink } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
 import { formatNextMonday, getWeekMonday } from '../../utils/treeSatelliteCache';
-import { loadCachedGpsAnalysis, saveLastGoodRadar } from '../../utils/treeGpsSatelliteCache';
+import { loadCachedGpsAnalysis, lookupEarlierRadar, parseCachedAnalysis, saveLastGoodRadar } from '../../utils/treeGpsSatelliteCache';
 import SatelliteAnalysisDisplay from './SatelliteAnalysisDisplay';
 import { getPositionCode, getTreeGps } from '../../utils/schema';
-import { fetchGpsSatelliteAnalysis } from '../../utils/gpsSatelliteAnalysis';
+import { useFarm } from '../../hooks/useFarm';
 import {
   extractRadarSlice,
   hasRadarNumericValues,
@@ -38,12 +38,14 @@ class SatelliteTabErrorBoundary extends React.Component {
 }
 
 function SatelliteTab({ tree }) {
+  const { farm } = useFarm();
   const [analysis, setAnalysis] = useState(null);
   const [meta, setMeta] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
   const [radarLookup, setRadarLookup] = useState(false);
+  const [radarLookupError, setRadarLookupError] = useState(null);
 
   const positionId = tree?.tree_positions?.id ?? null;
   const gps = getTreeGps(tree);
@@ -59,6 +61,7 @@ function SatelliteTab({ tree }) {
 
     setLoading(true);
     setRadarLookup(false);
+    setRadarLookupError(null);
     setError(null);
 
     const result = await loadCachedGpsAnalysis(supabase, positionId);
@@ -112,33 +115,30 @@ function SatelliteTab({ tree }) {
       return;
     }
 
+    if (!farm?.id) {
+      setRadarLookupError('Farm is still loading, so earlier radar could not be requested. Reload this tab.');
+      return;
+    }
+
     setRadarLookup(true);
     try {
-      const olderRaw = await fetchGpsSatelliteAnalysis({
-        treeId: positionCode && positionCode !== '—' ? positionCode : 'tree',
-        latitude,
-        longitude,
-        daysBack: 28,
-      });
-      const older = olderRaw?.indices || olderRaw?.radar_stress || olderRaw?.selected_images
-        ? olderRaw
-        : olderRaw?.data;
-      const slice = extractRadarSlice(older);
-      if (slice) {
-        const week = radarObservationDate(older);
-        await saveLastGoodRadar(supabase, positionId, slice, week);
+      const looked = await lookupEarlierRadar(supabase, farm.id, positionId, 28);
+      const slice = parseCachedAnalysis(looked?.last_good_radar);
+      if (hasRadarNumericValues(slice)) {
         setMeta((prev) => ({
           ...prev,
           lastGoodRadar: slice,
-          lastGoodRadarWeek: week,
+          lastGoodRadarWeek: looked.last_good_radar_week || radarObservationDate(slice),
         }));
+      } else {
+        setRadarLookupError(looked?.error || 'No Sentinel-1 radar in the last 28 days.');
       }
-    } catch {
-      /* Keep this week's cache; radar may still be No data. */
+    } catch (err) {
+      setRadarLookupError(err.message || 'Could not look up earlier radar.');
     } finally {
       setRadarLookup(false);
     }
-  }, [latitude, longitude, positionId, positionCode]);
+  }, [latitude, longitude, positionId, positionCode, farm?.id]);
 
   useEffect(() => {
     loadCache();
@@ -195,7 +195,13 @@ function SatelliteTab({ tree }) {
         )}
         {radarLookup && (
           <Alert severity="info" sx={{ mb: 2 }}>
-            This week has no new Sentinel-1 pass. Looking up the latest earlier radar reading…
+            This week has no new Sentinel-1 pass. Looking up the latest earlier radar reading
+            (this can take up to a couple of minutes)…
+          </Alert>
+        )}
+        {radarLookupError && (
+          <Alert severity="warning" sx={{ mb: 2 }} onClose={() => setRadarLookupError(null)}>
+            {radarLookupError}
           </Alert>
         )}
         <SatelliteAnalysisDisplay
