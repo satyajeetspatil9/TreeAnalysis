@@ -161,6 +161,38 @@ export function resolveRadarAnalysis(currentAnalysis, lastGoodRadar) {
   return { analysis: currentAnalysis, fromPriorWeek: false };
 }
 
+/** Values and labels for radar cards — always prefers last-good / baseline over this week's No data. */
+export function getRadarDisplayModel(currentAnalysis, lastGoodRadar = null, lastGoodRadarWeek = null) {
+  const resolved = resolveRadarAnalysis(currentAnalysis, lastGoodRadar);
+  const slice = extractRadarSlice(resolved.analysis)
+    || extractRadarSlice(lastGoodRadar)
+    || extractRadarSlice(currentAnalysis);
+  const hasValues = hasRadarNumericValues(slice);
+  const fromPriorWeek = !isRadarUsable(currentAnalysis) && hasValues;
+  const radar = slice?.radar_stress || resolved.analysis?.radar_stress || {};
+  const indices = slice?.indices || {};
+  const s1 = slice?.selected_images?.sentinel1 || {};
+
+  return {
+    fromPriorWeek,
+    hasValues,
+    statusRaw: fromPriorWeek
+      ? 'earlier radar'
+      : (radar.status || slice?.index_status?.S1_VV || 'No data'),
+    vvLinear: firstFinite(indices.S1_VV, radar.vv_linear),
+    vvDb: firstFinite(s1.vv_db, radar.vv_db),
+    score: radar.score ?? null,
+    asOf: fromPriorWeek
+      ? radarObservationDate(slice || resolved.analysis, lastGoodRadarWeek)
+      : null,
+    radar,
+    indices,
+    indexStatus: slice?.index_status || {},
+    s1,
+    analysis: slice || resolved.analysis || currentAnalysis,
+  };
+}
+
 export function isRadarOnlyMode(analysis) {
   if (!analysis) return false;
   const cloud = getCloudCoverPercent(analysis);

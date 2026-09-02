@@ -33,11 +33,10 @@ import {
 } from '../../utils/satelliteDisplay';
 import SatelliteIndicatorVisual, { SatelliteOverallVisual } from './SatelliteIndicatorArt';
 import {
+  getRadarDisplayModel,
   isRadarOnlyMode,
   monsoonDisclaimer,
-  radarObservationDate,
   readHideOpticalWhenCloudy,
-  resolveRadarAnalysis,
   shouldShowMonsoonDisclaimer,
   writeHideOpticalWhenCloudy,
 } from '../../utils/satelliteMonsoon';
@@ -96,7 +95,7 @@ function IndexCard({ indicatorId, short, statusRaw, value, hint, technicalKey, u
   );
 }
 
-function StressCard({ indicatorId, statusRaw, score, indicator }) {
+function StressCard({ indicatorId, statusRaw, score, indicator, extra }) {
   const friendly = friendlyStressStatus(statusRaw || indicator);
   const chipColor = stressLevelColor(friendly.label);
 
@@ -118,6 +117,11 @@ function StressCard({ indicatorId, statusRaw, score, indicator }) {
       {score != null && (
         <Typography variant="caption" color="text.disabled" display="block" sx={{ mt: 1 }}>
           Stress level score: {formatNumber(score, 0)} (0 = none, higher = more stress)
+        </Typography>
+      )}
+      {extra && (
+        <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1 }}>
+          {extra}
         </Typography>
       )}
     </Paper>
@@ -152,20 +156,17 @@ export function SatelliteAnalysisDisplay({
 
   if (!analysis) return null;
 
-  const radarResolved = resolveRadarAnalysis(analysis, lastGoodRadar);
-  const radarView = radarResolved.analysis || analysis;
+  const radarModel = getRadarDisplayModel(analysis, lastGoodRadar, lastGoodRadarWeek);
   const overall = analysis.overall_condition || {};
   const indices = analysis.indices || {};
   const indexStatus = analysis.index_status || {};
   const water = analysis.water_stress || {};
   const nutrient = analysis.nutrient_stress || {};
-  const radar = radarView.radar_stress || {};
-  const radarIndices = radarView.indices || {};
-  const radarIndexStatus = radarView.index_status || {};
+  const radarIndices = radarModel.indices;
   const quality = analysis.data_quality || {};
   const period = analysis.period || {};
   const s2 = analysis.selected_images?.sentinel2;
-  const s1 = radarView.selected_images?.sentinel1 || analysis.selected_images?.sentinel1;
+  const s1 = radarModel.s1 || analysis.selected_images?.sentinel1;
   const sampling = analysis.sampling || {};
 
   const overallFriendly = friendlyOverallStatus(overall.status, overall.severity);
@@ -177,12 +178,8 @@ export function SatelliteAnalysisDisplay({
   const radarOnly = isRadarOnlyMode(analysis);
   const hideOptical = radarOnly && hideOpticalWhenCloudy;
   const showMonsoonNote = shouldShowMonsoonDisclaimer(analysis, weekStart);
-  const radarAsOf = radarResolved.fromPriorWeek
-    ? radarObservationDate(radarView, lastGoodRadarWeek)
-    : null;
-  const radarStatusRaw = radarResolved.fromPriorWeek && (!radar.status || String(radar.status).toLowerCase().includes('no data'))
-    ? 'earlier radar'
-    : (radar.status || radarIndexStatus.S1_VV);
+  const radarAsOf = radarModel.asOf;
+  const radarStatusRaw = radarModel.statusRaw;
 
   return (
     <Box>
@@ -322,9 +319,9 @@ export function SatelliteAnalysisDisplay({
         <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
           <Typography variant="body2" color="text.secondary">
             Radar-only week — overall optical score is hidden because of high cloud cover.
-            {radarResolved.fromPriorWeek && radarAsOf
+            {radarModel.fromPriorWeek && radarAsOf
               ? ` Showing the latest good Sentinel-1 radar from ${formatDate(radarAsOf)}.`
-              : radarResolved.fromPriorWeek
+              : radarModel.fromPriorWeek
                 ? ' Showing the latest earlier good Sentinel-1 radar reading.'
                 : ''}
           </Typography>
@@ -332,11 +329,15 @@ export function SatelliteAnalysisDisplay({
       )}
 
       <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
-        {hideOptical ? 'Radar readings (Sentinel-1)' : 'What the satellite sees'}
+        {hideOptical
+          ? (radarModel.fromPriorWeek ? 'Earlier radar readings (Sentinel-1)' : 'Radar readings (Sentinel-1)')
+          : 'What the satellite sees'}
       </Typography>
       <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1.5 }}>
         {hideOptical
-          ? 'Radar readings work through cloud. Confirm important decisions with a field visit or soil test.'
+          ? (radarModel.fromPriorWeek
+            ? 'This week had no new Sentinel-1 pass. Values below are the last stored radar reading.'
+            : 'Radar readings work through cloud. Confirm important decisions with a field visit or soil test.')
           : 'Plain-language readings from space. Confirm important decisions with a field visit or soil test.'}
       </Typography>
       {hideOptical ? (
@@ -346,8 +347,13 @@ export function SatelliteAnalysisDisplay({
               indicatorId="S1_VV"
               short={SATELLITE_INDEX_INFO.S1_VV.short}
               statusRaw={radarStatusRaw}
-              value={radarIndices.S1_VV}
-              hint={SATELLITE_INDEX_INFO.S1_VV.hint}
+              value={radarModel.vvLinear}
+              hint={radarModel.hasValues
+                ? [
+                  radarModel.vvDb != null ? `${formatNumber(radarModel.vvDb, 2)} dB` : null,
+                  radarAsOf ? `from ${formatDate(radarAsOf)}` : null,
+                ].filter(Boolean).join(' · ')
+                : SATELLITE_INDEX_INFO.S1_VV.hint}
               technicalKey="S1_VV"
               useStressLabels
             />
@@ -356,7 +362,14 @@ export function SatelliteAnalysisDisplay({
             <StressCard
               indicatorId="radar_stress"
               statusRaw={radarStatusRaw}
-              score={radar.score}
+              score={radarModel.score}
+              extra={radarModel.hasValues
+                ? [
+                  radarModel.vvLinear != null ? `Radar value ${formatNumber(radarModel.vvLinear, 3)}` : null,
+                  radarModel.vvDb != null ? `${formatNumber(radarModel.vvDb, 2)} dB` : null,
+                  radarAsOf ? `from ${formatDate(radarAsOf)}` : null,
+                ].filter(Boolean).join(' · ')
+                : null}
             />
           </Grid>
         </Grid>
@@ -397,9 +410,14 @@ export function SatelliteAnalysisDisplay({
               <IndexCard
                 indicatorId="S1_VV"
                 short={SATELLITE_INDEX_INFO.S1_VV.short}
-                statusRaw={radarStatusRaw || radar.status || radarIndexStatus.S1_VV || indexStatus.S1_VV}
-                value={radarIndices.S1_VV ?? indices.S1_VV}
-                hint={SATELLITE_INDEX_INFO.S1_VV.hint}
+                statusRaw={radarStatusRaw}
+                value={radarModel.vvLinear ?? radarIndices.S1_VV ?? indices.S1_VV}
+                hint={radarModel.hasValues
+                  ? [
+                    radarModel.vvDb != null ? `${formatNumber(radarModel.vvDb, 2)} dB` : null,
+                    radarAsOf ? `from ${formatDate(radarAsOf)}` : null,
+                  ].filter(Boolean).join(' · ') || SATELLITE_INDEX_INFO.S1_VV.hint
+                  : SATELLITE_INDEX_INFO.S1_VV.hint}
                 technicalKey="S1_VV"
                 useStressLabels
               />
@@ -427,7 +445,13 @@ export function SatelliteAnalysisDisplay({
               <StressCard
                 indicatorId="radar_stress"
                 statusRaw={radarStatusRaw}
-                score={radar.score}
+                score={radarModel.score}
+                extra={radarModel.hasValues && radarModel.fromPriorWeek
+                  ? [
+                    radarModel.vvDb != null ? `${formatNumber(radarModel.vvDb, 2)} dB` : null,
+                    radarAsOf ? `from ${formatDate(radarAsOf)}` : null,
+                  ].filter(Boolean).join(' · ')
+                  : null}
               />
             </Grid>
           </Grid>
@@ -465,7 +489,7 @@ export function SatelliteAnalysisDisplay({
               <>
                 <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 2 }}>
                   Radar (Sentinel-1) · {formatDate(s1.date)}
-                  {radarResolved.fromPriorWeek ? ' · earlier pass' : ''}
+                  {radarModel.fromPriorWeek ? ' · earlier pass' : ''}
                 </Typography>
                 <DetailRow label="Radar moisture (dB)" value={formatNumber(s1.vv_db, 2)} />
               </>

@@ -5,11 +5,8 @@ import {
   overallStressLevel,
 } from './satelliteDisplay';
 import {
-  hasRadarNumericValues,
+  getRadarDisplayModel,
   isRadarOnlyMode,
-  isRadarStatusNoData,
-  radarObservationDate,
-  resolveRadarAnalysis,
 } from './satelliteMonsoon';
 
 export const SATELLITE_MONITOR_COLUMNS = [
@@ -40,24 +37,17 @@ export function extractSatelliteIndicators(analysis, lastGoodRadar = null, optio
   const indexStatus = analysis.index_status || {};
   const water = analysis.water_stress || {};
   const nutrient = analysis.nutrient_stress || {};
-  const radarResolved = resolveRadarAnalysis(analysis, lastGoodRadar);
-  const radarView = radarResolved.analysis || analysis;
-  const radar = radarView.radar_stress || {};
+  const radarModel = getRadarDisplayModel(analysis, lastGoodRadar, options.lastGoodRadarWeek);
   const overallFriendly = friendlyOverallStatus(overall.status, overall.severity);
   const cloudy = isRadarOnlyMode(analysis);
   const hideOptical = cloudy && hideOpticalWhenCloudy;
-  const radarFriendly = radarResolved.fromPriorWeek && isRadarStatusNoData(radarView)
-    && hasRadarNumericValues(radarView)
-    ? friendlyStressStatus('earlier radar')
-    : friendlyStressStatus(radar.status);
+  const radarFriendly = friendlyStressStatus(radarModel.statusRaw);
 
   return {
     radarOnly: cloudy,
     opticalHidden: hideOptical,
-    radarFromPriorWeek: radarResolved.fromPriorWeek,
-    radarAsOf: radarResolved.fromPriorWeek
-      ? radarObservationDate(radarView, options.lastGoodRadarWeek)
-      : null,
+    radarFromPriorWeek: radarModel.fromPriorWeek,
+    radarAsOf: radarModel.asOf,
     overall: hideOptical
       ? { label: 'Radar only', summary: null, raw: null, stressPct: null }
       : {
@@ -71,7 +61,7 @@ export function extractSatelliteIndicators(analysis, lastGoodRadar = null, optio
     ndre: hideOptical ? null : friendlyIndexStatus(indexStatus.NDRE),
     water: hideOptical ? null : friendlyStressStatus(water.status),
     nutrient: hideOptical ? null : friendlyStressStatus(nutrient.status || nutrient.indicator),
-    radar: { ...radarFriendly, raw: radar.status },
+    radar: { ...radarFriendly, raw: radarModel.statusRaw },
   };
 }
 

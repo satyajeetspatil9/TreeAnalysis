@@ -99,6 +99,11 @@ const INDEX_STATUS_FRIENDLY = {
 };
 
 const STRESS_STATUS_FRIENDLY = {
+  'earlier radar': {
+    label: 'Earlier radar',
+    summary: 'This week had no new Sentinel-1 pass. Showing the last stored radar reading.',
+    action: 'Treat this as an older wetness signal until the next radar overpass.',
+  },
   'no stress': {
     label: 'No stress',
     summary: 'No significant water stress detected.',
