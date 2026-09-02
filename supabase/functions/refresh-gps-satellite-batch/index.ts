@@ -110,6 +110,13 @@ function isFiniteNumber(value: unknown) {
   return Number.isFinite(Number(value));
 }
 
+function firstFinite(...values: unknown[]) {
+  for (const value of values) {
+    if (isFiniteNumber(value)) return Number(value);
+  }
+  return null;
+}
+
 function hasRadarNumericValues(analysis: Record<string, unknown> | null) {
   if (!analysis) return false;
   let rec = analysis;
@@ -119,8 +126,18 @@ function hasRadarNumericValues(analysis: Record<string, unknown> | null) {
     rec = analysis;
   }
   const indices = asRecord(rec.indices);
+  const radar = asRecord(rec.radar_stress);
   const s1 = asRecord(asRecord(rec.selected_images).sentinel1);
-  return isFiniteNumber(indices.S1_VV) || isFiniteNumber(indices.s1_vv) || isFiniteNumber(s1.vv_db);
+  const cal = asRecord(rec.sentinel1_calibration);
+  return firstFinite(
+    indices.S1_VV,
+    indices.s1_vv,
+    radar.vv_linear,
+    radar.vv_db,
+    s1.vv_db,
+    cal.baseline_vv_linear,
+    cal.baseline_vv_db,
+  ) != null;
 }
 
 function isRadarStatusNoData(analysis: Record<string, unknown> | null) {
@@ -132,19 +149,59 @@ function isRadarStatusNoData(analysis: Record<string, unknown> | null) {
 }
 
 function isRadarUsable(analysis: Record<string, unknown> | null) {
-  return hasRadarNumericValues(analysis) && !isRadarStatusNoData(analysis);
+  if (!analysis) return false;
+  let rec = analysis;
+  try {
+    rec = unwrapAnalysisPayload(analysis);
+  } catch {
+    rec = analysis;
+  }
+  const indices = asRecord(rec.indices);
+  const radar = asRecord(rec.radar_stress);
+  const s1 = asRecord(asRecord(rec.selected_images).sentinel1);
+  const currentVv = firstFinite(indices.S1_VV, indices.s1_vv, radar.vv_linear, radar.vv_db, s1.vv_db);
+  return currentVv != null && !isRadarStatusNoData(rec);
 }
 
 function extractRadarSlice(analysis: Record<string, unknown>) {
-  const indexStatus = asRecord(analysis.index_status);
-  const indices = asRecord(analysis.indices);
-  const images = asRecord(analysis.selected_images);
+  let rec = analysis;
+  try {
+    rec = unwrapAnalysisPayload(analysis);
+  } catch {
+    rec = analysis;
+  }
+  const indexStatus = asRecord(rec.index_status);
+  const indices = asRecord(rec.indices);
+  const s1 = asRecord(asRecord(rec.selected_images).sentinel1);
+  const radar = asRecord(rec.radar_stress);
+  const cal = asRecord(rec.sentinel1_calibration);
+  const currentLinear = firstFinite(indices.S1_VV, indices.s1_vv, radar.vv_linear);
+  const currentDb = firstFinite(s1.vv_db, radar.vv_db);
+  const vvLinear = currentLinear ?? firstFinite(cal.baseline_vv_linear);
+  const vvDb = currentDb ?? firstFinite(cal.baseline_vv_db);
+  const usedBaseline = currentLinear == null && currentDb == null;
   return {
-    radar_stress: analysis.radar_stress ?? null,
-    index_status: { S1_VV: indexStatus.S1_VV ?? null },
-    indices: { S1_VV: indices.S1_VV ?? null },
-    selected_images: { sentinel1: images.sentinel1 ?? null },
-    period: analysis.period ?? null,
+    radar_stress: {
+      ...radar,
+      status: usedBaseline || isRadarStatusNoData(rec) ? 'earlier radar' : radar.status,
+      vv_db: vvDb,
+      vv_linear: vvLinear,
+    },
+    index_status: {
+      S1_VV: usedBaseline || isRadarStatusNoData(rec) ? 'earlier radar' : (indexStatus.S1_VV ?? null),
+    },
+    indices: { S1_VV: vvLinear },
+    selected_images: {
+      sentinel1: {
+        ...s1,
+        date: s1.date || (usedBaseline ? cal.baseline_end : null),
+        vv_db: vvDb,
+      },
+    },
+    period: usedBaseline
+      ? { start: cal.baseline_start ?? null, end: cal.baseline_end ?? null }
+      : (rec.period ?? null),
+    sentinel1_calibration: rec.sentinel1_calibration ?? null,
   };
 }
 

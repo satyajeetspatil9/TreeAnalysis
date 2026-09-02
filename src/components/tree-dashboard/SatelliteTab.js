@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Box, CircularProgress, Typography } from '@mui/material';
 import { Link as RouterLink } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
@@ -52,6 +52,7 @@ function SatelliteTab({ tree }) {
   const latitude = gps?.latitude ?? null;
   const longitude = gps?.longitude ?? null;
   const positionCode = getPositionCode(tree);
+  const lookupGen = useRef(0);
 
   const loadCache = useCallback(async () => {
     if (latitude == null || longitude == null) {
@@ -88,16 +89,11 @@ function SatelliteTab({ tree }) {
 
     let lastGoodRadar = result.lastGoodRadar;
     let lastGoodRadarWeek = result.lastGoodRadarWeek;
-    const resolved = resolveRadarAnalysis(result.analysis, lastGoodRadar);
-
-    if (hasRadarNumericValues(resolved.analysis) && !hasRadarNumericValues(lastGoodRadar)) {
-      const slice = extractRadarSlice(resolved.analysis);
-      const week = radarObservationDate(resolved.analysis, lastGoodRadarWeek);
-      if (slice) {
-        lastGoodRadar = slice;
-        lastGoodRadarWeek = week;
-        saveLastGoodRadar(supabase, positionId, slice, week);
-      }
+    const synthesized = extractRadarSlice(result.analysis);
+    if (hasRadarNumericValues(synthesized) && !hasRadarNumericValues(lastGoodRadar)) {
+      lastGoodRadar = synthesized;
+      lastGoodRadarWeek = radarObservationDate(synthesized, lastGoodRadarWeek);
+      saveLastGoodRadar(supabase, positionId, synthesized, lastGoodRadarWeek);
     }
 
     setAnalysis(result.analysis);
@@ -120,10 +116,13 @@ function SatelliteTab({ tree }) {
       return;
     }
 
+    const gen = lookupGen.current + 1;
+    lookupGen.current = gen;
     setRadarLookup(true);
     try {
-      const looked = await lookupEarlierRadar(supabase, farm.id, positionId, 28);
-      const slice = parseCachedAnalysis(looked?.last_good_radar);
+      const looked = await lookupEarlierRadar(supabase, farm.id, positionId, 45);
+      if (lookupGen.current !== gen) return;
+      const slice = parseCachedAnalysis(looked?.last_good_radar) || extractRadarSlice(looked?.last_good_radar);
       if (hasRadarNumericValues(slice)) {
         setMeta((prev) => ({
           ...prev,
@@ -131,12 +130,34 @@ function SatelliteTab({ tree }) {
           lastGoodRadarWeek: looked.last_good_radar_week || radarObservationDate(slice),
         }));
       } else {
-        setRadarLookupError(looked?.error || 'No Sentinel-1 radar in the last 28 days.');
+        const refreshed = await loadCachedGpsAnalysis(supabase, positionId);
+        if (lookupGen.current !== gen) return;
+        const fromCache = refreshed.lastGoodRadar || extractRadarSlice(refreshed.analysis);
+        if (hasRadarNumericValues(fromCache)) {
+          setMeta((prev) => ({
+            ...prev,
+            lastGoodRadar: fromCache,
+            lastGoodRadarWeek: refreshed.lastGoodRadarWeek || radarObservationDate(fromCache),
+          }));
+        } else {
+          setRadarLookupError(looked?.error || 'No Sentinel-1 radar in the last 45 days.');
+        }
       }
     } catch (err) {
-      setRadarLookupError(err.message || 'Could not look up earlier radar.');
+      if (lookupGen.current !== gen) return;
+      const refreshed = await loadCachedGpsAnalysis(supabase, positionId);
+      const fromCache = refreshed.lastGoodRadar || extractRadarSlice(refreshed.analysis);
+      if (hasRadarNumericValues(fromCache)) {
+        setMeta((prev) => ({
+          ...prev,
+          lastGoodRadar: fromCache,
+          lastGoodRadarWeek: refreshed.lastGoodRadarWeek || radarObservationDate(fromCache),
+        }));
+      } else {
+        setRadarLookupError(err.message || 'Could not look up earlier radar.');
+      }
     } finally {
-      setRadarLookup(false);
+      if (lookupGen.current === gen) setRadarLookup(false);
     }
   }, [latitude, longitude, positionId, positionCode, farm?.id]);
 

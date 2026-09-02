@@ -37,9 +37,16 @@ function isFiniteNumber(value) {
   return Number.isFinite(Number(value));
 }
 
+function firstFinite(...values) {
+  for (const value of values) {
+    if (isFiniteNumber(value)) return Number(value);
+  }
+  return null;
+}
+
 function unwrapGpsAnalysis(payload) {
   if (!payload || typeof payload !== 'object') return payload;
-  if (payload.indices || payload.radar_stress || payload.selected_images || payload.data_quality || payload.index_status) {
+  if (payload.indices || payload.radar_stress || payload.selected_images || payload.data_quality || payload.index_status || payload.sentinel1_calibration) {
     return payload;
   }
   if (payload.data && typeof payload.data === 'object') {
@@ -51,10 +58,16 @@ function unwrapGpsAnalysis(payload) {
 export function hasRadarNumericValues(analysis) {
   const payload = unwrapGpsAnalysis(analysis);
   if (!payload) return false;
-  return isFiniteNumber(payload.indices?.S1_VV)
-    || isFiniteNumber(payload.indices?.s1_vv)
-    || isFiniteNumber(payload.selected_images?.sentinel1?.vv_db)
-    || isFiniteNumber(payload.selected_images?.sentinel1?.VV);
+  return firstFinite(
+    payload.indices?.S1_VV,
+    payload.indices?.s1_vv,
+    payload.radar_stress?.vv_linear,
+    payload.radar_stress?.vv_db,
+    payload.selected_images?.sentinel1?.vv_db,
+    payload.selected_images?.sentinel1?.VV,
+    payload.sentinel1_calibration?.baseline_vv_linear,
+    payload.sentinel1_calibration?.baseline_vv_db,
+  ) != null;
 }
 
 export function isRadarStatusNoData(analysis) {
@@ -69,20 +82,58 @@ export function isRadarStatusNoData(analysis) {
 
 /** Fresh this-week radar: numeric values and a real status (not "No data"). */
 export function isRadarUsable(analysis) {
-  return hasRadarNumericValues(analysis) && !isRadarStatusNoData(analysis);
+  const payload = unwrapGpsAnalysis(analysis);
+  const currentVv = firstFinite(
+    payload?.indices?.S1_VV,
+    payload?.indices?.s1_vv,
+    payload?.radar_stress?.vv_linear,
+    payload?.radar_stress?.vv_db,
+    payload?.selected_images?.sentinel1?.vv_db,
+  );
+  return currentVv != null && !isRadarStatusNoData(payload);
 }
 
 export function extractRadarSlice(analysis) {
   const payload = unwrapGpsAnalysis(analysis);
-  if (!hasRadarNumericValues(payload)) return null;
+  if (!payload) return null;
+
+  const cal = payload.sentinel1_calibration || {};
+  const radar = payload.radar_stress || {};
+  const s1 = payload.selected_images?.sentinel1 || {};
+  const currentLinear = firstFinite(payload.indices?.S1_VV, payload.indices?.s1_vv, radar.vv_linear);
+  const currentDb = firstFinite(s1.vv_db, radar.vv_db);
+  const baselineLinear = firstFinite(cal.baseline_vv_linear);
+  const baselineDb = firstFinite(cal.baseline_vv_db);
+  const vvLinear = currentLinear ?? baselineLinear;
+  const vvDb = currentDb ?? baselineDb;
+  if (vvLinear == null && vvDb == null) return null;
+
+  const usedBaseline = currentLinear == null && currentDb == null;
+
   return {
-    radar_stress: payload.radar_stress ?? null,
-    index_status: { S1_VV: payload.index_status?.S1_VV ?? null },
-    indices: { S1_VV: payload.indices?.S1_VV ?? payload.indices?.s1_vv ?? null },
-    selected_images: {
-      sentinel1: payload.selected_images?.sentinel1 ?? null,
+    radar_stress: {
+      ...radar,
+      status: usedBaseline || isRadarStatusNoData(payload) ? 'earlier radar' : radar.status,
+      vv_db: vvDb,
+      vv_linear: vvLinear,
     },
-    period: payload.period ?? null,
+    index_status: {
+      S1_VV: usedBaseline || isRadarStatusNoData(payload)
+        ? 'earlier radar'
+        : (payload.index_status?.S1_VV ?? null),
+    },
+    indices: { S1_VV: vvLinear },
+    selected_images: {
+      sentinel1: {
+        ...s1,
+        date: s1.date || (usedBaseline ? cal.baseline_end : null),
+        vv_db: vvDb,
+      },
+    },
+    period: usedBaseline
+      ? { start: cal.baseline_start || null, end: cal.baseline_end || null }
+      : (payload.period ?? null),
+    sentinel1_calibration: cal,
   };
 }
 
@@ -103,8 +154,9 @@ export function resolveRadarAnalysis(currentAnalysis, lastGoodRadar) {
   if (hasRadarNumericValues(lastGoodRadar)) {
     return { analysis: lastGoodRadar, fromPriorWeek: true };
   }
-  if (hasRadarNumericValues(currentAnalysis)) {
-    return { analysis: currentAnalysis, fromPriorWeek: true };
+  const synthesized = extractRadarSlice(currentAnalysis);
+  if (hasRadarNumericValues(synthesized)) {
+    return { analysis: synthesized, fromPriorWeek: true };
   }
   return { analysis: currentAnalysis, fromPriorWeek: false };
 }
