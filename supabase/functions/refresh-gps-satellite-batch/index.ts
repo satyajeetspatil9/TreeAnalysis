@@ -219,6 +219,7 @@ async function resolveLastGoodRadar(
       lookupError: err instanceof Error ? err.message : 'Radar lookup failed',
     };
   }
+}
 
 async function backfillMissingLastGoodRadar(
   admin: ReturnType<typeof createClient>,
