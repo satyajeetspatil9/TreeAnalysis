@@ -65,6 +65,8 @@ export async function loadCachedGpsAnalysis(supabase, positionId) {
     empty: !data.analysis,
     weekStart: data.week_start,
     fetchedAt: data.fetched_at,
+    lastGoodRadar: parseCachedAnalysis(data.last_good_radar),
+    lastGoodRadarWeek: data.last_good_radar_week || null,
     fromCache: true,
     nextFetchLabel: formatNextMonday(),
   };

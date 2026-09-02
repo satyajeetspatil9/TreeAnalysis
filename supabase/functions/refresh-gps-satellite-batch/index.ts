@@ -85,6 +85,49 @@ async function loadStats(admin: ReturnType<typeof createClient>, farmId: number)
   };
 }
 
+function isRadarUsable(analysis: Record<string, unknown> | null) {
+  if (!analysis) return false;
+  const radarStress = analysis.radar_stress && typeof analysis.radar_stress === 'object'
+    ? analysis.radar_stress as Record<string, unknown>
+    : {};
+  const indexStatus = analysis.index_status && typeof analysis.index_status === 'object'
+    ? analysis.index_status as Record<string, unknown>
+    : {};
+  const status = String(radarStress.status ?? indexStatus.S1_VV ?? '').trim().toLowerCase();
+  if (!status || status === 'no data' || status === 'nodata' || status.includes('no data')) {
+    return false;
+  }
+  const indices = analysis.indices && typeof analysis.indices === 'object'
+    ? analysis.indices as Record<string, unknown>
+    : {};
+  const images = analysis.selected_images && typeof analysis.selected_images === 'object'
+    ? analysis.selected_images as Record<string, unknown>
+    : {};
+  const s1 = images.sentinel1 && typeof images.sentinel1 === 'object'
+    ? images.sentinel1 as Record<string, unknown>
+    : {};
+  return indices.S1_VV != null || s1.vv_db != null;
+}
+
+function extractRadarSlice(analysis: Record<string, unknown>) {
+  const indexStatus = analysis.index_status && typeof analysis.index_status === 'object'
+    ? analysis.index_status as Record<string, unknown>
+    : {};
+  const indices = analysis.indices && typeof analysis.indices === 'object'
+    ? analysis.indices as Record<string, unknown>
+    : {};
+  const images = analysis.selected_images && typeof analysis.selected_images === 'object'
+    ? analysis.selected_images as Record<string, unknown>
+    : {};
+  return {
+    radar_stress: analysis.radar_stress ?? null,
+    index_status: { S1_VV: indexStatus.S1_VV ?? null },
+    indices: { S1_VV: indices.S1_VV ?? null },
+    selected_images: { sentinel1: images.sentinel1 ?? null },
+    period: analysis.period ?? null,
+  };
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -208,6 +251,19 @@ Deno.serve(async (req) => {
         errorMessage = err instanceof Error ? err.message : 'Upstream failed';
       }
 
+      const { data: existing } = await admin
+        .from('tree_gps_satellite_cache')
+        .select('last_good_radar, last_good_radar_week')
+        .eq('position_id', lastId)
+        .maybeSingle();
+
+      let lastGoodRadar = existing?.last_good_radar ?? null;
+      let lastGoodRadarWeek = existing?.last_good_radar_week ?? null;
+      if (analysis && isRadarUsable(analysis)) {
+        lastGoodRadar = extractRadarSlice(analysis);
+        lastGoodRadarWeek = weekStart;
+      }
+
       const { error: upsertError } = await admin
         .from('tree_gps_satellite_cache')
         .upsert({
@@ -219,6 +275,8 @@ Deno.serve(async (req) => {
           latitude,
           longitude,
           analysis,
+          last_good_radar: lastGoodRadar,
+          last_good_radar_week: lastGoodRadarWeek,
           error_message: errorMessage,
           updated_at: new Date().toISOString(),
         });

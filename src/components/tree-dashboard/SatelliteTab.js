@@ -70,6 +70,8 @@ function SatelliteTab({ tree }) {
         fetchedAt: result.fetchedAt,
         weekStart: result.weekStart,
         cacheError: result.error,
+        lastGoodRadar: result.lastGoodRadar,
+        lastGoodRadarWeek: result.lastGoodRadarWeek,
       });
       setError(null);
     }
@@ -132,6 +134,8 @@ function SatelliteTab({ tree }) {
         )}
         <SatelliteAnalysisDisplay
           analysis={analysis}
+          lastGoodRadar={meta?.lastGoodRadar}
+          lastGoodRadarWeek={meta?.lastGoodRadarWeek}
           latitude={latitude}
           longitude={longitude}
           fetchedAt={meta?.fetchedAt}

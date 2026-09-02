@@ -1,12 +1,14 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Alert,
   Box,
   Button,
   Chip,
   CircularProgress,
+  FormControlLabel,
   Grid,
   Paper,
+  Switch,
   Typography,
 } from '@mui/material';
 import { alpha, useTheme } from '@mui/material/styles';
@@ -33,7 +35,10 @@ import SatelliteIndicatorVisual, { SatelliteOverallVisual } from './SatelliteInd
 import {
   isRadarOnlyMode,
   monsoonDisclaimer,
+  readHideOpticalWhenCloudy,
+  resolveRadarAnalysis,
   shouldShowMonsoonDisclaimer,
+  writeHideOpticalWhenCloudy,
 } from '../../utils/satelliteMonsoon';
 
 function overallPanelSx(theme, severity, stressPercentage) {
@@ -131,6 +136,8 @@ function DetailRow({ label, value }) {
 
 export function SatelliteAnalysisDisplay({
   analysis,
+  lastGoodRadar = null,
+  lastGoodRadarWeek = null,
   latitude,
   longitude,
   fetchedAt,
@@ -140,19 +147,24 @@ export function SatelliteAnalysisDisplay({
   cacheNote,
 }) {
   const theme = useTheme();
+  const [hideOpticalWhenCloudy, setHideOpticalWhenCloudy] = useState(readHideOpticalWhenCloudy);
 
   if (!analysis) return null;
 
+  const radarResolved = resolveRadarAnalysis(analysis, lastGoodRadar);
+  const radarView = radarResolved.analysis || analysis;
   const overall = analysis.overall_condition || {};
   const indices = analysis.indices || {};
   const indexStatus = analysis.index_status || {};
   const water = analysis.water_stress || {};
   const nutrient = analysis.nutrient_stress || {};
-  const radar = analysis.radar_stress || {};
+  const radar = radarView.radar_stress || {};
+  const radarIndices = radarView.indices || {};
+  const radarIndexStatus = radarView.index_status || {};
   const quality = analysis.data_quality || {};
   const period = analysis.period || {};
   const s2 = analysis.selected_images?.sentinel2;
-  const s1 = analysis.selected_images?.sentinel1;
+  const s1 = radarView.selected_images?.sentinel1 || analysis.selected_images?.sentinel1;
   const sampling = analysis.sampling || {};
 
   const overallFriendly = friendlyOverallStatus(overall.status, overall.severity);
@@ -162,6 +174,7 @@ export function SatelliteAnalysisDisplay({
     && String(overall.severity).toLowerCase() !== String(overallFriendly.headline).toLowerCase();
   const overallVisualColor = severityToChipColor(severityLabel);
   const radarOnly = isRadarOnlyMode(analysis);
+  const hideOptical = radarOnly && hideOpticalWhenCloudy;
   const showMonsoonNote = shouldShowMonsoonDisclaimer(analysis, weekStart);
 
   return (
@@ -208,12 +221,29 @@ export function SatelliteAnalysisDisplay({
           {monsoonDisclaimer('radar-only')}
         </Alert>
       )}
+      {radarOnly && (
+        <FormControlLabel
+          sx={{ mb: 2, ml: 0 }}
+          control={(
+            <Switch
+              checked={!hideOpticalWhenCloudy}
+              onChange={(e) => {
+                const showOptical = e.target.checked;
+                setHideOpticalWhenCloudy(!showOptical);
+                writeHideOpticalWhenCloudy(!showOptical);
+              }}
+            />
+          )}
+          label="Show optical readings when cloudy"
+        />
+      )}
       {showMonsoonNote && (
         <Alert severity="info" sx={{ mb: 2 }}>
           {monsoonDisclaimer('season')}
         </Alert>
       )}
 
+      {!hideOptical && (
       <Paper sx={{ p: 2.5, mb: 2, ...overallPanelSx(theme, severityLabel, overall.stress_percentage) }}>
         <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, gap: 2, mb: 1.5 }}>
           <SatelliteOverallVisual
@@ -279,82 +309,123 @@ export function SatelliteAnalysisDisplay({
           </Box>
         </Box>
       </Paper>
+      )}
+
+      {hideOptical && (
+        <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
+          <Typography variant="body2" color="text.secondary">
+            Radar-only week — overall optical score is hidden because of high cloud cover.
+            {radarResolved.fromPriorWeek && lastGoodRadarWeek
+              ? ` Showing the latest good Sentinel-1 radar from the week of ${formatDate(lastGoodRadarWeek)}.`
+              : radarResolved.fromPriorWeek
+                ? ' Showing the latest earlier good Sentinel-1 radar reading.'
+                : ''}
+          </Typography>
+        </Paper>
+      )}
 
       <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
-        What the satellite sees
+        {hideOptical ? 'Radar readings (Sentinel-1)' : 'What the satellite sees'}
       </Typography>
       <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1.5 }}>
-        Plain-language readings from space. Confirm important decisions with a field visit or soil test.
+        {hideOptical
+          ? 'Radar readings work through cloud. Confirm important decisions with a field visit or soil test.'
+          : 'Plain-language readings from space. Confirm important decisions with a field visit or soil test.'}
       </Typography>
-      <Grid container spacing={2} sx={{ mb: 3 }}>
-        <Grid item xs={12} sm={6} md={3}>
-          <IndexCard
-            indicatorId="NDVI"
-            short={SATELLITE_INDEX_INFO.NDVI.short}
-            statusRaw={indexStatus.NDVI}
-            value={indices.NDVI}
-            hint={SATELLITE_INDEX_INFO.NDVI.hint}
-            technicalKey="NDVI"
-          />
+      {hideOptical ? (
+        <Grid container spacing={2} sx={{ mb: 3 }}>
+          <Grid item xs={12} md={6} sx={{ display: 'flex' }}>
+            <IndexCard
+              indicatorId="S1_VV"
+              short={SATELLITE_INDEX_INFO.S1_VV.short}
+              statusRaw={radar.status || radarIndexStatus.S1_VV}
+              value={radarIndices.S1_VV}
+              hint={SATELLITE_INDEX_INFO.S1_VV.hint}
+              technicalKey="S1_VV"
+              useStressLabels
+            />
+          </Grid>
+          <Grid item xs={12} md={6} sx={{ display: 'flex' }}>
+            <StressCard
+              indicatorId="radar_stress"
+              statusRaw={radar.status}
+              score={radar.score}
+            />
+          </Grid>
         </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <IndexCard
-            indicatorId="NDMI"
-            short={SATELLITE_INDEX_INFO.NDMI.short}
-            statusRaw={indexStatus.NDMI}
-            value={indices.NDMI}
-            hint={SATELLITE_INDEX_INFO.NDMI.hint}
-            technicalKey="NDMI"
-          />
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <IndexCard
-            indicatorId="NDRE"
-            short={SATELLITE_INDEX_INFO.NDRE.short}
-            statusRaw={indexStatus.NDRE}
-            value={indices.NDRE}
-            hint={SATELLITE_INDEX_INFO.NDRE.hint}
-            technicalKey="NDRE"
-          />
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <IndexCard
-            indicatorId="S1_VV"
-            short={SATELLITE_INDEX_INFO.S1_VV.short}
-            statusRaw={radar.status || indexStatus.S1_VV}
-            value={indices.S1_VV}
-            hint={SATELLITE_INDEX_INFO.S1_VV.hint}
-            technicalKey="S1_VV"
-            useStressLabels
-          />
-        </Grid>
-      </Grid>
+      ) : (
+        <>
+          <Grid container spacing={2} sx={{ mb: 3 }}>
+            <Grid item xs={12} sm={6} md={3}>
+              <IndexCard
+                indicatorId="NDVI"
+                short={SATELLITE_INDEX_INFO.NDVI.short}
+                statusRaw={indexStatus.NDVI}
+                value={indices.NDVI}
+                hint={SATELLITE_INDEX_INFO.NDVI.hint}
+                technicalKey="NDVI"
+              />
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <IndexCard
+                indicatorId="NDMI"
+                short={SATELLITE_INDEX_INFO.NDMI.short}
+                statusRaw={indexStatus.NDMI}
+                value={indices.NDMI}
+                hint={SATELLITE_INDEX_INFO.NDMI.hint}
+                technicalKey="NDMI"
+              />
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <IndexCard
+                indicatorId="NDRE"
+                short={SATELLITE_INDEX_INFO.NDRE.short}
+                statusRaw={indexStatus.NDRE}
+                value={indices.NDRE}
+                hint={SATELLITE_INDEX_INFO.NDRE.hint}
+                technicalKey="NDRE"
+              />
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <IndexCard
+                indicatorId="S1_VV"
+                short={SATELLITE_INDEX_INFO.S1_VV.short}
+                statusRaw={radar.status || radarIndexStatus.S1_VV || indexStatus.S1_VV}
+                value={radarIndices.S1_VV ?? indices.S1_VV}
+                hint={SATELLITE_INDEX_INFO.S1_VV.hint}
+                technicalKey="S1_VV"
+                useStressLabels
+              />
+            </Grid>
+          </Grid>
 
-      <Typography variant="subtitle2" sx={{ mb: 1.5 }}>Stress summary</Typography>
-      <Grid container spacing={2} sx={{ mb: 3 }}>
-        <Grid item xs={12} md={4}>
-          <StressCard
-            indicatorId="water_stress"
-            statusRaw={water.status}
-            score={water.score}
-          />
-        </Grid>
-        <Grid item xs={12} md={4}>
-          <StressCard
-            indicatorId="nutrient_stress"
-            statusRaw={nutrient.status}
-            score={nutrient.score}
-            indicator={nutrient.indicator}
-          />
-        </Grid>
-        <Grid item xs={12} md={4}>
-          <StressCard
-            indicatorId="radar_stress"
-            statusRaw={radar.status}
-            score={radar.score}
-          />
-        </Grid>
-      </Grid>
+          <Typography variant="subtitle2" sx={{ mb: 1.5 }}>Stress summary</Typography>
+          <Grid container spacing={2} sx={{ mb: 3 }}>
+            <Grid item xs={12} md={4}>
+              <StressCard
+                indicatorId="water_stress"
+                statusRaw={water.status}
+                score={water.score}
+              />
+            </Grid>
+            <Grid item xs={12} md={4}>
+              <StressCard
+                indicatorId="nutrient_stress"
+                statusRaw={nutrient.status}
+                score={nutrient.score}
+                indicator={nutrient.indicator}
+              />
+            </Grid>
+            <Grid item xs={12} md={4}>
+              <StressCard
+                indicatorId="radar_stress"
+                statusRaw={radar.status}
+                score={radar.score}
+              />
+            </Grid>
+          </Grid>
+        </>
+      )}
 
       <Grid container spacing={2}>
         <Grid item xs={12} md={6}>
@@ -375,16 +446,19 @@ export function SatelliteAnalysisDisplay({
               <>
                 <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1 }}>
                   Optical (Sentinel-2) · {formatDate(s2.date)}
-                  {radarOnly && ' · high cloud (optical less certain)'}
+                  {hideOptical && ' · skipped (high cloud)'}
                 </Typography>
                 <DetailRow label="Cloud over area" value={s2.cloud_cover != null ? `${formatNumber(s2.cloud_cover, 1)}%` : null} />
-                <DetailRow label="Clear view of tree" value={s2.scl_clear_percentage != null ? `${formatNumber(s2.scl_clear_percentage, 0)}%` : null} />
+                {!hideOptical && (
+                  <DetailRow label="Clear view of tree" value={s2.scl_clear_percentage != null ? `${formatNumber(s2.scl_clear_percentage, 0)}%` : null} />
+                )}
               </>
             )}
             {s1 && (
               <>
                 <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 2 }}>
                   Radar (Sentinel-1) · {formatDate(s1.date)}
+                  {radarResolved.fromPriorWeek ? ' · last good week' : ''}
                 </Typography>
                 <DetailRow label="Radar moisture (dB)" value={formatNumber(s1.vv_db, 2)} />
               </>

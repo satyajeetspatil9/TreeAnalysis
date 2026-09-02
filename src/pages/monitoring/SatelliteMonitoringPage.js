@@ -6,6 +6,7 @@ import {
   Chip,
   CircularProgress,
   FormControl,
+  FormControlLabel,
   Grid,
   InputAdornment,
   InputLabel,
@@ -20,6 +21,7 @@ import {
   TableRow,
   TextField,
   Typography,
+  Switch,
   IconButton,
 } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
@@ -61,6 +63,8 @@ import {
   getAnalysisSeasonDate,
   isMonsoonSeason,
   monsoonDisclaimer,
+  readHideOpticalWhenCloudy,
+  writeHideOpticalWhenCloudy,
 } from '../../utils/satelliteMonsoon';
 
 function FilterSelect({
@@ -125,6 +129,7 @@ function SatelliteMonitoringPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [filters, setFilters] = useState(EMPTY_TREE_FILTERS);
   const [stressFilter, setStressFilter] = useState('all');
+  const [hideOpticalWhenCloudy, setHideOpticalWhenCloudy] = useState(readHideOpticalWhenCloudy);
 
   const load = useCallback(async () => {
     if (!farm?.id) {
@@ -139,19 +144,32 @@ function SatelliteMonitoringPage() {
     setMessage(null);
 
     try {
-      const [treesResult, cacheResult, statsResult] = await Promise.all([
+      const [treesResult, statsResult] = await Promise.all([
         supabase
           .from('trees')
           .select(TREE_LIST_SELECT)
           .eq('status', 'Active'),
-        supabase
-          .from('tree_gps_satellite_cache')
-          .select('position_id, week_start, fetched_at, analysis, error_message')
-          .eq('farm_id', farm.id),
         fetchGpsSatelliteStats(supabase, farm.id).catch(() => null),
       ]);
 
       if (treesResult.error) throw treesResult.error;
+
+      let cacheResult = await supabase
+        .from('tree_gps_satellite_cache')
+        .select('position_id, week_start, fetched_at, analysis, error_message, last_good_radar, last_good_radar_week')
+        .eq('farm_id', farm.id);
+
+      if (cacheResult.error?.message?.includes('last_good_radar')) {
+        setMessage({
+          type: 'warning',
+          text: 'Run migration 050_tree_gps_last_good_radar.sql in Supabase so cloudy weeks can reuse the last good Sentinel-1 reading.',
+        });
+        cacheResult = await supabase
+          .from('tree_gps_satellite_cache')
+          .select('position_id, week_start, fetched_at, analysis, error_message')
+          .eq('farm_id', farm.id);
+      }
+
       if (cacheResult.error) {
         if (cacheResult.error.message?.includes('tree_gps_satellite_cache')) {
           setMessage({
@@ -169,7 +187,11 @@ function SatelliteMonitoringPage() {
       setActiveTrees(sortedTrees);
       setCacheByPositionId(new Map((cacheResult.data || []).map((entry) => [
         entry.position_id,
-        { ...entry, analysis: parseCachedAnalysis(entry.analysis) },
+        {
+          ...entry,
+          analysis: parseCachedAnalysis(entry.analysis),
+          last_good_radar: parseCachedAnalysis(entry.last_good_radar),
+        },
       ])));
       setStats(statsResult);
     } catch (err) {
@@ -200,7 +222,9 @@ function SatelliteMonitoringPage() {
   const tableRows = useMemo(() => allPositions.map((pos) => {
     const cache = cacheByPositionId.get(pos.id) || null;
     const hasGps = pos.latitude != null && pos.longitude != null;
-    const indicators = cache?.analysis ? extractSatelliteIndicators(cache.analysis) : null;
+    const indicators = cache?.analysis
+      ? extractSatelliteIndicators(cache.analysis, cache.last_good_radar, { hideOpticalWhenCloudy })
+      : null;
     const meta = getSatelliteRowMeta({ hasGps, cache, indicators });
 
     return {
@@ -213,7 +237,7 @@ function SatelliteMonitoringPage() {
       meta,
       parsed: parsePositionCode(pos.position_code),
     };
-  }), [allPositions, cacheByPositionId]);
+  }), [allPositions, cacheByPositionId, hideOpticalWhenCloudy]);
 
   const filteredRows = useMemo(() => tableRows
     .filter((row) => matchesTreeFilters(
@@ -279,7 +303,23 @@ function SatelliteMonitoringPage() {
             {stats.remaining > 0 ? ` · ${stats.remaining} remaining` : ''}.
           </>
         )}
+        {' '}When cloud cover is high, optical columns stay hidden unless you turn on Show optical.
       </Alert>
+
+      <FormControlLabel
+        sx={{ mb: 2, ml: 0 }}
+        control={(
+          <Switch
+            checked={!hideOpticalWhenCloudy}
+            onChange={(e) => {
+              const showOptical = e.target.checked;
+              setHideOpticalWhenCloudy(!showOptical);
+              writeHideOpticalWhenCloudy(!showOptical);
+            }}
+          />
+        )}
+        label="Show optical readings when cloudy"
+      />
 
       {showMonsoonBanner && (
         <Alert severity="info" sx={{ mb: 2 }}>
@@ -465,7 +505,13 @@ function SatelliteMonitoringPage() {
                         <Chip label="No GPS" size="small" color="default" sx={{ mt: 0.25, alignSelf: 'flex-start' }} />
                       )}
                       {row.indicators?.radarOnly && (
-                        <Chip label="Cloudy" size="small" color="warning" variant="outlined" sx={{ mt: 0.25, alignSelf: 'flex-start' }} />
+                        <Chip
+                          label={row.indicators.opticalHidden ? 'S1 only' : 'Cloudy'}
+                          size="small"
+                          color="warning"
+                          variant="outlined"
+                          sx={{ mt: 0.25, alignSelf: 'flex-start' }}
+                        />
                       )}
                     </Box>
                   </TableCell>
@@ -480,9 +526,9 @@ function SatelliteMonitoringPage() {
                         <Chip
                           label={row.indicators.overall.label}
                           size="small"
-                          color={severityToChipColor(row.indicators.overall.label)}
+                          color={row.indicators.opticalHidden ? 'warning' : severityToChipColor(row.indicators.overall.label)}
                         />
-                        {row.indicators.overall.stressPct != null && (
+                        {!row.indicators.opticalHidden && row.indicators.overall.stressPct != null && (
                           <Typography
                             variant="caption"
                             display="block"
@@ -500,7 +546,14 @@ function SatelliteMonitoringPage() {
                       {!row.hasGps || !row.indicators ? (
                         <Typography variant="body2" color="text.secondary">—</Typography>
                       ) : (
-                        <IndicatorChip friendly={row.indicators[column.key]} />
+                        <Box>
+                          <IndicatorChip friendly={row.indicators[column.key]} />
+                          {column.key === 'radar' && row.indicators.radarFromPriorWeek && row.cache?.last_good_radar_week && (
+                            <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>
+                              from {formatDate(row.cache.last_good_radar_week)}
+                            </Typography>
+                          )}
+                        </Box>
                       )}
                     </TableCell>
                   ))}

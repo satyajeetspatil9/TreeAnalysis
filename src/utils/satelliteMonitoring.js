@@ -4,7 +4,7 @@ import {
   friendlyStressStatus,
   overallStressLevel,
 } from './satelliteDisplay';
-import { isRadarOnlyMode } from './satelliteMonsoon';
+import { isRadarOnlyMode, resolveRadarAnalysis } from './satelliteMonsoon';
 
 export const SATELLITE_MONITOR_COLUMNS = [
   { key: 'overall', label: 'Overall', short: 'Combined signal' },
@@ -26,31 +26,39 @@ export const SATELLITE_STRESS_FILTER_OPTIONS = [
   { value: 'no_gps', label: 'Missing GPS' },
 ];
 
-export function extractSatelliteIndicators(analysis) {
+export function extractSatelliteIndicators(analysis, lastGoodRadar = null, options = {}) {
   if (!analysis) return null;
 
+  const hideOpticalWhenCloudy = options.hideOpticalWhenCloudy !== false;
   const overall = analysis.overall_condition || {};
   const indexStatus = analysis.index_status || {};
   const water = analysis.water_stress || {};
   const nutrient = analysis.nutrient_stress || {};
-  const radar = analysis.radar_stress || {};
+  const radarResolved = resolveRadarAnalysis(analysis, lastGoodRadar);
+  const radar = radarResolved.analysis?.radar_stress || {};
   const overallFriendly = friendlyOverallStatus(overall.status, overall.severity);
-  const radarOnly = isRadarOnlyMode(analysis);
+  const cloudy = isRadarOnlyMode(analysis);
+  const hideOptical = cloudy && hideOpticalWhenCloudy;
+  const radarFriendly = friendlyStressStatus(radar.status);
 
   return {
-    radarOnly,
-    overall: {
-      label: overallFriendly.headline,
-      summary: overallFriendly.summary,
-      raw: overall.severity || overall.status,
-      stressPct: overall.stress_percentage,
-    },
-    ndvi: friendlyIndexStatus(indexStatus.NDVI),
-    ndmi: friendlyIndexStatus(indexStatus.NDMI),
-    ndre: friendlyIndexStatus(indexStatus.NDRE),
-    water: friendlyStressStatus(water.status),
-    nutrient: friendlyStressStatus(nutrient.status || nutrient.indicator),
-    radar: friendlyStressStatus(radar.status),
+    radarOnly: cloudy,
+    opticalHidden: hideOptical,
+    radarFromPriorWeek: radarResolved.fromPriorWeek,
+    overall: hideOptical
+      ? { label: 'Radar only', summary: null, raw: null, stressPct: null }
+      : {
+        label: overallFriendly.headline,
+        summary: overallFriendly.summary,
+        raw: overall.severity || overall.status,
+        stressPct: overall.stress_percentage,
+      },
+    ndvi: hideOptical ? null : friendlyIndexStatus(indexStatus.NDVI),
+    ndmi: hideOptical ? null : friendlyIndexStatus(indexStatus.NDMI),
+    ndre: hideOptical ? null : friendlyIndexStatus(indexStatus.NDRE),
+    water: hideOptical ? null : friendlyStressStatus(water.status),
+    nutrient: hideOptical ? null : friendlyStressStatus(nutrient.status || nutrient.indicator),
+    radar: { ...radarFriendly, raw: radar.status },
   };
 }
 
@@ -62,7 +70,9 @@ export function getSatelliteRowMeta({ hasGps, cache, indicators }) {
     return { category: cache?.error_message ? 'no_cache' : 'no_cache', sortRank: 4 };
   }
 
-  const category = overallStressLevel(indicators.overall.raw, indicators.overall.stressPct);
+  const category = indicators.opticalHidden
+    ? overallStressLevel(indicators.radar?.raw || indicators.radar?.label, null)
+    : overallStressLevel(indicators.overall.raw, indicators.overall.stressPct);
   const sortRank = {
     critical: 0,
     high: 1,
