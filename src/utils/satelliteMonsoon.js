@@ -222,7 +222,7 @@ export function shouldShowMonsoonDisclaimer(analysis, weekStart) {
 
 export function monsoonDisclaimer(variant) {
   if (variant === 'radar-only') {
-    return 'Cloud cover is above 45%. Optical readings are hidden by default; Sentinel-1 radar is shown, including the latest earlier pass when this week has none. Use Show optical to see Sentinel-2 anyway. During monsoon, confirm important decisions with a field visit or soil test.';
+    return 'Cloud cover is above 45%, so optical Sentinel-2 is hidden. Sentinel-1 radar is shown — including the last good pass if this week has none. Turn on Show optical to see Sentinel-2. Confirm important decisions on the ground.';
   }
   return 'Monsoon season: heavy cloud and rain can make optical satellite readings less accurate. Use alongside soil sensor data and field inspection.';
 }

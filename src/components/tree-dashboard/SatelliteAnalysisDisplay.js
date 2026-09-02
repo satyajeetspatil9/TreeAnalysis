@@ -56,7 +56,7 @@ function overallPanelSx(theme, severity, stressPercentage) {
   };
 }
 
-function IndexCard({ indicatorId, short, statusRaw, value, hint, technicalKey, useStressLabels = false }) {
+function IndexCard({ indicatorId, short, statusRaw, value, hint, technicalKey, useStressLabels = false, compactCopy = false }) {
   const friendly = useStressLabels
     ? friendlyStressStatus(statusRaw)
     : friendlyIndexStatus(statusRaw);
@@ -73,21 +73,23 @@ function IndexCard({ indicatorId, short, statusRaw, value, hint, technicalKey, u
       <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
         {short}
       </Typography>
-      <Typography variant="body2" sx={{ mb: 0.5, lineHeight: 1.45 }}>
-        {friendly.summary}
-      </Typography>
-      {friendly.action && (
+      {!compactCopy && (
+        <Typography variant="body2" sx={{ mb: 0.5, lineHeight: 1.45 }}>
+          {friendly.summary}
+        </Typography>
+      )}
+      {!compactCopy && friendly.action && (
         <Typography variant="caption" color="text.secondary" display="block" sx={{ lineHeight: 1.4 }}>
           {friendly.action}
         </Typography>
       )}
       {technical && (
-        <Typography variant="caption" color="text.disabled" display="block" sx={{ mt: 1 }}>
+        <Typography variant="body2" fontWeight={600} display="block" sx={{ mt: compactCopy ? 0 : 1 }}>
           {technical}
         </Typography>
       )}
       {hint && (
-        <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.75, fontStyle: 'italic' }}>
+        <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.75 }}>
           {hint}
         </Typography>
       )}
@@ -95,7 +97,7 @@ function IndexCard({ indicatorId, short, statusRaw, value, hint, technicalKey, u
   );
 }
 
-function StressCard({ indicatorId, statusRaw, score, indicator, extra }) {
+function StressCard({ indicatorId, statusRaw, score, indicator, extra, compactCopy = false }) {
   const friendly = friendlyStressStatus(statusRaw || indicator);
   const chipColor = stressLevelColor(friendly.label);
 
@@ -106,10 +108,12 @@ function StressCard({ indicatorId, statusRaw, score, indicator, extra }) {
         statusColor={chipColor}
         statusLabel={friendly.label}
       />
-      <Typography variant="body2" sx={{ mb: 0.5, lineHeight: 1.45 }}>
-        {friendly.summary}
-      </Typography>
-      {friendly.action && (
+      {!compactCopy && (
+        <Typography variant="body2" sx={{ mb: 0.5, lineHeight: 1.45 }}>
+          {friendly.summary}
+        </Typography>
+      )}
+      {!compactCopy && friendly.action && (
         <Typography variant="caption" color="text.secondary" display="block">
           {friendly.action}
         </Typography>
@@ -317,28 +321,20 @@ export function SatelliteAnalysisDisplay({
 
       {hideOptical && (
         <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
-          <Typography variant="body2" color="text.secondary">
-            Radar-only week — overall optical score is hidden because of high cloud cover.
+          <Typography variant="body2">
             {radarModel.fromPriorWeek && radarAsOf
-              ? ` Showing the latest good Sentinel-1 radar from ${formatDate(radarAsOf)}.`
+              ? `This week has no new Sentinel-1 pass. Showing last stored radar from ${formatDate(radarAsOf)}.`
               : radarModel.fromPriorWeek
-                ? ' Showing the latest earlier good Sentinel-1 radar reading.'
-                : ''}
+                ? 'This week has no new Sentinel-1 pass. Showing the last stored radar reading.'
+                : 'Optical score is hidden because of high cloud cover. Radar below is from this week.'}
           </Typography>
         </Paper>
       )}
 
-      <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+      <Typography variant="subtitle2" sx={{ mb: 1.5 }}>
         {hideOptical
-          ? (radarModel.fromPriorWeek ? 'Earlier radar readings (Sentinel-1)' : 'Radar readings (Sentinel-1)')
+          ? (radarModel.fromPriorWeek ? 'Earlier radar (Sentinel-1)' : 'Radar (Sentinel-1)')
           : 'What the satellite sees'}
-      </Typography>
-      <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1.5 }}>
-        {hideOptical
-          ? (radarModel.fromPriorWeek
-            ? 'This week had no new Sentinel-1 pass. Values below are the last stored radar reading.'
-            : 'Radar readings work through cloud. Confirm important decisions with a field visit or soil test.')
-          : 'Plain-language readings from space. Confirm important decisions with a field visit or soil test.'}
       </Typography>
       {hideOptical ? (
         <Grid container spacing={2} sx={{ mb: 3 }}>
@@ -356,13 +352,14 @@ export function SatelliteAnalysisDisplay({
                 : SATELLITE_INDEX_INFO.S1_VV.hint}
               technicalKey="S1_VV"
               useStressLabels
+              compactCopy={radarModel.fromPriorWeek}
             />
           </Grid>
           <Grid item xs={12} md={6} sx={{ display: 'flex' }}>
             <StressCard
               indicatorId="radar_stress"
               statusRaw={radarStatusRaw}
-              score={radarModel.score}
+              score={radarModel.fromPriorWeek ? null : radarModel.score}
               extra={radarModel.hasValues
                 ? [
                   radarModel.vvLinear != null ? `Radar value ${formatNumber(radarModel.vvLinear, 3)}` : null,
@@ -370,6 +367,7 @@ export function SatelliteAnalysisDisplay({
                   radarAsOf ? `from ${formatDate(radarAsOf)}` : null,
                 ].filter(Boolean).join(' · ')
                 : null}
+              compactCopy={radarModel.fromPriorWeek}
             />
           </Grid>
         </Grid>
