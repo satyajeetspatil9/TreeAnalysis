@@ -98,7 +98,7 @@ export const analyzeRisks = (sensorData, crop, stageInput = null, isHighMoisture
     });
   }
 
-  if (stage.includes('flower')) {
+  if (stage.includes('flowering') && !stage.includes('initiation')) {
     if (windSpeed > 12 || rain > 2 || rh > 90) {
       warnings.push({
         type: 'POLLINATION_FAILURE',
