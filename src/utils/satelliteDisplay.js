@@ -131,8 +131,18 @@ const STRESS_STATUS_FRIENDLY = {
   },
   'no significant radar anomaly': {
     label: 'Normal',
-    summary: 'No unusual radar wetness change detected.',
-    action: 'Radar baseline looks stable.',
+    summary: 'No unusual wet spots compared with this tree’s usual radar.',
+    action: 'Radar looks typical for this location.',
+  },
+  'wetter than usual': {
+    label: 'Wetter than usual',
+    summary: 'Ground looks wetter than this tree’s usual radar signal.',
+    action: 'Check for standing water or a long irrigation run.',
+  },
+  'drier than usual': {
+    label: 'Drier than usual',
+    summary: 'Ground looks drier than this tree’s usual radar signal.',
+    action: 'Check emitters and soil moisture at the tree base.',
   },
   'moderate nutrient stress indicator': {
     label: 'Moderate nutrient stress',
@@ -324,7 +334,7 @@ export function formatTechnicalIndex(key, value) {
     NDVI: 'Greenness index',
     NDMI: 'Moisture index',
     NDRE: 'Nutrient index',
-    S1_VV: 'Radar value',
+    S1_VV: 'Moisture reading',
   };
   return `${labels[key] || key}: ${formatNumber(value, 3)}`;
 }

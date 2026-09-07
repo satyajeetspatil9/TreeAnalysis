@@ -70,6 +70,14 @@ export function hasRadarNumericValues(analysis) {
   ) != null;
 }
 
+export function usableRadarStatus(value) {
+  const key = String(value || '').trim().toLowerCase();
+  if (!key || key === 'no data' || key === 'nodata' || key.includes('no data') || key === 'earlier radar') {
+    return null;
+  }
+  return String(value).trim();
+}
+
 export function isRadarStatusNoData(analysis) {
   const payload = unwrapGpsAnalysis(analysis);
   const status = String(
@@ -78,6 +86,27 @@ export function isRadarStatusNoData(analysis) {
     || '',
   ).trim().toLowerCase();
   return !status || status === 'no data' || status === 'nodata' || status.includes('no data');
+}
+
+/** Farmer wet/dry label from Sentinel-1 VV (dB) when the API did not classify the pass. */
+export function inferRadarWetnessStatus(vvDb) {
+  if (!isFiniteNumber(vvDb)) return null;
+  const db = Number(vvDb);
+  if (db <= -11) return 'very dry';
+  if (db <= -8.5) return 'dry';
+  if (db <= -6) return 'normal moisture';
+  if (db <= -3.5) return 'good moisture';
+  return 'very high moisture';
+}
+
+/** Unusual-wetness label vs this tree's radar baseline, when the API left status empty. */
+export function inferRadarAnomalyStatus(vvDb, baselineDb) {
+  if (!isFiniteNumber(vvDb)) return null;
+  if (!isFiniteNumber(baselineDb)) return 'no significant radar anomaly';
+  const delta = Number(vvDb) - Number(baselineDb);
+  if (Math.abs(delta) < 1.5) return 'no significant radar anomaly';
+  if (delta >= 1.5) return 'wetter than usual';
+  return 'drier than usual';
 }
 
 /** Fresh this-week radar: numeric values and a real status (not "No data"). */
@@ -109,18 +138,19 @@ export function extractRadarSlice(analysis) {
   if (vvLinear == null && vvDb == null) return null;
 
   const usedBaseline = currentLinear == null && currentDb == null;
+  const placeholder = usedBaseline || isRadarStatusNoData(payload);
 
   return {
     radar_stress: {
       ...radar,
-      status: usedBaseline || isRadarStatusNoData(payload) ? 'earlier radar' : radar.status,
+      status: usableRadarStatus(radar.status)
+        || (placeholder ? 'earlier radar' : radar.status),
       vv_db: vvDb,
       vv_linear: vvLinear,
     },
     index_status: {
-      S1_VV: usedBaseline || isRadarStatusNoData(payload)
-        ? 'earlier radar'
-        : (payload.index_status?.S1_VV ?? null),
+      S1_VV: usableRadarStatus(payload.index_status?.S1_VV)
+        || (placeholder ? 'earlier radar' : (payload.index_status?.S1_VV ?? null)),
     },
     indices: { S1_VV: vvLinear },
     selected_images: {
@@ -172,19 +202,30 @@ export function getRadarDisplayModel(currentAnalysis, lastGoodRadar = null, last
   const radar = slice?.radar_stress || resolved.analysis?.radar_stress || {};
   const indices = slice?.indices || {};
   const s1 = slice?.selected_images?.sentinel1 || {};
+  const cal = slice?.sentinel1_calibration
+    || unwrapGpsAnalysis(resolved.analysis)?.sentinel1_calibration
+    || {};
+  const vvLinear = firstFinite(indices.S1_VV, radar.vv_linear);
+  const vvDb = firstFinite(s1.vv_db, radar.vv_db);
+  const wetnessStatus = usableRadarStatus(slice?.index_status?.S1_VV)
+    || inferRadarWetnessStatus(vvDb)
+    || (hasValues ? 'earlier radar' : 'No data');
+  const anomalyStatus = usableRadarStatus(radar.status)
+    || inferRadarAnomalyStatus(vvDb, firstFinite(cal.baseline_vv_db))
+    || (hasValues ? 'earlier radar' : 'No data');
 
   return {
     fromPriorWeek,
     hasValues,
-    statusRaw: fromPriorWeek
-      ? 'earlier radar'
-      : (radar.status || slice?.index_status?.S1_VV || 'No data'),
-    vvLinear: firstFinite(indices.S1_VV, radar.vv_linear),
-    vvDb: firstFinite(s1.vv_db, radar.vv_db),
-    score: radar.score ?? null,
+    wetnessStatus,
+    anomalyStatus,
+    statusRaw: wetnessStatus,
+    vvLinear,
+    vvDb,
+    score: fromPriorWeek ? null : (radar.score ?? null),
     asOf: fromPriorWeek
       ? radarObservationDate(slice || resolved.analysis, lastGoodRadarWeek)
-      : null,
+      : radarObservationDate(slice || resolved.analysis, null),
     radar,
     indices,
     indexStatus: slice?.index_status || {},
@@ -222,7 +263,7 @@ export function shouldShowMonsoonDisclaimer(analysis, weekStart) {
 
 export function monsoonDisclaimer(variant) {
   if (variant === 'radar-only') {
-    return 'Cloud cover is above 45%, so optical Sentinel-2 is hidden. Sentinel-1 radar is shown — including the last good pass if this week has none. Turn on Show optical to see Sentinel-2. Confirm important decisions on the ground.';
+    return 'Optical images are hidden because cloud cover is over 45%. Radar still works through cloud.';
   }
   return 'Monsoon season: heavy cloud and rain can make optical satellite readings less accurate. Use alongside soil sensor data and field inspection.';
 }

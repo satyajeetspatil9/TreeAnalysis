@@ -33,6 +33,7 @@ import {
 } from '../../utils/satelliteDisplay';
 import SatelliteIndicatorVisual, { SatelliteOverallVisual } from './SatelliteIndicatorArt';
 import {
+  getCloudCoverPercent,
   getRadarDisplayModel,
   isRadarOnlyMode,
   monsoonDisclaimer,
@@ -56,7 +57,16 @@ function overallPanelSx(theme, severity, stressPercentage) {
   };
 }
 
-function IndexCard({ indicatorId, short, statusRaw, value, hint, technicalKey, useStressLabels = false, compactCopy = false }) {
+function IndexCard({
+  indicatorId,
+  short,
+  statusRaw,
+  value,
+  hint,
+  technicalKey,
+  useStressLabels = false,
+  emphasizeValue = false,
+}) {
   const friendly = useStressLabels
     ? friendlyStressStatus(statusRaw)
     : friendlyIndexStatus(statusRaw);
@@ -73,23 +83,26 @@ function IndexCard({ indicatorId, short, statusRaw, value, hint, technicalKey, u
       <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
         {short}
       </Typography>
-      {!compactCopy && (
-        <Typography variant="body2" sx={{ mb: 0.5, lineHeight: 1.45 }}>
-          {friendly.summary}
-        </Typography>
-      )}
-      {!compactCopy && friendly.action && (
+      <Typography variant="body2" sx={{ mb: 0.5, lineHeight: 1.45 }}>
+        {friendly.summary}
+      </Typography>
+      {friendly.action && (
         <Typography variant="caption" color="text.secondary" display="block" sx={{ lineHeight: 1.4 }}>
           {friendly.action}
         </Typography>
       )}
       {technical && (
-        <Typography variant="body2" fontWeight={600} display="block" sx={{ mt: compactCopy ? 0 : 1 }}>
+        <Typography
+          variant={emphasizeValue ? 'h6' : 'body2'}
+          fontWeight={700}
+          display="block"
+          sx={{ mt: 1.25 }}
+        >
           {technical}
         </Typography>
       )}
       {hint && (
-        <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.75 }}>
+        <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>
           {hint}
         </Typography>
       )}
@@ -97,7 +110,7 @@ function IndexCard({ indicatorId, short, statusRaw, value, hint, technicalKey, u
   );
 }
 
-function StressCard({ indicatorId, statusRaw, score, indicator, extra, compactCopy = false }) {
+function StressCard({ indicatorId, statusRaw, score, indicator, extra }) {
   const friendly = friendlyStressStatus(statusRaw || indicator);
   const chipColor = stressLevelColor(friendly.label);
 
@@ -108,12 +121,10 @@ function StressCard({ indicatorId, statusRaw, score, indicator, extra, compactCo
         statusColor={chipColor}
         statusLabel={friendly.label}
       />
-      {!compactCopy && (
-        <Typography variant="body2" sx={{ mb: 0.5, lineHeight: 1.45 }}>
-          {friendly.summary}
-        </Typography>
-      )}
-      {!compactCopy && friendly.action && (
+      <Typography variant="body2" sx={{ mb: 0.5, lineHeight: 1.45 }}>
+        {friendly.summary}
+      </Typography>
+      {friendly.action && (
         <Typography variant="caption" color="text.secondary" display="block">
           {friendly.action}
         </Typography>
@@ -183,7 +194,13 @@ export function SatelliteAnalysisDisplay({
   const hideOptical = radarOnly && hideOpticalWhenCloudy;
   const showMonsoonNote = shouldShowMonsoonDisclaimer(analysis, weekStart);
   const radarAsOf = radarModel.asOf;
-  const radarStatusRaw = radarModel.statusRaw;
+  const wetnessStatus = radarModel.wetnessStatus || radarModel.statusRaw;
+  const anomalyStatus = radarModel.anomalyStatus || radarModel.statusRaw;
+  const cloudPct = getCloudCoverPercent(analysis);
+  const radarDbHint = [
+    radarModel.vvDb != null ? `${formatNumber(radarModel.vvDb, 2)} dB` : null,
+    radarAsOf ? `pass of ${formatDate(radarAsOf)}` : null,
+  ].filter(Boolean).join(' · ');
 
   return (
     <Box>
@@ -201,13 +218,8 @@ export function SatelliteAnalysisDisplay({
           </Typography>
           {(fetchedAt || weekStart) && (
             <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>
-              {weekStart && <>Week of {formatDate(weekStart)} · </>}
-              {fetchedAt && <>Updated {formatDate(fetchedAt)}</>}
-            </Typography>
-          )}
-          {cacheNote && (
-            <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>
-              {cacheNote}
+              {weekStart && <>Week of {formatDate(weekStart)}</>}
+              {fetchedAt && <>{weekStart ? ' · ' : ''}Updated {formatDate(fetchedAt)}</>}
             </Typography>
           )}
         </Box>
@@ -225,28 +237,50 @@ export function SatelliteAnalysisDisplay({
       </Box>
 
       {radarOnly && (
-        <Alert severity="warning" sx={{ mb: 2 }}>
-          {monsoonDisclaimer('radar-only')}
-        </Alert>
-      )}
-      {radarOnly && (
-        <FormControlLabel
-          sx={{ mb: 2, ml: 0 }}
-          control={(
-            <Switch
-              checked={!hideOpticalWhenCloudy}
-              onChange={(e) => {
-                const showOptical = e.target.checked;
-                setHideOpticalWhenCloudy(!showOptical);
-                writeHideOpticalWhenCloudy(!showOptical);
-              }}
+        <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
+          <Box
+            sx={{
+              display: 'flex',
+              flexDirection: { xs: 'column', sm: 'row' },
+              alignItems: { sm: 'center' },
+              justifyContent: 'space-between',
+              gap: 1.5,
+            }}
+          >
+            <Box sx={{ minWidth: 0 }}>
+              <Typography variant="subtitle2" fontWeight={700}>
+                {cloudPct != null
+                  ? `High cloud (${formatNumber(cloudPct, 0)}%)`
+                  : 'High cloud this week'}
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 0.25 }}>
+                {monsoonDisclaimer('radar-only')}
+                {radarModel.fromPriorWeek && radarAsOf
+                  ? ` Last radar pass ${formatDate(radarAsOf)} — none this week.`
+                  : radarModel.fromPriorWeek
+                    ? ' Last stored radar is shown — none this week.'
+                    : ''}
+              </Typography>
+            </Box>
+            <FormControlLabel
+              sx={{ ml: 0, flexShrink: 0 }}
+              control={(
+                <Switch
+                  checked={!hideOpticalWhenCloudy}
+                  onChange={(e) => {
+                    const showOptical = e.target.checked;
+                    setHideOpticalWhenCloudy(!showOptical);
+                    writeHideOpticalWhenCloudy(!showOptical);
+                  }}
+                />
+              )}
+              label="Show optical"
             />
-          )}
-          label="Show optical readings when cloudy"
-        />
+          </Box>
+        </Paper>
       )}
       {showMonsoonNote && (
-        <Alert severity="info" sx={{ mb: 2 }}>
+        <Alert severity="info" sx={{ mb: 2, '& .MuiAlert-message': { whiteSpace: 'normal' } }}>
           {monsoonDisclaimer('season')}
         </Alert>
       )}
@@ -320,54 +354,38 @@ export function SatelliteAnalysisDisplay({
       )}
 
       {hideOptical && (
-        <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
-          <Typography variant="body2">
-            {radarModel.fromPriorWeek && radarAsOf
-              ? `This week has no new Sentinel-1 pass. Showing last stored radar from ${formatDate(radarAsOf)}.`
-              : radarModel.fromPriorWeek
-                ? 'This week has no new Sentinel-1 pass. Showing the last stored radar reading.'
-                : 'Optical score is hidden because of high cloud cover. Radar below is from this week.'}
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: 1, mb: 1.5 }}>
+          <Typography variant="subtitle2">
+            {radarModel.fromPriorWeek ? 'Ground wetness from last radar pass' : 'Ground wetness (radar)'}
           </Typography>
-        </Paper>
+          {radarModel.fromPriorWeek && (
+            <Chip label={radarAsOf ? `Pass of ${formatDate(radarAsOf)}` : 'Earlier pass'} size="small" />
+          )}
+        </Box>
       )}
-
-      <Typography variant="subtitle2" sx={{ mb: 1.5 }}>
-        {hideOptical
-          ? (radarModel.fromPriorWeek ? 'Earlier radar (Sentinel-1)' : 'Radar (Sentinel-1)')
-          : 'What the satellite sees'}
-      </Typography>
+      {!hideOptical && (
+        <Typography variant="subtitle2" sx={{ mb: 1.5 }}>
+          What the satellite sees
+        </Typography>
+      )}
       {hideOptical ? (
         <Grid container spacing={2} sx={{ mb: 3 }}>
           <Grid item xs={12} md={6} sx={{ display: 'flex' }}>
             <IndexCard
               indicatorId="S1_VV"
               short={SATELLITE_INDEX_INFO.S1_VV.short}
-              statusRaw={radarStatusRaw}
+              statusRaw={wetnessStatus}
               value={radarModel.vvLinear}
-              hint={radarModel.hasValues
-                ? [
-                  radarModel.vvDb != null ? `${formatNumber(radarModel.vvDb, 2)} dB` : null,
-                  radarAsOf ? `from ${formatDate(radarAsOf)}` : null,
-                ].filter(Boolean).join(' · ')
-                : SATELLITE_INDEX_INFO.S1_VV.hint}
+              hint={radarModel.hasValues ? radarDbHint : SATELLITE_INDEX_INFO.S1_VV.hint}
               technicalKey="S1_VV"
-              useStressLabels
-              compactCopy={radarModel.fromPriorWeek}
+              emphasizeValue
             />
           </Grid>
           <Grid item xs={12} md={6} sx={{ display: 'flex' }}>
             <StressCard
               indicatorId="radar_stress"
-              statusRaw={radarStatusRaw}
-              score={radarModel.fromPriorWeek ? null : radarModel.score}
-              extra={radarModel.hasValues
-                ? [
-                  radarModel.vvLinear != null ? `Radar value ${formatNumber(radarModel.vvLinear, 3)}` : null,
-                  radarModel.vvDb != null ? `${formatNumber(radarModel.vvDb, 2)} dB` : null,
-                  radarAsOf ? `from ${formatDate(radarAsOf)}` : null,
-                ].filter(Boolean).join(' · ')
-                : null}
-              compactCopy={radarModel.fromPriorWeek}
+              statusRaw={anomalyStatus}
+              score={radarModel.score}
             />
           </Grid>
         </Grid>
@@ -408,16 +426,12 @@ export function SatelliteAnalysisDisplay({
               <IndexCard
                 indicatorId="S1_VV"
                 short={SATELLITE_INDEX_INFO.S1_VV.short}
-                statusRaw={radarStatusRaw}
+                statusRaw={wetnessStatus}
                 value={radarModel.vvLinear ?? radarIndices.S1_VV ?? indices.S1_VV}
                 hint={radarModel.hasValues
-                  ? [
-                    radarModel.vvDb != null ? `${formatNumber(radarModel.vvDb, 2)} dB` : null,
-                    radarAsOf ? `from ${formatDate(radarAsOf)}` : null,
-                  ].filter(Boolean).join(' · ') || SATELLITE_INDEX_INFO.S1_VV.hint
+                  ? radarDbHint || SATELLITE_INDEX_INFO.S1_VV.hint
                   : SATELLITE_INDEX_INFO.S1_VV.hint}
                 technicalKey="S1_VV"
-                useStressLabels
               />
             </Grid>
           </Grid>
@@ -442,14 +456,8 @@ export function SatelliteAnalysisDisplay({
             <Grid item xs={12} md={4}>
               <StressCard
                 indicatorId="radar_stress"
-                statusRaw={radarStatusRaw}
+                statusRaw={anomalyStatus}
                 score={radarModel.score}
-                extra={radarModel.hasValues && radarModel.fromPriorWeek
-                  ? [
-                    radarModel.vvDb != null ? `${formatNumber(radarModel.vvDb, 2)} dB` : null,
-                    radarAsOf ? `from ${formatDate(radarAsOf)}` : null,
-                  ].filter(Boolean).join(' · ')
-                  : null}
               />
             </Grid>
           </Grid>
@@ -460,11 +468,19 @@ export function SatelliteAnalysisDisplay({
         <Grid item xs={12} md={6}>
           <Paper variant="outlined" sx={{ p: 2 }}>
             <Typography variant="subtitle2" sx={{ mb: 1 }}>How reliable is this?</Typography>
-            <DetailRow label="Quality" value={quality.status} />
-            <DetailRow label="Usable reading" value={quality.valid_observation ? 'Yes' : 'No'} />
-            <DetailRow label="Optical images used" value={quality.sentinel2_images} />
-            <DetailRow label="Radar images used" value={quality.sentinel1_images} />
-            <DetailRow label="Confidence" value={quality.confidence_score != null ? `${quality.confidence_score}/100` : quality.confidence} />
+            <DetailRow label="Reading quality" value={quality.status} />
+            <DetailRow label="Usable this week" value={quality.valid_observation ? 'Yes' : 'No'} />
+            <DetailRow label="Optical images this week" value={quality.sentinel2_images} />
+            <DetailRow label="Radar images this week" value={quality.sentinel1_images} />
+            <DetailRow
+              label="Confidence"
+              value={quality.confidence_score != null ? `${quality.confidence_score}/100` : quality.confidence}
+            />
+            {cacheNote && (
+              <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1.5 }}>
+                {cacheNote}
+              </Typography>
+            )}
           </Paper>
         </Grid>
         <Grid item xs={12} md={6}>
@@ -487,7 +503,7 @@ export function SatelliteAnalysisDisplay({
               <>
                 <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 2 }}>
                   Radar (Sentinel-1) · {formatDate(s1.date)}
-                  {radarModel.fromPriorWeek ? ' · earlier pass' : ''}
+                  {radarModel.fromPriorWeek ? ' · last stored pass' : ''}
                 </Typography>
                 <DetailRow label="Radar moisture (dB)" value={formatNumber(s1.vv_db, 2)} />
               </>

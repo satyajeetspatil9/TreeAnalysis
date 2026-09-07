@@ -215,8 +215,7 @@ function SatelliteTab({ tree }) {
         )}
         {radarLookup && (
           <Alert severity="info" sx={{ mb: 2 }}>
-            This week has no new Sentinel-1 pass. Looking up the latest earlier radar reading
-            (this can take up to a couple of minutes)…
+            No new Sentinel-1 pass this week. Looking up the last stored radar…
           </Alert>
         )}
         {radarLookupError && (
@@ -233,7 +232,7 @@ function SatelliteTab({ tree }) {
           fetchedAt={meta?.fetchedAt}
           weekStart={meta?.weekStart}
           onRefresh={loadCache}
-          cacheNote="Data is refreshed weekly via pg_cron (or manual batch in Settings). Reload reads the latest cache."
+          cacheNote="Updated weekly. Reload uses the latest stored reading."
         />
       </Box>
     </SatelliteTabErrorBoundary>
