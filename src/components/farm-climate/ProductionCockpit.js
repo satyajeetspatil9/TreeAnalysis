@@ -1,12 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { Link as RouterLink } from 'react-router-dom';
 import { Alert, Button, Chip, Stack } from '@mui/material';
-import { supabase } from '../supabaseClient';
-import { useFarm } from '../hooks/useFarm';
-import { TREE_LIST_SELECT } from '../utils/schema';
-import { analyzeRisks, resolveStage } from '../utils/farmClimateLogic';
-import { loadFarmClimateSnapshot } from '../utils/farmClimateData';
-import { fetchGpsSatelliteStats } from '../utils/treeGpsSatelliteCache';
+import { supabase } from '../../supabaseClient';
+import { useFarm } from '../../hooks/useFarm';
+import { TREE_LIST_SELECT } from '../../utils/schema';
+import { analyzeRisks, resolveStage } from '../../utils/farmClimateLogic';
+import { loadFarmClimateSnapshot } from '../../utils/farmClimateData';
+import { fetchGpsSatelliteStats } from '../../utils/treeGpsSatelliteCache';
 
 function ProductionCockpit() {
   const { farm } = useFarm();
