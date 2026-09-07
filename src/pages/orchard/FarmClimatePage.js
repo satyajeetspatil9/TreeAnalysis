@@ -1,10 +1,13 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
+  Alert,
   Box,
   Button,
   Chip,
   CircularProgress,
   Grid,
+  Paper,
   ToggleButton,
   ToggleButtonGroup,
   Typography,
@@ -22,10 +25,13 @@ import PageHeader from '../../components/common/PageHeader';
 import SensorCard from '../../components/farm-climate/SensorCard';
 import CropStageStatus from '../../components/farm-climate/CropStageStatus';
 import RiskPanel from '../../components/farm-climate/RiskPanel';
+import { supabase } from '../../supabaseClient';
+import { useFarm } from '../../hooks/useFarm';
+import { TREE_LIST_SELECT, getIrrigationZoneId } from '../../utils/schema';
 import { analyzeRisks, resolveStage } from '../../utils/farmClimateLogic';
 import { dailyGddFromSensors, loadFarmClimateSnapshot } from '../../utils/farmClimateData';
-import { FARM_CLIMATE_FARM_ID } from '../../utils/farmClimateApi';
-import { formatDate } from '../../utils/formatters';
+import { createClimateWorkItem } from '../../utils/climateWork';
+import { formatDate, formatNumber } from '../../utils/formatters';
 
 function formatValue(val) {
   if (val == null || val === '') return '—';
@@ -35,14 +41,29 @@ function formatValue(val) {
 }
 
 function FarmClimatePage() {
+  const { farm } = useFarm();
+  const navigate = useNavigate();
   const [crop, setCrop] = useState('Mango');
   const [snapshot, setSnapshot] = useState(null);
+  const [trees, setTrees] = useState([]);
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState(null);
+  const [workMessage, setWorkMessage] = useState(null);
+  const [creatingType, setCreatingType] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
-    const result = await loadFarmClimateSnapshot(crop);
+    let orchardTrees = [];
+    if (farm?.id) {
+      const { data } = await supabase
+        .from('trees')
+        .select(TREE_LIST_SELECT)
+        .eq('status', 'Active')
+        .limit(80);
+      orchardTrees = data || [];
+      setTrees(orchardTrees);
+    }
+    const result = await loadFarmClimateSnapshot(supabase, farm, orchardTrees, crop);
     const stage = resolveStage(crop, result.gdd);
     const warnings = analyzeRisks(result.sensors, crop, stage, result.isOverMoisture3Days);
     setSnapshot({
@@ -52,13 +73,31 @@ function FarmClimatePage() {
     });
     setLastUpdated(new Date());
     setLoading(false);
-  }, [crop]);
+  }, [farm, crop]);
 
   useEffect(() => {
     load();
     const interval = window.setInterval(() => { load(); }, 60000);
     return () => window.clearInterval(interval);
   }, [load]);
+
+  const handleCreateWork = async (warning) => {
+    const tree = trees[0];
+    setCreatingType(warning.type);
+    setWorkMessage(null);
+    const result = await createClimateWorkItem(supabase, {
+      treeId: tree?.id || null,
+      zoneId: tree ? getIrrigationZoneId(tree) : null,
+      warning,
+    });
+    setCreatingType(null);
+    if (result.error) {
+      setWorkMessage({ type: 'error', text: `${result.error} Run supabase/migrations/051_production_climate_phenology.sql if this is an RLS error.` });
+      return;
+    }
+    setWorkMessage({ type: 'success', text: 'Work item saved to Alerts. Opening the related page.' });
+    if (result.path) navigate(result.path);
+  };
 
   if (loading && !snapshot) {
     return (
@@ -80,7 +119,7 @@ function FarmClimatePage() {
       <PageHeader
         section="Orchard"
         title="Farm climate"
-        subtitle="Live GetFarmStatus feed — same sensors and GDD as farm-climate-gui."
+        subtitle="This orchard’s weather, soil, Open-Meteo forecast, and GDD stage — then turn advisories into work."
         action={(
           <Button
             variant="outlined"
@@ -93,6 +132,18 @@ function FarmClimatePage() {
         )}
       />
 
+      {workMessage && (
+        <Alert severity={workMessage.type} sx={{ mb: 2 }} onClose={() => setWorkMessage(null)}>
+          {workMessage.text}
+        </Alert>
+      )}
+
+      {!snapshot?.gps && (
+        <Alert severity="info" sx={{ mb: 2 }}>
+          Set farm latitude/longitude in Settings (or add tree GPS) so Climate can pull Open-Meteo for this orchard.
+        </Alert>
+      )}
+
       <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1.5, mb: 3 }}>
         <ToggleButtonGroup
           exclusive
@@ -103,18 +154,18 @@ function FarmClimatePage() {
           <ToggleButton value="Mango">Mango</ToggleButton>
           <ToggleButton value="Cashew">Cashew</ToggleButton>
         </ToggleButtonGroup>
-        {snapshot?.isMock && (
-          <Chip size="small" color="warning" label="Live feed unreachable — showing GUI demo readings" />
-        )}
-        {!snapshot?.isMock && (
-          <Chip size="small" color="success" label={`Live · ${snapshot?.farmId || FARM_CLIMATE_FARM_ID}`} />
+        <Chip size="small" color={snapshot?.isMock ? 'warning' : 'success'} label={snapshot?.source || 'Climate'} />
+        {snapshot?.seasonStart && (
+          <Typography variant="caption" color="text.secondary">
+            GDD from {formatDate(snapshot.seasonStart)}
+          </Typography>
         )}
         {lastUpdated && (
           <Typography variant="caption" color="text.secondary">
             Updated {lastUpdated.toLocaleTimeString()}
           </Typography>
         )}
-        {!snapshot?.isMock && snapshot?.observedAt && (
+        {snapshot?.observedAt && (
           <Typography variant="caption" color="text.secondary">
             Reading {formatDate(snapshot.observedAt)}
           </Typography>
@@ -170,7 +221,7 @@ function FarmClimatePage() {
               />
             </Grid>
           </Grid>
-          <Grid container spacing={2}>
+          <Grid container spacing={2} sx={{ mb: 2 }}>
             <Grid item xs={12} sm={6} md={3}>
               <SensorCard
                 label="Light intensity"
@@ -214,9 +265,36 @@ function FarmClimatePage() {
               />
             </Grid>
           </Grid>
+          {snapshot?.forecast?.length > 0 && (
+            <Paper variant="outlined" sx={{ p: 2 }}>
+              <Typography variant="subtitle2" sx={{ mb: 1 }}>Next 7 days (Open-Meteo)</Typography>
+              <Grid container spacing={1}>
+                {snapshot.forecast.map((day) => (
+                  <Grid item xs={6} sm={3} md={true} key={day.date} sx={{ flex: { md: 1 } }}>
+                    <Typography variant="caption" color="text.secondary" display="block">
+                      {formatDate(day.date)}
+                    </Typography>
+                    <Typography variant="body2" fontWeight={600}>
+                      {formatNumber(day.tmax, 0)}° / {formatNumber(day.tmin, 0)}°
+                    </Typography>
+                    <Typography variant="caption" display="block">
+                      Rain {formatNumber(day.rain, 1)} mm
+                    </Typography>
+                    <Typography variant="caption" display="block">
+                      Wind {formatNumber(day.wind, 0)} km/h
+                    </Typography>
+                  </Grid>
+                ))}
+              </Grid>
+            </Paper>
+          )}
         </Grid>
         <Grid item xs={12} lg={4}>
-          <RiskPanel warnings={warnings} />
+          <RiskPanel
+            warnings={warnings}
+            onCreateWork={handleCreateWork}
+            creatingType={creatingType}
+          />
         </Grid>
       </Grid>
     </Box>

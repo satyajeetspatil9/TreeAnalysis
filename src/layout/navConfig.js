@@ -53,6 +53,7 @@ export const navSections = [
     items: [
       { label: 'Inventory', path: '/inputs/inventory', icon: Inventory2Icon, description: 'Purchases and stock levels' },
       { label: 'Soil Application', path: '/inputs/soil-application', icon: GrassIcon, description: 'Direct fertilizer on soil' },
+      { label: 'Fertilizer rec.', path: '/inputs/optimizer', icon: ScienceIcon, description: 'Dose from lab report and GDD stage' },
       { label: 'Spray', path: '/inputs/spray', icon: PestControlIcon, description: 'Plant protection' },
     ],
   },
@@ -80,6 +81,8 @@ export const navSections = [
     title: 'Production',
     icon: EmojiNatureIcon,
     items: [
+      { label: 'Flowering', path: '/production/flowering', icon: EmojiNatureIcon, description: 'Bloom vs GDD season' },
+      { label: 'Fruit set', path: '/production/fruit-set', icon: AgricultureIcon, description: 'Fruit set vs GDD season' },
       { label: 'Harvest', path: '/production/harvest', icon: AgricultureIcon, description: 'Yield records' },
       { label: 'Revenue', path: '/production/revenue', icon: PaidIcon, description: 'Sales income' },
     ],

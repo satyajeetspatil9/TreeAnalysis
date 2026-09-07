@@ -7,6 +7,9 @@ import { supabase } from '../../supabaseClient';
 import { useFarm } from '../../hooks/useFarm';
 import PageHeader from '../../components/common/PageHeader';
 import { formatCurrency, formatDate, formatNumber } from '../../utils/formatters';
+import { TREE_LIST_SELECT } from '../../utils/schema';
+import { resolveStage } from '../../utils/farmClimateLogic';
+import { loadFarmClimateSnapshot } from '../../utils/farmClimateData';
 
 function harvestRlsHint(message) {
   if (!message) return message;
@@ -21,6 +24,10 @@ function HarvestPage() {
   const [records, setRecords] = useState([]);
   const [trees, setTrees] = useState([]);
   const [message, setMessage] = useState(null);
+  const [stage, setStage] = useState('');
+  const [gdd, setGdd] = useState(null);
+  const [flowerCount, setFlowerCount] = useState(0);
+  const [fruitCount, setFruitCount] = useState(0);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
     tree_id: '',
@@ -39,7 +46,7 @@ function HarvestPage() {
     }
     const { data: t, error } = await supabase
       .from('trees')
-      .select('id, tree_positions(position_code)')
+      .select(TREE_LIST_SELECT)
       .eq('status', 'Active')
       .order('id');
     if (error) {
@@ -48,6 +55,11 @@ function HarvestPage() {
       return;
     }
     setTrees(t || []);
+    if (farm && (t || []).length) {
+      const snapshot = await loadFarmClimateSnapshot(supabase, farm, t, 'Mango');
+      setGdd(snapshot.gdd);
+      setStage(resolveStage('Mango', snapshot.gdd));
+    }
   }, [farm]);
 
   const loadRecords = useCallback(async () => {
@@ -66,6 +78,12 @@ function HarvestPage() {
       return;
     }
     setRecords(data || []);
+    const [{ count: flowers }, { count: fruit }] = await Promise.all([
+      supabase.from('flowering_events').select('id', { count: 'exact', head: true }).in('tree_id', treeIds),
+      supabase.from('fruit_set_observations').select('id', { count: 'exact', head: true }).in('tree_id', treeIds),
+    ]);
+    setFlowerCount(flowers || 0);
+    setFruitCount(fruit || 0);
   }, [treeIds]);
 
   useEffect(() => {
@@ -122,9 +140,19 @@ function HarvestPage() {
     <Box>
       <PageHeader
         title="Harvest"
-        subtitle="Record yield and revenue per tree."
+        subtitle="Record yield and revenue per tree. Compare with this season’s GDD stage and flowering / fruit-set counts."
       />
       {message && <Alert severity={message.type} sx={{ mb: 2 }} onClose={() => setMessage(null)}>{message.text}</Alert>}
+
+      {(stage || gdd != null) && (
+        <Alert severity="info" sx={{ mb: 2 }}>
+          Climate stage {stage || '—'} · GDD {formatNumber(gdd, 0)}
+          {' · '}
+          {flowerCount} flowering record{flowerCount === 1 ? '' : 's'}
+          {' · '}
+          {fruitCount} fruit-set record{fruitCount === 1 ? '' : 's'}.
+        </Alert>
+      )}
 
       {!farm && (
         <Alert severity="info" sx={{ mb: 2 }}>Select or create a farm in Settings before recording harvest.</Alert>

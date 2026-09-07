@@ -1,11 +1,12 @@
 import React from 'react';
-import { Box, Chip, Paper, Typography } from '@mui/material';
+import { Box, Button, Chip, Paper, Typography } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import AirIcon from '@mui/icons-material/Air';
 import WaterDropIcon from '@mui/icons-material/WaterDrop';
 import BugReportIcon from '@mui/icons-material/BugReport';
 import HealthAndSafetyIcon from '@mui/icons-material/HealthAndSafety';
+import { climateWorkAction } from '../../utils/climateWork';
 
 function riskIcon(type) {
   switch (type) {
@@ -24,7 +25,7 @@ function riskIcon(type) {
   }
 }
 
-function RiskPanel({ warnings = [] }) {
+function RiskPanel({ warnings = [], onCreateWork, creatingType = null }) {
   if (warnings.length === 0) {
     return (
       <Paper variant="outlined" sx={{ p: 2.5, bgcolor: (t) => alpha(t.palette.success.main, 0.08) }}>
@@ -72,7 +73,17 @@ function RiskPanel({ warnings = [] }) {
                       color={isHigh ? 'error' : 'warning'}
                     />
                   </Box>
-                  <Typography variant="body2">{warning.message}</Typography>
+                  <Typography variant="body2" sx={{ mb: 1 }}>{warning.message}</Typography>
+                  {onCreateWork && (
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      disabled={creatingType === warning.type}
+                      onClick={() => onCreateWork(warning)}
+                    >
+                      {climateWorkAction(warning).label}
+                    </Button>
+                  )}
                 </Box>
               </Box>
             </Paper>

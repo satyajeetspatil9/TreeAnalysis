@@ -35,6 +35,8 @@ import PageHeader from '../components/common/PageHeader';
 
 import StatCard from '../components/common/StatCard';
 
+import ProductionCockpit from '../components/farm-climate/ProductionCockpit';
+
 import { quickActions } from '../layout/navConfig';
 
 import { useFarm } from '../hooks/useFarm';
@@ -291,6 +293,8 @@ function FarmDashboard() {
         subtitle="Your farm at a glance — tree health, costs, and what needs attention today."
 
       />
+
+      <ProductionCockpit />
 
 
 

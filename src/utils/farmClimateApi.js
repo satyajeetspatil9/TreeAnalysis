@@ -1,32 +1,81 @@
-/** Same live feed as FarmClimateGUI (https://farm-climate-gui.web.app/). */
-export const FARM_CLIMATE_STATUS_URL = 'https://futrpixyccnpdmbvahyf.supabase.co/functions/v1/GetFarmStatus';
-export const FARM_CLIMATE_FARM_ID = 'TEST_FARM_001';
+import { calculateDailyGDD } from './farmClimateLogic';
 
-const FARM_CLIMATE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ1dHJwaXh5Y2NucGRtYnZhaHlmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjU3MDc0MjAsImV4cCI6MjA4MTI4MzQyMH0.Ovg9bLums541DrNm7dBC3RPt5XsuQE15qoA0qYipnfE';
-
-export async function fetchFarmStatus(farmId = FARM_CLIMATE_FARM_ID, crop = 'Mango') {
-  try {
-    const response = await fetch(FARM_CLIMATE_STATUS_URL, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${FARM_CLIMATE_ANON_KEY}`,
-        apikey: FARM_CLIMATE_ANON_KEY,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ farm_id: farmId, crop }),
-    });
-    if (!response.ok) return null;
-    return response.json();
-  } catch {
-    return null;
-  }
+export function defaultGddSeasonStart(fromDate = new Date()) {
+  return `${fromDate.getFullYear()}-01-01`;
 }
 
-export function readingFromStatus(result) {
-  if (!result || typeof result !== 'object') return null;
-  return result.last_reading
-    || result.lastReading
-    || result.sensors
-    || result.data?.last_reading
-    || null;
+export async function fetchOpenMeteoCurrent(latitude, longitude) {
+  const params = new URLSearchParams({
+    latitude: String(latitude),
+    longitude: String(longitude),
+    current: [
+      'temperature_2m',
+      'relative_humidity_2m',
+      'precipitation',
+      'wind_speed_10m',
+      'wind_direction_10m',
+      'shortwave_radiation',
+    ].join(','),
+    wind_speed_unit: 'kmh',
+    timezone: 'Asia/Kolkata',
+  });
+  const response = await fetch(`https://api.open-meteo.com/v1/forecast?${params.toString()}`);
+  if (!response.ok) return null;
+  return response.json();
+}
+
+export async function fetchOpenMeteoForecast(latitude, longitude) {
+  const params = new URLSearchParams({
+    latitude: String(latitude),
+    longitude: String(longitude),
+    daily: [
+      'temperature_2m_max',
+      'temperature_2m_min',
+      'precipitation_sum',
+      'wind_speed_10m_max',
+    ].join(','),
+    forecast_days: '7',
+    wind_speed_unit: 'kmh',
+    timezone: 'Asia/Kolkata',
+  });
+  const response = await fetch(`https://api.open-meteo.com/v1/forecast?${params.toString()}`);
+  if (!response.ok) return null;
+  return response.json();
+}
+
+export async function fetchOpenMeteoArchive(latitude, longitude, startDate, endDate) {
+  const params = new URLSearchParams({
+    latitude: String(latitude),
+    longitude: String(longitude),
+    start_date: startDate,
+    end_date: endDate,
+    daily: 'temperature_2m_max,temperature_2m_min',
+    timezone: 'Asia/Kolkata',
+  });
+  const response = await fetch(`https://archive-api.open-meteo.com/v1/archive?${params.toString()}`);
+  if (!response.ok) return null;
+  return response.json();
+}
+
+export function gddFromDailySeries(daily) {
+  if (!daily?.time?.length) return 0;
+  let total = 0;
+  daily.time.forEach((_, i) => {
+    const tmax = Number(daily.temperature_2m_max?.[i]);
+    const tmin = Number(daily.temperature_2m_min?.[i]);
+    if (!Number.isFinite(tmax) || !Number.isFinite(tmin)) return;
+    total += calculateDailyGDD(tmax, tmin);
+  });
+  return total;
+}
+
+export function forecastDaysFromDaily(daily) {
+  if (!daily?.time?.length) return [];
+  return daily.time.map((date, i) => ({
+    date,
+    tmax: daily.temperature_2m_max?.[i] ?? null,
+    tmin: daily.temperature_2m_min?.[i] ?? null,
+    rain: daily.precipitation_sum?.[i] ?? null,
+    wind: daily.wind_speed_10m_max?.[i] ?? null,
+  }));
 }

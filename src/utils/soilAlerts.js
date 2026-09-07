@@ -9,6 +9,7 @@ export function isSoilNutrientAlert(alert) {
 
 export function getAlertNavigationPath(alert) {
   if (isSoilNutrientAlert(alert)) return '/monitoring/soil';
+  if (String(alert?.source || '').toLowerCase() === 'climate') return '/orchard/climate';
   return `/tree/${getTreeDisplayId(alert?.trees || {})}`;
 }
 

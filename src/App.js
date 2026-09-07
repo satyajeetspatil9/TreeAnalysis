@@ -16,6 +16,8 @@ import FarmSetup from './pages/FarmSetup';
 import AddSoilReportPage from './pages/farm/AddSoilReportPage';
 import IrrigationDashboardPage from './pages/orchard/IrrigationDashboardPage';
 import FarmClimatePage from './pages/orchard/FarmClimatePage';
+import { FloweringPage, FruitSetPage } from './pages/production/PhenologyPages';
+import FertilizerOptimizerPage from './pages/inputs/FertilizerOptimizerPage';
 import IrrigationZonesPage from './pages/irrigation/IrrigationZonesPage';
 import IrrigationEventsPage from './pages/irrigation/IrrigationEventsPage';
 import FertigationPage from './pages/irrigation/FertigationPage';
@@ -70,7 +72,7 @@ function ProtectedApp() {
           <Route path="inputs/inventory" element={<InventoryPage />} />
           <Route path="inputs/spray" element={<SprayPage />} />
           <Route path="inputs/soil-application" element={<SoilApplicationPage />} />
-          <Route path="inputs/optimizer" element={<Navigate to="/inputs/inventory" replace />} />
+          <Route path="inputs/optimizer" element={<FertilizerOptimizerPage />} />
           <Route path="monitoring/soil" element={<SoilMonitoringPage />} />
           <Route path="monitoring/satellite" element={<SatelliteMonitoringPage />} />
           <Route path="monitoring/disease" element={<DiseaseDashboardPage />} />
@@ -79,8 +81,8 @@ function ProtectedApp() {
           <Route path="finance/expenses" element={<ExpensesPage />} />
           <Route path="finance/labour" element={<LabourPage />} />
           <Route path="finance/costs" element={<CostAnalysisPage />} />
-          <Route path="production/flowering" element={<Navigate to="/production/harvest" replace />} />
-          <Route path="production/fruit-set" element={<Navigate to="/production/harvest" replace />} />
+          <Route path="production/flowering" element={<FloweringPage />} />
+          <Route path="production/fruit-set" element={<FruitSetPage />} />
           <Route path="production/harvest" element={<HarvestPage />} />
           <Route path="production/revenue" element={<RevenuePage />} />
           <Route path="admin/settings" element={<SettingsPage />} />

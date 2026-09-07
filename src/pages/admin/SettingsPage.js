@@ -32,6 +32,7 @@ const emptyFarmForm = {
   area_acres: '',
   latitude: '',
   longitude: '',
+  gdd_season_start: '',
 };
 
 function SettingsPage() {
@@ -66,6 +67,7 @@ function SettingsPage() {
         area_acres: farm.area_acres ?? '',
         latitude: farm.latitude ?? '',
         longitude: farm.longitude ?? '',
+        gdd_season_start: farm.gdd_season_start || '',
       });
     } else {
       setFarmForm(emptyFarmForm);
@@ -295,6 +297,7 @@ function SettingsPage() {
       area_acres: farmForm.area_acres !== '' ? Number(farmForm.area_acres) : null,
       latitude: farmForm.latitude !== '' ? Number(farmForm.latitude) : null,
       longitude: farmForm.longitude !== '' ? Number(farmForm.longitude) : null,
+      gdd_season_start: farmForm.gdd_season_start || null,
     };
 
     if (farm) {
@@ -432,6 +435,17 @@ function SettingsPage() {
                   fullWidth
                   value={farmForm.longitude}
                   onChange={(e) => setFarmForm({ ...farmForm, longitude: e.target.value })}
+                />
+              </Grid>
+              <Grid item xs={12} md={4}>
+                <TextField
+                  label="GDD season start"
+                  type="date"
+                  fullWidth
+                  InputLabelProps={{ shrink: true }}
+                  value={farmForm.gdd_season_start}
+                  onChange={(e) => setFarmForm({ ...farmForm, gdd_season_start: e.target.value })}
+                  helperText="Climate accumulating degree-days from this date (default 1 Jan)."
                 />
               </Grid>
             </Grid>
