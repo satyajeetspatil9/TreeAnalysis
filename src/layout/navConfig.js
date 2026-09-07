@@ -17,6 +17,7 @@ import PostAddIcon from '@mui/icons-material/PostAdd';
 import PestControlIcon from '@mui/icons-material/PestControl';
 import GrassIcon from '@mui/icons-material/Grass';
 import SatelliteAltIcon from '@mui/icons-material/SatelliteAlt';
+import CloudIcon from '@mui/icons-material/Cloud';
 import BiotechIcon from '@mui/icons-material/Biotech';
 import BugReportIcon from '@mui/icons-material/BugReport';
 import TrendingUpIcon from '@mui/icons-material/TrendingUp';
@@ -35,6 +36,7 @@ export const navSections = [
       { label: 'Dashboard', path: '/', icon: DashboardIcon, description: 'Overview and alerts' },
       { label: 'Tree Dashboard', path: '/orchard/map', icon: MapIcon, description: 'Tree locations and status on map' },
       { label: 'Irrigation', path: '/orchard/irrigation', icon: WaterDropIcon, description: 'Live zone status from controller' },
+      { label: 'Climate', path: '/orchard/climate', icon: CloudIcon, description: 'GDD, weather sensors, and crop advisories' },
     ],
   },
   {
