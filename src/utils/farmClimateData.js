@@ -1,6 +1,7 @@
 import { calculateDailyGDD } from './farmClimateLogic';
+import { FARM_CLIMATE_FARM_ID, fetchFarmStatus, readingFromStatus } from './farmClimateApi';
 
-/** Demo sensors from FarmClimateGUI when this farm has no weather/soil yet. */
+/** Demo sensors from FarmClimateGUI when GetFarmStatus is unreachable. */
 export const MOCK_CLIMATE_SENSORS = {
   Air_Temperature: 28.5,
   Humidity: 92,
@@ -15,105 +16,32 @@ export const MOCK_CLIMATE_SENSORS = {
 
 export const MOCK_CLIMATE_GDD = 400;
 
-function num(value) {
-  if (value == null || value === '') return null;
-  const n = Number(value);
-  return Number.isFinite(n) ? n : null;
+export function dailyGddFromSensors(sensors) {
+  const air = Number(sensors?.Air_Temperature);
+  if (!Number.isFinite(air)) return '0.0';
+  return calculateDailyGDD(air + 5, air - 5).toFixed(1);
 }
 
-function dayKey(iso) {
-  if (!iso) return null;
-  return String(iso).slice(0, 10);
-}
-
-export function cumulativeGddFromWeather(rows) {
-  const year = new Date().getFullYear();
-  const byDay = new Map();
-  (rows || []).forEach((row) => {
-    const key = dayKey(row.observed_at);
-    const temp = num(row.temperature_c);
-    if (!key || temp == null || !key.startsWith(String(year))) return;
-    if (!byDay.has(key)) byDay.set(key, temp);
-  });
-  let total = 0;
-  byDay.forEach((temp) => {
-    total += calculateDailyGDD(temp, temp);
-  });
-  return total;
-}
-
-export function isHighMoistureThreeDays(soilRows) {
-  const recent = (soilRows || [])
-    .map((row) => ({ day: dayKey(row.observed_at), moisture: num(row.moisture_percent) }))
-    .filter((row) => row.day && row.moisture != null);
-  const uniqueDays = [];
-  const seen = new Set();
-  recent.forEach((row) => {
-    if (seen.has(row.day)) return;
-    seen.add(row.day);
-    uniqueDays.push(row);
-  });
-  const lastThree = uniqueDays.slice(0, 3);
-  return lastThree.length >= 3 && lastThree.every((row) => row.moisture > 75);
-}
-
-export function rowsToSensors(weather, soil) {
-  return {
-    Air_Temperature: num(weather?.temperature_c) ?? 0,
-    Humidity: num(weather?.humidity_percent) ?? 0,
-    Soil_Moisture: num(soil?.moisture_percent) ?? 0,
-    Leaf_wetness: 0,
-    Lux: 0,
-    Rain_mm: num(weather?.rainfall_mm) ?? 0,
-    Wind_speed: num(weather?.wind_speed_kph) ?? 0,
-    Wind_direction: num(weather?.wind_direction_deg) ?? 0,
-    Soil_Temperature: num(weather?.temperature_c) ?? 0,
-  };
-}
-
-export async function loadFarmClimateSnapshot(supabase, farmId) {
-  if (!farmId) {
+export async function loadFarmClimateSnapshot(crop = 'Mango') {
+  const result = await fetchFarmStatus(FARM_CLIMATE_FARM_ID, crop);
+  const sensors = readingFromStatus(result);
+  if (sensors) {
     return {
-      sensors: MOCK_CLIMATE_SENSORS,
-      gdd: MOCK_CLIMATE_GDD,
-      isMock: true,
-      isOverMoisture3Days: false,
-      observedAt: null,
+      sensors,
+      gdd: Number(result.gdd_stats?.cumulative_gdd) || 0,
+      isMock: false,
+      isOverMoisture3Days: Boolean(result.isOverMoisture3Days),
+      farmId: result.farm_id || FARM_CLIMATE_FARM_ID,
+      observedAt: sensors.timestamp || sensors.recorded_at || result.updated_at || null,
     };
   }
 
-  const [{ data: weatherRows }, { data: soilRows }] = await Promise.all([
-    supabase
-      .from('weather_observations')
-      .select('*')
-      .eq('farm_id', farmId)
-      .order('observed_at', { ascending: false })
-      .limit(400),
-    supabase
-      .from('soil_observations')
-      .select('moisture_percent, observed_at')
-      .order('observed_at', { ascending: false })
-      .limit(20),
-  ]);
-
-  const weather = weatherRows?.[0] || null;
-  const soil = soilRows?.[0] || null;
-  if (!weather && !soil) {
-    return {
-      sensors: MOCK_CLIMATE_SENSORS,
-      gdd: MOCK_CLIMATE_GDD,
-      isMock: true,
-      isOverMoisture3Days: false,
-      observedAt: null,
-    };
-  }
-
-  const gdd = cumulativeGddFromWeather(weatherRows);
   return {
-    sensors: rowsToSensors(weather, soil),
-    gdd,
-    isMock: false,
-    isOverMoisture3Days: isHighMoistureThreeDays(soilRows),
-    observedAt: weather?.observed_at || soil?.observed_at || null,
+    sensors: MOCK_CLIMATE_SENSORS,
+    gdd: MOCK_CLIMATE_GDD,
+    isMock: true,
+    isOverMoisture3Days: false,
+    farmId: FARM_CLIMATE_FARM_ID,
+    observedAt: null,
   };
 }

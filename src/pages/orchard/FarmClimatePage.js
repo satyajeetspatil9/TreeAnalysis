@@ -18,14 +18,13 @@ import WbSunnyIcon from '@mui/icons-material/WbSunny';
 import UmbrellaIcon from '@mui/icons-material/Umbrella';
 import AirIcon from '@mui/icons-material/Air';
 import CloudIcon from '@mui/icons-material/Cloud';
-import { supabase } from '../../supabaseClient';
-import { useFarm } from '../../hooks/useFarm';
 import PageHeader from '../../components/common/PageHeader';
 import SensorCard from '../../components/farm-climate/SensorCard';
 import CropStageStatus from '../../components/farm-climate/CropStageStatus';
 import RiskPanel from '../../components/farm-climate/RiskPanel';
-import { analyzeRisks, calculateDailyGDD, resolveStage } from '../../utils/farmClimateLogic';
-import { loadFarmClimateSnapshot } from '../../utils/farmClimateData';
+import { analyzeRisks, resolveStage } from '../../utils/farmClimateLogic';
+import { dailyGddFromSensors, loadFarmClimateSnapshot } from '../../utils/farmClimateData';
+import { FARM_CLIMATE_FARM_ID } from '../../utils/farmClimateApi';
 import { formatDate } from '../../utils/formatters';
 
 function formatValue(val) {
@@ -36,14 +35,14 @@ function formatValue(val) {
 }
 
 function FarmClimatePage() {
-  const { farm } = useFarm();
   const [crop, setCrop] = useState('Mango');
   const [snapshot, setSnapshot] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [lastUpdated, setLastUpdated] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
-    const result = await loadFarmClimateSnapshot(supabase, farm?.id);
+    const result = await loadFarmClimateSnapshot(crop);
     const stage = resolveStage(crop, result.gdd);
     const warnings = analyzeRisks(result.sensors, crop, stage, result.isOverMoisture3Days);
     setSnapshot({
@@ -51,11 +50,14 @@ function FarmClimatePage() {
       stage,
       warnings,
     });
+    setLastUpdated(new Date());
     setLoading(false);
-  }, [farm?.id, crop]);
+  }, [crop]);
 
   useEffect(() => {
     load();
+    const interval = window.setInterval(() => { load(); }, 60000);
+    return () => window.clearInterval(interval);
   }, [load]);
 
   if (loading && !snapshot) {
@@ -71,17 +73,14 @@ function FarmClimatePage() {
   const stage = snapshot?.stage || resolveStage(crop, gdd);
   const warnings = snapshot?.warnings || [];
   const isFog = sensors.Humidity > 90 && sensors.Lux < 2000 && sensors.Leaf_wetness >= 4;
-  const dailyGDD = calculateDailyGDD(
-    Number(sensors.Air_Temperature) + 5,
-    Number(sensors.Air_Temperature) - 5,
-  ).toFixed(1);
+  const dailyGDD = dailyGddFromSensors(sensors);
 
   return (
     <Box>
       <PageHeader
         section="Orchard"
         title="Farm climate"
-        subtitle="GDD, field sensors, and spray / disease advisories from FarmClimateGUI."
+        subtitle="Live GetFarmStatus feed — same sensors and GDD as farm-climate-gui."
         action={(
           <Button
             variant="outlined"
@@ -105,16 +104,21 @@ function FarmClimatePage() {
           <ToggleButton value="Cashew">Cashew</ToggleButton>
         </ToggleButtonGroup>
         {snapshot?.isMock && (
-          <Chip size="small" color="warning" label="Demo readings — log weather in Settings" />
+          <Chip size="small" color="warning" label="Live feed unreachable — showing GUI demo readings" />
+        )}
+        {!snapshot?.isMock && (
+          <Chip size="small" color="success" label={`Live · ${snapshot?.farmId || FARM_CLIMATE_FARM_ID}`} />
+        )}
+        {lastUpdated && (
+          <Typography variant="caption" color="text.secondary">
+            Updated {lastUpdated.toLocaleTimeString()}
+          </Typography>
         )}
         {!snapshot?.isMock && snapshot?.observedAt && (
           <Typography variant="caption" color="text.secondary">
-            Latest observation {formatDate(snapshot.observedAt)}
+            Reading {formatDate(snapshot.observedAt)}
           </Typography>
         )}
-        <Typography variant="caption" color="text.secondary">
-          {farm?.name || 'This farm'}
-        </Typography>
       </Box>
 
       <Grid container spacing={2}>
