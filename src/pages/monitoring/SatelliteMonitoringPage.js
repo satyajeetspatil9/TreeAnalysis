@@ -29,10 +29,11 @@ import ClearIcon from '@mui/icons-material/Clear';
 import SatelliteAltIcon from '@mui/icons-material/SatelliteAlt';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import { Link as RouterLink } from 'react-router-dom';
-import { alpha } from '@mui/material/styles';
+import { alpha, useTheme } from '@mui/material/styles';
 import { supabase } from '../../supabaseClient';
 import { useFarm } from '../../hooks/useFarm';
 import PageHeader from '../../components/common/PageHeader';
+import { GpsTreeDotMap } from '../../components/common/GpsTreeDotMap';
 import { formatDate, formatNumber, getTreeDisplayId } from '../../utils/formatters';
 import { TREE_LIST_SELECT } from '../../utils/schema';
 import { parsePositionCode } from '../../utils/positionCode';
@@ -101,6 +102,14 @@ function IndicatorChip({ friendly, fallback = '—', wetness = false }) {
   );
 }
 
+function chipToDotColor(theme, chipColor) {
+  if (chipColor === 'error') return theme.palette.error.main;
+  if (chipColor === 'warning') return theme.palette.warning.main;
+  if (chipColor === 'success') return theme.palette.success.main;
+  if (chipColor === 'info') return theme.palette.info.main;
+  return theme.palette.grey[400];
+}
+
 function treeToFilterPosition(tree) {
   const pos = tree.tree_positions;
   if (!pos?.position_code) return null;
@@ -121,6 +130,7 @@ function treeToFilterPosition(tree) {
 }
 
 function SatelliteMonitoringPage() {
+  const theme = useTheme();
   const { farm, loading: farmLoading } = useFarm();
   const [activeTrees, setActiveTrees] = useState([]);
   const [cacheByPositionId, setCacheByPositionId] = useState(new Map());
@@ -236,6 +246,7 @@ function SatelliteMonitoringPage() {
       positionCode: pos.position_code,
       variety: pos.activeTree?.variety || '',
       hasGps,
+      gps: hasGps ? { latitude: Number(pos.latitude), longitude: Number(pos.longitude) } : null,
       cache,
       indicators,
       meta,
@@ -276,6 +287,27 @@ function SatelliteMonitoringPage() {
     setFilters(EMPTY_TREE_FILTERS);
     setStressFilter('all');
   };
+
+  const mapItems = useMemo(
+    () => filteredRows.map((row) => {
+      const wetnessLabel = row.indicators?.radar?.label;
+      const chipColor = wetnessLabel ? radarWetnessChipColor(wetnessLabel) : 'default';
+      return {
+        id: row.positionId,
+        label: row.positionCode,
+        to: treeDashboardUrl(row.positionCode, 'satellite'),
+        color: chipToDotColor(theme, chipColor),
+        gps: row.gps,
+        tooltip: [
+          wetnessLabel || (row.hasGps ? 'No radar data' : 'No GPS'),
+          row.indicators?.radarFromPriorWeek && (row.indicators.radarAsOf || row.cache?.last_good_radar_week)
+            ? `from ${formatDate(row.indicators.radarAsOf || row.cache.last_good_radar_week)}`
+            : null,
+        ].filter(Boolean).join(' · '),
+      };
+    }),
+    [filteredRows, theme],
+  );
 
   if (farmLoading || loading) {
     return (
@@ -453,6 +485,31 @@ function SatelliteMonitoringPage() {
             <Button size="small" onClick={clearFilters}>Clear filters</Button>
           )}
         </Box>
+      </Paper>
+
+      <Paper sx={{ p: 2, mb: 3 }} variant="outlined">
+        <Box sx={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 2, flexWrap: 'wrap', mb: 1 }}>
+          <Typography variant="h6">Radar wetness by tree</Typography>
+          <Typography variant="caption" color="text.secondary">
+            {filteredRows.length} tree{filteredRows.length === 1 ? '' : 's'}
+          </Typography>
+        </Box>
+        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 2 }}>
+          <Chip size="small" color="error" label="Very dry" />
+          <Chip size="small" color="warning" label="Dry" />
+          <Chip size="small" color="success" label="Normal moisture" />
+          <Chip size="small" color="success" variant="outlined" label="Good moisture" />
+          <Chip size="small" color="info" label="Very high moisture" />
+          <Chip size="small" label="No data" />
+        </Box>
+        {filteredRows.length > 0 ? (
+          <GpsTreeDotMap
+            items={mapItems}
+            emptyGpsText="Trees need GPS on their position to appear on this layout."
+          />
+        ) : (
+          <Typography color="text.secondary">No trees match the current filters.</Typography>
+        )}
       </Paper>
 
       <Paper variant="outlined" sx={{ overflow: 'hidden' }}>
