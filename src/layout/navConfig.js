@@ -54,6 +54,7 @@ export const navSections = [
     icon: MonitorHeartIcon,
     items: [
       { label: 'Soil', path: '/monitoring/soil', icon: GrassIcon, description: 'Soil observations' },
+      { label: 'Moisture', path: '/monitoring/moisture', icon: OpacityIcon, description: 'Latest moisture by tree' },
       { label: 'Irrigation', path: '/irrigation/events', icon: EventIcon, description: 'Watering events' },
       { label: 'Fertigation', path: '/irrigation/fertigation', icon: ScienceIcon, description: 'Fertilizer through irrigation' },
       { label: 'Satellite', path: '/monitoring/satellite', icon: SatelliteAltIcon, description: 'Weekly satellite signals for all trees' },
