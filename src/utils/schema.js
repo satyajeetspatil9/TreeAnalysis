@@ -80,7 +80,8 @@ export function getIrrigationZoneCode(tree) {
 }
 
 export function getIrrigationZoneId(tree) {
-  return getActiveIrrigationLink(tree)?.irrigation_zones?.id || null;
+  const link = getActiveIrrigationLink(tree);
+  return link?.zone_id || link?.irrigation_zones?.id || null;
 }
 
 export function getTreeGps(tree) {

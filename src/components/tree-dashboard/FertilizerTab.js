@@ -546,7 +546,7 @@ function FertilizerTab({ tree, zoneCode }) {
         treeCostByEvent={treeCostByEvent}
         zoneCostByEvent={zoneCostByEvent}
         unitCostByProduct={unitCostByProduct}
-        emptyMessage="No drip fertigation. Use Irrigation → Fertigation."
+        emptyMessage="No drip fertigation. Use Monitoring → Fertigation."
       />
     </Box>
   );

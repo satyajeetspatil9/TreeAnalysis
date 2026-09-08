@@ -9,16 +9,29 @@ export function calcIrrigationWaterLiters(flowRateLph, durationMinutes) {
 }
 
 export function formatWaterLiters(liters) {
-  if (liters == null || Number.isNaN(liters)) return '—';
+  if (liters == null || Number.isNaN(Number(liters))) return '—';
   return `${formatNumber(liters, 0)} L`;
+}
+
+/** Prefer stored liters; otherwise flow (L/hr) × duration. */
+export function resolveEventWaterLiters(event) {
+  if (!event) return null;
+  const stored = Number(event.water_liters);
+  if (Number.isFinite(stored) && stored > 0) return stored;
+  const flow = Number(
+    event.flow_rate_lph
+    ?? event.irrigation_zones?.flow_rate_lph,
+  );
+  return calcIrrigationWaterLiters(flow, event.duration_minutes);
 }
 
 /** Equal share per active tree in the zone (matches expense allocation). */
 export function calcTreeWaterShare(zoneWaterLiters, treeCount) {
   const water = Number(zoneWaterLiters);
   const count = Number(treeCount);
-  if (!water || !count) return null;
-  return water / count;
+  if (!Number.isFinite(water) || water <= 0) return null;
+  const trees = Number.isFinite(count) && count > 0 ? count : 1;
+  return water / trees;
 }
 
 export const IRRIGATION_PERIOD_OPTIONS = [
@@ -92,8 +105,8 @@ export function buildIrrigationChartData(events, treeCount, grouping = 'event') 
     return sorted.map((e) => ({
       key: e.id,
       label: new Date(e.event_date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }),
-      zoneWater: e.water_liters != null ? Number(e.water_liters) : null,
-      treeWater: calcTreeWaterShare(e.water_liters, treeCount),
+      zoneWater: resolveEventWaterLiters(e),
+      treeWater: calcTreeWaterShare(resolveEventWaterLiters(e), treeCount),
       duration: e.duration_minutes != null ? Number(e.duration_minutes) : null,
       eventCount: 1,
     }));
@@ -110,8 +123,8 @@ export function buildIrrigationChartData(events, treeCount, grouping = 'event') 
       duration: 0,
       eventCount: 0,
     };
-    bucket.zoneWater += Number(e.water_liters) || 0;
-    bucket.treeWater += calcTreeWaterShare(e.water_liters, treeCount) || 0;
+    bucket.zoneWater += resolveEventWaterLiters(e) || 0;
+    bucket.treeWater += calcTreeWaterShare(resolveEventWaterLiters(e), treeCount) || 0;
     bucket.duration += Number(e.duration_minutes) || 0;
     bucket.eventCount += 1;
     buckets.set(key, bucket);

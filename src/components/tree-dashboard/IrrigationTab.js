@@ -14,6 +14,7 @@ import {
   formatWaterLiters,
   filterEventsByPeriod,
   buildIrrigationChartData,
+  resolveEventWaterLiters,
   IRRIGATION_PERIOD_OPTIONS,
   IRRIGATION_GROUP_OPTIONS,
   IRRIGATION_METRIC_OPTIONS,
@@ -60,34 +61,55 @@ function IrrigationTab({ tree, zoneCode }) {
   const [metrics, setMetrics] = useState(DEFAULT_METRICS);
 
   useEffect(() => {
+    let cancelled = false;
+    let firstLoad = true;
+
     async function loadIrrigation() {
-      setLoading(true);
       const zoneId = getIrrigationZoneId(tree);
       if (!zoneId) {
-        setLoading(false);
+        if (!cancelled) {
+          setEvents([]);
+          setLatest(null);
+          setTreeCount(0);
+          setLoading(false);
+        }
         return;
       }
 
-      const { count } = await supabase
-        .from('tree_irrigation_zones')
-        .select('*', { count: 'exact', head: true })
-        .eq('zone_id', zoneId)
-        .is('end_date', null);
+      const [{ data: zoneTrees }, { data }] = await Promise.all([
+        supabase
+          .from('tree_irrigation_zones')
+          .select('tree_id, trees!inner(status)')
+          .eq('zone_id', zoneId)
+          .is('end_date', null),
+        supabase
+          .from('irrigation_events')
+          .select('*, irrigation_zones(flow_rate_lph)')
+          .eq('zone_id', zoneId)
+          .order('event_date', { ascending: false }),
+      ]);
 
-      setTreeCount(count || 0);
+      if (cancelled) return;
 
-      const { data } = await supabase
-        .from('irrigation_events')
-        .select('*')
-        .eq('zone_id', zoneId)
-        .order('event_date', { ascending: false });
-
+      const activeCount = (zoneTrees || []).filter(
+        (row) => row.trees?.status === 'Active' || row.trees?.status == null,
+      ).length;
+      setTreeCount(activeCount || (zoneTrees || []).length || 1);
       setEvents(data || []);
       setLatest(data?.[0] || null);
-      setLoading(false);
+      if (firstLoad) {
+        firstLoad = false;
+        setLoading(false);
+      }
     }
 
+    setLoading(true);
     loadIrrigation();
+    const pollId = window.setInterval(loadIrrigation, 30000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(pollId);
+    };
   }, [tree]);
 
   const filteredEvents = useMemo(
@@ -105,9 +127,13 @@ function IrrigationTab({ tree, zoneCode }) {
     [filteredEvents, treeCount, grouping],
   );
 
+  const latestZoneWater = useMemo(
+    () => resolveEventWaterLiters(latest),
+    [latest],
+  );
   const latestTreeWater = useMemo(
-    () => calcTreeWaterShare(latest?.water_liters, treeCount),
-    [latest, treeCount],
+    () => calcTreeWaterShare(latestZoneWater, treeCount),
+    [latestZoneWater, treeCount],
   );
 
   const metricColors = {
@@ -144,7 +170,7 @@ function IrrigationTab({ tree, zoneCode }) {
       };
       return ChartComponent === BarChart
         ? <SeriesComponent {...props} radius={[4, 4, 0, 0]} />
-        : <SeriesComponent {...props} type="monotone" dot={{ r: 3 }} activeDot={{ r: 5 }} />;
+        : <SeriesComponent {...props} type="monotone" connectNulls dot={{ r: 3 }} activeDot={{ r: 5 }} />;
     })
   );
 
@@ -157,7 +183,7 @@ function IrrigationTab({ tree, zoneCode }) {
           <>
             <Typography>Last irrigation: {formatDate(latest.event_date)}</Typography>
             <Typography>Duration: {latest.duration_minutes || '—'} min</Typography>
-            <Typography>Zone water (total): {formatWaterLiters(latest.water_liters)}</Typography>
+            <Typography>Zone water (total): {formatWaterLiters(latestZoneWater)}</Typography>
             <Typography>
               Water to this tree: {formatWaterLiters(latestTreeWater)}
               {treeCount > 1 && ` (÷ ${treeCount} trees)`}
@@ -225,7 +251,8 @@ function IrrigationTab({ tree, zoneCode }) {
         </Box>
 
         {chartData.length > 0 ? (
-          <ResponsiveContainer width="100%" height={320}>
+          <Box sx={{ width: '100%', height: 320 }}>
+          <ResponsiveContainer width="100%" height="100%">
             {chartType === 'bar' ? (
               <BarChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={theme.palette.divider} />
@@ -270,6 +297,7 @@ function IrrigationTab({ tree, zoneCode }) {
               </LineChart>
             )}
           </ResponsiveContainer>
+          </Box>
         ) : (
           <Typography color="text.secondary">No irrigation events in the selected period.</Typography>
         )}
@@ -293,12 +321,13 @@ function IrrigationTab({ tree, zoneCode }) {
           </TableHead>
           <TableBody>
             {tableEvents.map((e) => {
-              const treeWater = calcTreeWaterShare(e.water_liters, treeCount);
+              const zoneWater = resolveEventWaterLiters(e);
+              const treeWater = calcTreeWaterShare(zoneWater, treeCount);
               return (
                 <TableRow key={e.id}>
                   <TableCell>{formatDate(e.event_date)}</TableCell>
                   <TableCell>{e.duration_minutes ? `${e.duration_minutes} min` : '—'}</TableCell>
-                  <TableCell align="right">{formatWaterLiters(e.water_liters)}</TableCell>
+                  <TableCell align="right">{formatWaterLiters(zoneWater)}</TableCell>
                   <TableCell align="right">{formatWaterLiters(treeWater)}</TableCell>
                 </TableRow>
               );

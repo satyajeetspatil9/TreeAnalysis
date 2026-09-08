@@ -249,7 +249,7 @@ function FertigationPage() {
   return (
     <Box>
       <PageHeader
-        section="Irrigation"
+        section="Monitoring"
         title="Fertigation"
         subtitle="Apply fertilizer through drip. Products are deducted from Inventory stock."
       />

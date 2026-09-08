@@ -907,6 +907,10 @@ async function recordWaterIrrigationEvent(
   if (!(duration > 0) && liters > 0 && flow && flow > 0) duration = (liters / flow) * 60;
   if (!(duration > 0) && !(liters > 0)) return;
 
+  const waterLiters = liters > 0
+    ? liters
+    : (flow && flow > 0 && duration > 0 ? (flow * duration) / 60 : null);
+
   const local = partsInTz(now, FARM_TZ);
   const notes = `irrigation_job:${job.id}:seq:${job.current_step_seq ?? 0}`;
 
@@ -922,7 +926,7 @@ async function recordWaterIrrigationEvent(
     zone_id: job.zone_id,
     event_date: local.dateKey,
     duration_minutes: Math.max(1, Math.round(duration)),
-    water_liters: liters > 0 ? liters : null,
+    water_liters: waterLiters != null && waterLiters > 0 ? waterLiters : null,
     flow_rate_lph: flow,
     notes,
   });

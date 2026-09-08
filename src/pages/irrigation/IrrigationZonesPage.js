@@ -359,7 +359,7 @@ function IrrigationZonesPage() {
   return (
     <Box>
       <PageHeader
-        section="Irrigation"
+        section="Farm Setting"
         title="Irrigation Zones"
         subtitle="Create zones, assign trees, edit details, or delete unused zones — all in one place."
       />

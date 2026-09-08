@@ -156,7 +156,7 @@ function FertigationTab({ tree, zoneCode }) {
       {events.length === 0 ? (
         <Paper sx={{ p: 3 }} variant="outlined">
           <Typography color="text.secondary">
-            No fertigation recorded for zone {zoneCode}. Use Irrigation → Fertigation.
+            No fertigation recorded for zone {zoneCode}. Use Monitoring → Fertigation.
           </Typography>
         </Paper>
       ) : (

@@ -188,7 +188,7 @@ function IrrigationEventsPage() {
   return (
     <Box>
       <PageHeader
-        section="Irrigation"
+        section="Monitoring"
         title="Irrigation Events"
         subtitle="Record how long a zone ran. Water is calculated from zone flow rate × duration. Edit or delete past events in the table below."
       />
