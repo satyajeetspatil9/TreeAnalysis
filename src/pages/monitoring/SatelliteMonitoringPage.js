@@ -117,6 +117,14 @@ function mapLayerChipColor(layerKey, friendly) {
   return stressLevelColor(friendly.label);
 }
 
+function hasOpticalMapReadings(rows) {
+  return (rows || []).some((row) => (
+    Boolean(row?.indicators)
+    && !row.indicators.opticalHidden
+    && Boolean(row.indicators.ndvi || row.indicators.ndmi || row.indicators.ndre || row.indicators.water || row.indicators.nutrient)
+  ));
+}
+
 function treeToFilterPosition(tree) {
   const pos = tree.tree_positions;
   if (!pos?.position_code) return null;
@@ -148,7 +156,8 @@ function SatelliteMonitoringPage() {
   const [filters, setFilters] = useState(EMPTY_TREE_FILTERS);
   const [stressFilter, setStressFilter] = useState('all');
   const [hideOpticalWhenCloudy, setHideOpticalWhenCloudy] = useState(readHideOpticalWhenCloudy);
-  const [mapLayer, setMapLayer] = useState('overall');
+  const [mapLayer, setMapLayer] = useState('radar');
+  const [mapLayerChosen, setMapLayerChosen] = useState(false);
 
   const load = useCallback(async () => {
     if (!farm?.id) {
@@ -295,6 +304,11 @@ function SatelliteMonitoringPage() {
     setFilters(EMPTY_TREE_FILTERS);
     setStressFilter('all');
   };
+
+  useEffect(() => {
+    if (mapLayerChosen) return;
+    setMapLayer(hasOpticalMapReadings(tableRows) ? 'overall' : 'radar');
+  }, [tableRows, mapLayerChosen, hideOpticalWhenCloudy]);
 
   const mapLayerColumn = SATELLITE_MONITOR_COLUMNS.find((column) => column.key === mapLayer)
     || SATELLITE_MONITOR_COLUMNS[0];
@@ -522,7 +536,10 @@ function SatelliteMonitoringPage() {
               label={column.label}
               variant={mapLayer === column.key ? 'filled' : 'outlined'}
               color={mapLayer === column.key ? 'primary' : 'default'}
-              onClick={() => setMapLayer(column.key)}
+              onClick={() => {
+                setMapLayerChosen(true);
+                setMapLayer(column.key);
+              }}
             />
           ))}
         </Box>
