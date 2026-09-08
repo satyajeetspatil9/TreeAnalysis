@@ -110,6 +110,13 @@ function chipToDotColor(theme, chipColor) {
   return theme.palette.grey[400];
 }
 
+function mapLayerChipColor(layerKey, friendly) {
+  if (!friendly?.label) return 'default';
+  if (layerKey === 'radar') return radarWetnessChipColor(friendly.label);
+  if (layerKey === 'overall') return severityToChipColor(friendly.label);
+  return stressLevelColor(friendly.label);
+}
+
 function treeToFilterPosition(tree) {
   const pos = tree.tree_positions;
   if (!pos?.position_code) return null;
@@ -141,6 +148,7 @@ function SatelliteMonitoringPage() {
   const [filters, setFilters] = useState(EMPTY_TREE_FILTERS);
   const [stressFilter, setStressFilter] = useState('all');
   const [hideOpticalWhenCloudy, setHideOpticalWhenCloudy] = useState(readHideOpticalWhenCloudy);
+  const [mapLayer, setMapLayer] = useState('overall');
 
   const load = useCallback(async () => {
     if (!farm?.id) {
@@ -288,10 +296,13 @@ function SatelliteMonitoringPage() {
     setStressFilter('all');
   };
 
+  const mapLayerColumn = SATELLITE_MONITOR_COLUMNS.find((column) => column.key === mapLayer)
+    || SATELLITE_MONITOR_COLUMNS[0];
+
   const mapItems = useMemo(
     () => filteredRows.map((row) => {
-      const wetnessLabel = row.indicators?.radar?.label;
-      const chipColor = wetnessLabel ? radarWetnessChipColor(wetnessLabel) : 'default';
+      const friendly = row.indicators?.[mapLayer];
+      const chipColor = mapLayerChipColor(mapLayer, friendly);
       return {
         id: row.positionId,
         label: row.positionCode,
@@ -299,14 +310,18 @@ function SatelliteMonitoringPage() {
         color: chipToDotColor(theme, chipColor),
         gps: row.gps,
         tooltip: [
-          wetnessLabel || (row.hasGps ? 'No radar data' : 'No GPS'),
-          row.indicators?.radarFromPriorWeek && (row.indicators.radarAsOf || row.cache?.last_good_radar_week)
+          friendly?.label
+            || (row.indicators?.opticalHidden && mapLayer !== 'radar' ? 'Hidden when cloudy' : null)
+            || (row.hasGps ? 'No satellite data' : 'No GPS'),
+          mapLayer === 'radar'
+          && row.indicators?.radarFromPriorWeek
+          && (row.indicators.radarAsOf || row.cache?.last_good_radar_week)
             ? `from ${formatDate(row.indicators.radarAsOf || row.cache.last_good_radar_week)}`
             : null,
         ].filter(Boolean).join(' · '),
       };
     }),
-    [filteredRows, theme],
+    [filteredRows, mapLayer, theme],
   );
 
   if (farmLoading || loading) {
@@ -489,18 +504,46 @@ function SatelliteMonitoringPage() {
 
       <Paper sx={{ p: 2, mb: 3 }} variant="outlined">
         <Box sx={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 2, flexWrap: 'wrap', mb: 1 }}>
-          <Typography variant="h6">Radar wetness by tree</Typography>
+          <Box>
+            <Typography variant="h6">{mapLayerColumn.label} by tree</Typography>
+            <Typography variant="body2" color="text.secondary">
+              {mapLayerColumn.short}. Switch signal below — same GPS layout, one color per tree.
+            </Typography>
+          </Box>
           <Typography variant="caption" color="text.secondary">
             {filteredRows.length} tree{filteredRows.length === 1 ? '' : 's'}
           </Typography>
         </Box>
+        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 1.5 }}>
+          {SATELLITE_MONITOR_COLUMNS.map((column) => (
+            <Chip
+              key={column.key}
+              clickable
+              label={column.label}
+              variant={mapLayer === column.key ? 'filled' : 'outlined'}
+              color={mapLayer === column.key ? 'primary' : 'default'}
+              onClick={() => setMapLayer(column.key)}
+            />
+          ))}
+        </Box>
         <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 2 }}>
-          <Chip size="small" color="error" label="Very dry" />
-          <Chip size="small" color="warning" label="Dry" />
-          <Chip size="small" color="success" label="Normal moisture" />
-          <Chip size="small" color="success" variant="outlined" label="Good moisture" />
-          <Chip size="small" color="info" label="Very high moisture" />
-          <Chip size="small" label="No data" />
+          {mapLayer === 'radar' ? (
+            <>
+              <Chip size="small" color="error" label="Very dry" />
+              <Chip size="small" color="warning" label="Dry" />
+              <Chip size="small" color="success" label="Normal moisture" />
+              <Chip size="small" color="success" variant="outlined" label="Good moisture" />
+              <Chip size="small" color="info" label="Very high moisture" />
+              <Chip size="small" label="No data" />
+            </>
+          ) : (
+            <>
+              <Chip size="small" color="success" label="Looking good" />
+              <Chip size="small" color="warning" label="Needs attention" />
+              <Chip size="small" color="error" label="Stress" />
+              <Chip size="small" label="No data" />
+            </>
+          )}
         </Box>
         {filteredRows.length > 0 ? (
           <GpsTreeDotMap
