@@ -10,24 +10,15 @@ import {
   TableCell,
   TableHead,
   TableRow,
+  Tooltip,
   Typography,
 } from '@mui/material';
-import { useTheme } from '@mui/material/styles';
-import { Link as RouterLink, useNavigate } from 'react-router-dom';
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  ReferenceLine,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
+import { alpha, useTheme } from '@mui/material/styles';
+import { Link as RouterLink } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
 import PageHeader from '../../components/common/PageHeader';
 import { formatDate, formatNumber, getTreeDisplayId } from '../../utils/formatters';
+import { treeDashboardUrl } from '../../utils/treeDashboard';
 import {
   SOIL_NUTRIENT_STANDARDS,
   evaluateSoilStandard,
@@ -36,13 +27,6 @@ import {
 
 const moistureStandard = SOIL_NUTRIENT_STANDARDS.moisture_percent;
 
-function moistureFill(theme, status) {
-  if (status === 'good' || status === 'ok') return theme.palette.success.main;
-  if (status === 'low') return theme.palette.warning.main;
-  if (status === 'high') return theme.palette.error.main;
-  return theme.palette.primary.main;
-}
-
 function moistureChipColor(status) {
   if (status === 'good' || status === 'ok') return 'success';
   if (status === 'low') return 'warning';
@@ -50,30 +34,30 @@ function moistureChipColor(status) {
   return 'default';
 }
 
-function MoistureTooltip({ active, payload }) {
-  if (!active || !payload?.length) return null;
-  const row = payload[0]?.payload;
+function moistureDotColor(theme, status) {
+  if (status === 'good' || status === 'ok') return theme.palette.success.main;
+  if (status === 'low') return theme.palette.warning.main;
+  if (status === 'high') return theme.palette.error.main;
+  return theme.palette.grey[400];
+}
+
+function MoistureDot({ color }) {
   return (
-    <Paper sx={{ p: 1.5 }} variant="outlined">
-      <Typography variant="caption" display="block" sx={{ fontWeight: 600 }}>{row?.tree}</Typography>
-      <Typography variant="body2">Moisture: {formatNumber(row?.moisture, 0)}%</Typography>
-      {row?.statusLabel ? (
-        <Typography variant="caption" color="text.secondary" display="block">
-          {row.statusLabel}
-        </Typography>
-      ) : null}
-      {row?.observedAt ? (
-        <Typography variant="caption" color="text.secondary" display="block">
-          {formatDate(row.observedAt)}
-        </Typography>
-      ) : null}
-    </Paper>
+    <Box
+      sx={{
+        width: 28,
+        height: 28,
+        borderRadius: '50%',
+        background: `radial-gradient(circle at 32% 28%, ${alpha('#fff', 0.65)} 0%, ${color} 42%, ${alpha('#000', 0.28)} 100%)`,
+        boxShadow: `0 2px 4px ${alpha('#000', 0.22)}`,
+        flexShrink: 0,
+      }}
+    />
   );
 }
 
 function MoistureMonitoringPage() {
   const theme = useTheme();
-  const navigate = useNavigate();
   const [observations, setObservations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState(null);
@@ -122,13 +106,6 @@ function MoistureMonitoringPage() {
       .sort((a, b) => a.tree.localeCompare(b.tree, undefined, { numeric: true, sensitivity: 'base' }));
   }, [observations]);
 
-  const chartWidth = Math.max(rows.length * 40, 320);
-
-  const openTree = (tree) => {
-    if (!tree) return;
-    navigate(`/tree/${tree}?tab=soil`);
-  };
-
   return (
     <Box>
       <PageHeader
@@ -162,56 +139,48 @@ function MoistureMonitoringPage() {
               <Chip size="small" color="error" label="High" />
             </Box>
             {rows.length > 0 ? (
-              <Box sx={{ overflowX: 'auto' }}>
-                <Box sx={{ minWidth: chartWidth, height: 360 }}>
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={rows} margin={{ top: 12, right: 16, left: 0, bottom: 56 }}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis
-                        dataKey="tree"
-                        interval={0}
-                        angle={-35}
-                        textAnchor="end"
-                        height={72}
-                        tick={{ fontSize: 11 }}
-                      />
-                      <YAxis
-                        domain={[0, 100]}
-                        tickFormatter={(value) => `${value}%`}
-                        width={48}
-                      />
-                      <Tooltip content={<MoistureTooltip />} />
-                      {moistureStandard.min != null && (
-                        <ReferenceLine
-                          y={moistureStandard.min}
-                          stroke={theme.palette.warning.main}
-                          strokeDasharray="4 4"
-                          label={{ value: 'Low', position: 'insideTopLeft', fill: theme.palette.warning.main, fontSize: 11 }}
-                        />
-                      )}
-                      {moistureStandard.max != null && (
-                        <ReferenceLine
-                          y={moistureStandard.max}
-                          stroke={theme.palette.error.main}
-                          strokeDasharray="4 4"
-                          label={{ value: 'High', position: 'insideTopRight', fill: theme.palette.error.main, fontSize: 11 }}
-                        />
-                      )}
-                      <Bar
-                        dataKey="moisture"
-                        name="Moisture (%)"
-                        radius={[4, 4, 0, 0]}
-                        maxBarSize={48}
-                        cursor="pointer"
-                        onClick={(data) => openTree(data?.tree)}
+              <Box
+                sx={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(72px, 1fr))',
+                  gap: 2.5,
+                  py: 1,
+                }}
+              >
+                {rows.map((row) => {
+                  const color = moistureDotColor(theme, row.status);
+                  const tooltip = [
+                    row.statusLabel || 'Moisture',
+                    `${formatNumber(row.moisture, 0)}%`,
+                    row.observedAt ? formatDate(row.observedAt) : null,
+                  ].filter(Boolean).join(' · ');
+                  return (
+                    <Tooltip key={row.treeId} title={tooltip} arrow>
+                      <Box
+                        component={RouterLink}
+                        to={treeDashboardUrl(row.tree, 'soil')}
+                        sx={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'center',
+                          gap: 0.75,
+                          textDecoration: 'none',
+                          color: 'text.primary',
+                          py: 0.5,
+                          borderRadius: 1,
+                          '&:hover': {
+                            bgcolor: alpha(theme.palette.action.hover, 0.6),
+                          },
+                        }}
                       >
-                        {rows.map((row) => (
-                          <Cell key={row.treeId} fill={moistureFill(theme, row.status)} />
-                        ))}
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
-                </Box>
+                        <Typography variant="body2" sx={{ fontWeight: 600, lineHeight: 1.2 }}>
+                          {row.tree}
+                        </Typography>
+                        <MoistureDot color={color} />
+                      </Box>
+                    </Tooltip>
+                  );
+                })}
               </Box>
             ) : (
               <Typography color="text.secondary">
@@ -237,7 +206,7 @@ function MoistureMonitoringPage() {
                       <TableCell>
                         <Typography
                           component={RouterLink}
-                          to={`/tree/${row.tree}?tab=soil`}
+                          to={treeDashboardUrl(row.tree, 'soil')}
                           sx={{ color: 'primary.main', textDecoration: 'none', fontWeight: 600 }}
                         >
                           {row.tree}
