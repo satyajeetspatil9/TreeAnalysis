@@ -43,41 +43,12 @@ import {
   emptyGrowthForm,
   growthRlsHint,
   hasGrowthMeasurement,
+  computeGrowthAverages,
   pickLatestGrowthByTree,
   recordToGrowthForm,
   trunkMmToCm,
 } from '../../utils/treeGrowth';
 import { treeDashboardUrl } from '../../utils/treeDashboard';
-
-function computeAverages(records) {
-  const heightValues = records
-    .filter((r) => r.height_cm != null && r.height_cm !== '')
-    .map((r) => Number(r.height_cm));
-  const trunkValues = records
-    .filter((r) => r.trunk_diameter_mm != null && r.trunk_diameter_mm !== '')
-    .map((r) => trunkMmToCm(r.trunk_diameter_mm));
-  const canopyNsValues = records
-    .filter((r) => r.canopy_ns_cm != null && r.canopy_ns_cm !== '')
-    .map((r) => Number(r.canopy_ns_cm));
-  const canopyEwValues = records
-    .filter((r) => r.canopy_ew_cm != null && r.canopy_ew_cm !== '')
-    .map((r) => Number(r.canopy_ew_cm));
-
-  const avg = (values) => (values.length
-    ? values.reduce((sum, value) => sum + value, 0) / values.length
-    : null);
-
-  return {
-    height: avg(heightValues),
-    trunk: avg(trunkValues),
-    canopyNs: avg(canopyNsValues),
-    canopyEw: avg(canopyEwValues),
-    count: records.length,
-    heightCount: heightValues.length,
-    trunkCount: trunkValues.length,
-    canopyCount: records.filter((r) => r.canopy_ns_cm != null && r.canopy_ew_cm != null).length,
-  };
-}
 
 function formatCanopyLabel(nsCm, ewCm) {
   if (nsCm == null || ewCm == null || nsCm === '' || ewCm === '') return '—';
@@ -238,7 +209,7 @@ function GrowthComparisonPage() {
   }, [loadRecords]);
 
   const latestRecords = useMemo(() => pickLatestGrowthByTree(allRecords), [allRecords]);
-  const averages = useMemo(() => computeAverages(latestRecords), [latestRecords]);
+  const averages = useMemo(() => computeGrowthAverages(latestRecords), [latestRecords]);
 
   const heightChartData = useMemo(
     () => sortRecords(latestRecords)

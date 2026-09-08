@@ -73,3 +73,50 @@ export function pickLatestGrowthByTree(records) {
   });
   return Object.values(byTree);
 }
+
+export function computeGrowthAverages(records) {
+  const heightValues = records
+    .filter((r) => r.height_cm != null && r.height_cm !== '')
+    .map((r) => Number(r.height_cm));
+  const trunkValues = records
+    .filter((r) => r.trunk_diameter_mm != null && r.trunk_diameter_mm !== '')
+    .map((r) => trunkMmToCm(r.trunk_diameter_mm));
+  const canopyNsValues = records
+    .filter((r) => r.canopy_ns_cm != null && r.canopy_ns_cm !== '')
+    .map((r) => Number(r.canopy_ns_cm));
+  const canopyEwValues = records
+    .filter((r) => r.canopy_ew_cm != null && r.canopy_ew_cm !== '')
+    .map((r) => Number(r.canopy_ew_cm));
+
+  const avg = (values) => (values.length
+    ? values.reduce((sum, value) => sum + value, 0) / values.length
+    : null);
+
+  return {
+    height: avg(heightValues),
+    trunk: avg(trunkValues),
+    canopyNs: avg(canopyNsValues),
+    canopyEw: avg(canopyEwValues),
+    count: records.length,
+    heightCount: heightValues.length,
+    trunkCount: trunkValues.length,
+    canopyCount: records.filter((r) => r.canopy_ns_cm != null && r.canopy_ew_cm != null).length,
+  };
+}
+
+/** Higher growth is better: below farm average is low, at/above is good. */
+export function compareGrowthToAverage(value, average) {
+  if (value == null || value === '' || average == null || Number.isNaN(Number(value))) {
+    return { status: 'unknown', label: '' };
+  }
+  const v = Number(value);
+  if (v < average) return { status: 'low', label: 'Below avg' };
+  if (v > average) return { status: 'good', label: 'Above avg' };
+  return { status: 'ok', label: 'At avg' };
+}
+
+export function growthVsAverageColor(status) {
+  if (status === 'good' || status === 'ok') return 'success.main';
+  if (status === 'low') return 'warning.main';
+  return 'text.primary';
+}

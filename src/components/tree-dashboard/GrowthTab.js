@@ -1,6 +1,6 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Box, Typography, Paper, Grid, TextField, Button, CircularProgress, Alert,
+  Box, Typography, Paper, Grid, TextField, Button, CircularProgress, Alert, Chip,
 } from '@mui/material';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
@@ -10,18 +10,58 @@ import { formatNumber } from '../../utils/formatters';
 import {
   GROWTH_MEASUREMENT_FIELDS,
   buildGrowthPayload,
+  compareGrowthToAverage,
+  computeGrowthAverages,
   emptyGrowthForm,
   growthRlsHint,
+  growthVsAverageColor,
   hasGrowthMeasurement,
+  pickLatestGrowthByTree,
   trunkMmToCm,
 } from '../../utils/treeGrowth';
 
+function chipColor(status) {
+  if (status === 'low') return 'warning';
+  if (status === 'good' || status === 'ok') return 'success';
+  return 'default';
+}
+
+function combineCanopyStatus(nsStatus, ewStatus) {
+  if (nsStatus === 'low' || ewStatus === 'low') return { status: 'low', label: 'Below avg' };
+  if (nsStatus === 'unknown' && ewStatus === 'unknown') return { status: 'unknown', label: '' };
+  if (nsStatus === 'good' || ewStatus === 'good') return { status: 'good', label: 'Above avg' };
+  return { status: 'ok', label: 'At avg' };
+}
+
+function GrowthMetricCard({ label, value, average, comparison }) {
+  const status = comparison?.status || 'unknown';
+  return (
+    <Paper sx={{ p: 2, textAlign: 'center' }} variant="outlined">
+      <Typography variant="caption" color="text.secondary">{label}</Typography>
+      <Typography
+        variant="h5"
+        sx={{
+          fontWeight: 700,
+          color: status !== 'unknown' ? growthVsAverageColor(status) : undefined,
+        }}
+      >
+        {value}
+      </Typography>
+      {comparison?.label ? (
+        <Chip size="small" color={chipColor(status)} label={comparison.label} sx={{ mt: 0.75 }} />
+      ) : null}
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+        Farm avg: {average}
+      </Typography>
+    </Paper>
+  );
+}
+
 function GrowthTab({ tree }) {
-  const [records, setRecords] = useState([]);
+  const [allRecords, setAllRecords] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState(null);
-  const [latest, setLatest] = useState(null);
   const [form, setForm] = useState(emptyGrowthForm());
 
   const fetchRecords = useCallback(async () => {
@@ -29,23 +69,42 @@ function GrowthTab({ tree }) {
     const { data, error } = await supabase
       .from('tree_growth')
       .select('*')
-      .eq('tree_id', tree.id)
       .order('measurement_date', { ascending: true });
 
     if (error) {
       setMessage({ type: 'error', text: growthRlsHint(error.message) });
-      setRecords([]);
-      setLatest(null);
+      setAllRecords([]);
     } else {
-      setRecords(data || []);
-      setLatest(data?.[data.length - 1] || null);
+      setAllRecords(data || []);
     }
     setLoading(false);
-  }, [tree.id]);
+  }, []);
 
   useEffect(() => {
     fetchRecords();
   }, [fetchRecords]);
+
+  const records = useMemo(
+    () => allRecords.filter((r) => r.tree_id === tree.id),
+    [allRecords, tree.id]
+  );
+  const latest = records[records.length - 1] || null;
+  const averages = useMemo(
+    () => computeGrowthAverages(pickLatestGrowthByTree(allRecords)),
+    [allRecords]
+  );
+
+  const heightCm = latest?.height_cm != null ? Number(latest.height_cm) : null;
+  const trunkCm = trunkMmToCm(latest?.trunk_diameter_mm);
+  const canopyNs = latest?.canopy_ns_cm != null ? Number(latest.canopy_ns_cm) : null;
+  const canopyEw = latest?.canopy_ew_cm != null ? Number(latest.canopy_ew_cm) : null;
+
+  const heightComparison = compareGrowthToAverage(heightCm, averages.height);
+  const trunkComparison = compareGrowthToAverage(trunkCm, averages.trunk);
+  const canopyComparison = combineCanopyStatus(
+    compareGrowthToAverage(canopyNs, averages.canopyNs).status,
+    compareGrowthToAverage(canopyEw, averages.canopyEw).status,
+  );
 
   const chartData = records.map((r) => ({
     date: new Date(r.measurement_date).toLocaleDateString('en-IN', { month: 'short', year: '2-digit' }),
@@ -91,30 +150,36 @@ function GrowthTab({ tree }) {
 
       <Grid container spacing={2} sx={{ mb: 3 }}>
         <Grid item xs={12} md={4}>
-          <Paper sx={{ p: 2, textAlign: 'center' }} variant="outlined">
-            <Typography variant="caption">Height</Typography>
-            <Typography variant="h5">
-              {latest?.height_cm != null ? `${formatNumber(Number(latest.height_cm) / 100, 2)} m` : '—'}
-            </Typography>
-          </Paper>
+          <GrowthMetricCard
+            label="Height"
+            value={heightCm != null ? `${formatNumber(heightCm / 100, 2)} m` : '—'}
+            average={averages.height != null ? `${formatNumber(averages.height / 100, 2)} m` : '—'}
+            comparison={heightComparison}
+          />
         </Grid>
         <Grid item xs={12} md={4}>
-          <Paper sx={{ p: 2, textAlign: 'center' }} variant="outlined">
-            <Typography variant="caption">Trunk diameter</Typography>
-            <Typography variant="h5">
-              {latest?.trunk_diameter_mm != null ? `${formatNumber(trunkMmToCm(latest.trunk_diameter_mm), 1)} cm` : '—'}
-            </Typography>
-          </Paper>
+          <GrowthMetricCard
+            label="Trunk diameter"
+            value={trunkCm != null ? `${formatNumber(trunkCm, 1)} cm` : '—'}
+            average={averages.trunk != null ? `${formatNumber(averages.trunk, 1)} cm` : '—'}
+            comparison={trunkComparison}
+          />
         </Grid>
         <Grid item xs={12} md={4}>
-          <Paper sx={{ p: 2, textAlign: 'center' }} variant="outlined">
-            <Typography variant="caption">Canopy (N-S × E-W)</Typography>
-            <Typography variant="h5">
-              {latest?.canopy_ns_cm && latest?.canopy_ew_cm
-                ? `${formatNumber(Number(latest.canopy_ns_cm) / 100, 1)} × ${formatNumber(Number(latest.canopy_ew_cm) / 100, 1)} m`
-                : '—'}
-            </Typography>
-          </Paper>
+          <GrowthMetricCard
+            label="Canopy (N-S × E-W)"
+            value={
+              canopyNs != null && canopyEw != null
+                ? `${formatNumber(canopyNs / 100, 1)} × ${formatNumber(canopyEw / 100, 1)} m`
+                : '—'
+            }
+            average={
+              averages.canopyNs != null && averages.canopyEw != null
+                ? `${formatNumber(averages.canopyNs / 100, 1)} × ${formatNumber(averages.canopyEw / 100, 1)} m`
+                : '—'
+            }
+            comparison={canopyNs != null && canopyEw != null ? canopyComparison : { status: 'unknown', label: '' }}
+          />
         </Grid>
       </Grid>
 
