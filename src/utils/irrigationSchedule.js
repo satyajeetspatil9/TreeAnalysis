@@ -41,6 +41,7 @@ export const OPEN_JOB_STATUSES = [
   'running',
   'paused_outside_window',
   'paused_no_power',
+  'paused_manual',
 ];
 
 /** Controller terminals: X0–X8 sense inputs, Y0–Y8 driven outputs. */
@@ -59,6 +60,9 @@ export function isMissingScheduleTable(error) {
 
 export function scheduleTableHint(message) {
   if (!message) return message;
+  if (/skip_if_rain/.test(message) || /paused_manual/.test(message)) {
+    return `${message} Run migration 052_irrigation_pause_and_skip_rain.sql in Supabase SQL Editor.`;
+  }
   if (/irrigation_power_status/.test(message)
     || /paused_no_power/.test(message)
     || /max_duration_minutes/.test(message)
@@ -698,6 +702,73 @@ export async function pauseOpenIrrigationJobs(farmId, { exceptJobId = null, reas
   return { error: updateError || null, pausedIds: ids };
 }
 
+/** Minutes the job has been on, including the current running stretch. */
+export function jobElapsedMinutes(job, now = new Date()) {
+  const banked = Number(job?.duration_elapsed_minutes) || 0;
+  if (job?.status !== 'running' || !job?.started_at) return banked;
+  const since = (now.getTime() - new Date(job.started_at).getTime()) / 60000;
+  return banked + Math.max(0, since);
+}
+
+/** Stop hardware and hold the job until the operator resumes it. */
+export async function pauseIrrigationJob(farmId, job) {
+  if (!job?.id) return { error: { message: 'No irrigation job to pause.' } };
+  if (job.status !== 'running') {
+    return { error: { message: 'Only a running program can be paused.' } };
+  }
+
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const codes = await fetchJobTerminalCodes(farmId, job);
+  if (codes.length) {
+    await enqueueIrrigationCommand({
+      farmId,
+      deviceCodes: codes,
+      action: 'stop',
+      jobId: job.id,
+      zoneId: job.zone_id,
+      payload: { reason: 'paused_manual' },
+    });
+  }
+  if (job.zone_id) {
+    await supabase.from('irrigation_zone_status').update({
+      pending_command: 'stop',
+      pending_command_at: nowIso,
+      updated_at: nowIso,
+    }).eq('zone_id', job.zone_id);
+  }
+
+  const { error } = await supabase
+    .from('irrigation_jobs')
+    .update({
+      status: 'paused_manual',
+      duration_elapsed_minutes: Number(jobElapsedMinutes(job, now).toFixed(2)),
+      liters_baseline: null,
+      updated_at: nowIso,
+    })
+    .eq('id', job.id);
+
+  return { error };
+}
+
+/** Put a manually paused job back in the queue for the scheduler to start. */
+export async function resumeIrrigationJob(job) {
+  if (!job?.id) return { error: { message: 'No irrigation job to resume.' } };
+  if (job.status !== 'paused_manual') {
+    return { error: { message: 'Only a paused program can be resumed.' } };
+  }
+
+  const { error } = await supabase
+    .from('irrigation_jobs')
+    .update({
+      status: 'planned',
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', job.id);
+
+  return { error };
+}
+
 export async function updateIrrigationJob(jobId, { zoneId, targetLiters, onDurationMinutes }) {
   const patch = { updated_at: new Date().toISOString() };
   if (zoneId != null) patch.zone_id = zoneId;
@@ -765,6 +836,7 @@ export function jobStatusLabel(status) {
   if (status === 'planned') return 'Waiting its turn';
   if (status === 'paused_outside_window') return 'Waiting';
   if (status === 'paused_no_power') return 'Paused — no mains power';
+  if (status === 'paused_manual') return 'Paused';
   if (status === 'completed') return 'Done';
   if (status === 'cancelled') return 'Cancelled';
   return status || '—';

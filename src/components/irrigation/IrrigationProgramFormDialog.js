@@ -7,7 +7,9 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  Checkbox,
   FormControl,
+  FormControlLabel,
   FormHelperText,
   FormLabel,
   Grid,
@@ -330,6 +332,21 @@ export default function IrrigationProgramFormDialog({
                 )}
               </Grid>
             </FormControl>
+          </Grid>
+
+          <Grid item xs={12}>
+            <FormControlLabel
+              control={(
+                <Checkbox
+                  checked={Boolean(form.skip_if_rain)}
+                  onChange={(e) => setForm((f) => ({ ...f, skip_if_rain: e.target.checked }))}
+                />
+              )}
+              label="Skip start if rain detected in Climate"
+            />
+            <Typography variant="caption" color="text.secondary" display="block" sx={{ ml: 4, mt: -0.5 }}>
+              When checked, this program will not start if rainfall is above 0 mm. Water now still runs.
+            </Typography>
           </Grid>
 
           <Grid item xs={12}>

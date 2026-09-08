@@ -15,7 +15,13 @@ const COMMAND_TTL_MINUTES = 30;
 /** Liter targets with no metering get a run-time cap of estimate x this. */
 const LITERS_CAP_SAFETY = 1.5;
 
-const OPEN_STATUSES = ['planned', 'running', 'paused_outside_window', 'paused_no_power'];
+const OPEN_STATUSES = [
+  'planned',
+  'running',
+  'paused_outside_window',
+  'paused_no_power',
+  'paused_manual',
+];
 const TERMINAL_PATTERN = /^[XY]\d+$/;
 
 type Supabase = ReturnType<typeof createClient>;
@@ -240,6 +246,52 @@ function elapsedMinutes(job: Job, now: Date) {
   return banked + Math.max(0, since);
 }
 
+function programSkipsIfRain(program: Job | undefined) {
+  if (!program) return false;
+  if (program.skip_if_rain != null) return Boolean(program.skip_if_rain);
+  return program.program_type !== 'fertigation';
+}
+
+/** Same rain signal as Climate: weather_observations first, else Open-Meteo current precipitation. */
+async function farmHasRain(supabase: Supabase, farmId: number) {
+  const { data: weather } = await supabase
+    .from('weather_observations')
+    .select('rainfall_mm')
+    .eq('farm_id', farmId)
+    .order('observed_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (weather && weather.rainfall_mm != null && weather.rainfall_mm !== '') {
+    return Number(weather.rainfall_mm) > 0;
+  }
+
+  const { data: farm } = await supabase
+    .from('farms')
+    .select('latitude, longitude')
+    .eq('id', farmId)
+    .maybeSingle();
+
+  const lat = Number(farm?.latitude);
+  const lng = Number(farm?.longitude);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
+
+  try {
+    const params = new URLSearchParams({
+      latitude: String(lat),
+      longitude: String(lng),
+      current: 'precipitation',
+      timezone: FARM_TZ,
+    });
+    const response = await fetch(`https://api.open-meteo.com/v1/forecast?${params.toString()}`);
+    if (!response.ok) return false;
+    const payload = await response.json();
+    return Number(payload?.current?.precipitation) > 0;
+  } catch {
+    return false;
+  }
+}
+
 function stepFieldsFor(step: Job, isFertigation: boolean, zone: Job | undefined) {
   const cap = capMinutesFor(step, zone);
   const duration = Number(step?.on_duration_minutes);
@@ -372,6 +424,12 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
   const zonePendingPatches = new Map<number, string>();
   const todayProgramJobs = [...(todayProgramJobsRows || [])];
 
+  let rainCache: boolean | null = null;
+  const raining = async () => {
+    if (rainCache == null) rainCache = await farmHasRain(supabase, farmId);
+    return rainCache;
+  };
+
   const programHasJobToday = (programId: number) => (
     todayProgramJobs.some((j) => Number(j.program_id) === Number(programId) && j.status !== 'cancelled')
   );
@@ -489,6 +547,11 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
         .find((m) => m < 24 * 60 && nowMin >= m && nowMin < m + START_GRACE_MINUTES);
       if (dueMin == null) continue;
 
+      if (programSkipsIfRain(program) && await raining()) {
+        actions.push(`skipped_rain:${program.id}`);
+        continue;
+      }
+
       const scheduledFor = scheduledForOf(minutesToClock(dueMin));
 
       const programSteps = activeStepsOf(steps || [], Number(program.id));
@@ -576,9 +639,11 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
     return Number(a.id) - Number(b.id);
   });
 
-  const primary = sortedOpen.find((j) => j.job_type === 'manual')
-    || sortedOpen.find((j) => j.status === 'running')
-    || sortedOpen[0]
+  const startable = sortedOpen.filter((j) => j.status !== 'paused_manual');
+
+  const primary = startable.find((j) => j.job_type === 'manual')
+    || startable.find((j) => j.status === 'running')
+    || startable[0]
     || null;
 
   for (const job of sortedOpen) {
@@ -673,6 +738,20 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
     }
 
     if (job.status === 'running') continue;
+    if (job.status === 'paused_manual') continue;
+
+    const program = job.program_id
+      ? (programs || []).find((p) => Number(p.id) === Number(job.program_id))
+      : undefined;
+    if (programSkipsIfRain(program) && await raining()) {
+      patchJob(job, {
+        status: 'cancelled',
+        completed_at: now.toISOString(),
+        liters_baseline: null,
+      });
+      actions.push(`cancelled_rain:${job.id}`);
+      continue;
+    }
 
     // Start or resume. Every terminal gets its own row with its own stop rule.
     if (!codes.length) {

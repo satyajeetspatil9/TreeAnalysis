@@ -126,7 +126,10 @@ function highMoistureThreeDays(soilRows) {
 
 export async function loadFarmClimateSnapshot(supabase, farm, trees = [], crop = 'Mango') {
   const gps = farmGpsFromSources(farm, trees);
-  const seasonStart = farm?.gdd_season_start || defaultGddSeasonStart();
+  const storedStart = farm?.gdd_season_start;
+  const seasonStart = storedStart && !String(storedStart).endsWith('-01-01')
+    ? storedStart
+    : defaultGddSeasonStart();
   const today = new Date().toISOString().slice(0, 10);
 
   const weatherQuery = farm?.id

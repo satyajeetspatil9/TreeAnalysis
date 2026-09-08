@@ -25,6 +25,7 @@ import {
   fetchGpsSatelliteStats,
   runWeeklyGpsSatelliteRefresh,
 } from '../../utils/treeGpsSatelliteCache';
+import { defaultGddSeasonStart } from '../../utils/farmClimateApi';
 
 const emptyFarmForm = {
   name: '',
@@ -67,7 +68,9 @@ function SettingsPage() {
         area_acres: farm.area_acres ?? '',
         latitude: farm.latitude ?? '',
         longitude: farm.longitude ?? '',
-        gdd_season_start: farm.gdd_season_start || '',
+        gdd_season_start: farm.gdd_season_start && !String(farm.gdd_season_start).endsWith('-01-01')
+          ? farm.gdd_season_start
+          : defaultGddSeasonStart(),
       });
     } else {
       setFarmForm(emptyFarmForm);
@@ -297,7 +300,7 @@ function SettingsPage() {
       area_acres: farmForm.area_acres !== '' ? Number(farmForm.area_acres) : null,
       latitude: farmForm.latitude !== '' ? Number(farmForm.latitude) : null,
       longitude: farmForm.longitude !== '' ? Number(farmForm.longitude) : null,
-      gdd_season_start: farmForm.gdd_season_start || null,
+      gdd_season_start: farmForm.gdd_season_start || defaultGddSeasonStart(),
     };
 
     if (farm) {
@@ -445,7 +448,7 @@ function SettingsPage() {
                   InputLabelProps={{ shrink: true }}
                   value={farmForm.gdd_season_start}
                   onChange={(e) => setFarmForm({ ...farmForm, gdd_season_start: e.target.value })}
-                  helperText="Climate accumulating degree-days from this date (default 1 Jan)."
+                  helperText="Climate accumulating degree-days from this date (default 1 September)."
                 />
               </Grid>
             </Grid>

@@ -31,6 +31,7 @@ import StopIcon from '@mui/icons-material/Stop';
 import ElectricBoltIcon from '@mui/icons-material/ElectricBolt';
 import SpeedIcon from '@mui/icons-material/Speed';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import PauseIcon from '@mui/icons-material/Pause';
 import PauseCircleOutlineIcon from '@mui/icons-material/PauseCircleOutline';
 import { supabase } from '../../supabaseClient';
 import { useFarm } from '../../hooks/useFarm';
@@ -62,7 +63,9 @@ import {
   expandQueuedCommands,
   fetchPowerStatus,
   formatEstimatedDuration,
+  pauseIrrigationJob,
   powerStatusLabel,
+  scheduleTableHint,
   sendZoneControlCommand,
 } from '../../utils/irrigationSchedule';
 
@@ -213,7 +216,7 @@ function IrrigationDashboardPage() {
         .limit(50),
       supabase
         .from('irrigation_jobs')
-        .select('id, zone_id, job_type, program_id, status')
+        .select('id, zone_id, job_type, program_id, status, started_at, duration_elapsed_minutes')
         .eq('farm_id', farm.id)
         .in('job_type', ['water', 'fertigation', 'manual'])
         .in('status', OPEN_JOB_STATUSES),
@@ -337,6 +340,16 @@ function IrrigationDashboardPage() {
   const counts = useMemo(() => countIrrigationStatusRows(rows), [rows]);
   const activeZones = useMemo(() => rows.filter((row) => row.isIrrigating), [rows]);
   const activeZone = activeZones[0] || null;
+  const runningJob = useMemo(
+    () => (programJobs || []).find((job) => job.status === 'running') || null,
+    [programJobs],
+  );
+  const runningJobZone = useMemo(
+    () => (runningJob?.zone_id
+      ? (rows || []).find((row) => Number(row.zone.id) === Number(runningJob.zone_id))
+      : null),
+    [rows, runningJob],
+  );
   const controlRow = useMemo(
     () => rows.find((row) => String(row.zone.id) === String(controlZoneId)) || rows[0] || null,
     [rows, controlZoneId],
@@ -391,6 +404,29 @@ function IrrigationDashboardPage() {
       return;
     }
     setMessage({ type: 'success', text: `Stop sent to ${row.zone.zone_code}.` });
+    await load();
+  };
+
+  const pauseRunningProgram = async () => {
+    if (!farm?.id || !runningJob) return;
+    setCommanding(true);
+    setMessage(null);
+    const paused = await pauseIrrigationJob(farm.id, runningJob);
+    setCommanding(false);
+    if (paused.error) {
+      setMessage({
+        type: 'error',
+        text: scheduleTableHint(paused.error.message || String(paused.error)),
+      });
+      return;
+    }
+    const zoneCode = runningJobZone?.zone?.zone_code;
+    setMessage({
+      type: 'success',
+      text: zoneCode
+        ? `Paused the running program on ${zoneCode}. Resume it from the Programs tab.`
+        : 'Paused the running program. Resume it from the Programs tab.',
+    });
     await load();
   };
 
@@ -662,18 +698,33 @@ function IrrigationDashboardPage() {
                 )}
               </Box>
 
-              {activeZone && (
-                <Button
-                  color="error"
-                  variant="contained"
-                  startIcon={<StopIcon />}
-                  sx={{ mt: 2 }}
-                  disabled={commanding}
-                  onClick={() => stopWatering(activeZone)}
-                >
-                  Stop watering {activeZone.zone.zone_code}
-                </Button>
-              )}
+              <Box sx={{ display: 'flex', gap: 1, mt: 2, flexWrap: 'wrap' }}>
+                {runningJob && (
+                  <Button
+                    color="warning"
+                    variant="contained"
+                    startIcon={<PauseIcon />}
+                    disabled={commanding}
+                    onClick={pauseRunningProgram}
+                  >
+                    Pause program
+                    {runningJobZone?.zone?.zone_code
+                      ? ` (${runningJobZone.zone.zone_code}${runningJob.job_type === 'fertigation' ? ', fertigation' : ''})`
+                      : ''}
+                  </Button>
+                )}
+                {activeZone && (
+                  <Button
+                    color="error"
+                    variant="contained"
+                    startIcon={<StopIcon />}
+                    disabled={commanding}
+                    onClick={() => stopWatering(activeZone)}
+                  >
+                    Stop watering {activeZone.zone.zone_code}
+                  </Button>
+                )}
+              </Box>
             </Paper>
 
             <Paper variant="outlined" sx={{ p: { xs: 2, sm: 3 }, mb: 3 }}>

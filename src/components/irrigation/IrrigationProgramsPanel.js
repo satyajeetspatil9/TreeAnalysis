@@ -36,6 +36,8 @@ import {
   OPEN_JOB_STATUSES,
   createAdHocVolumeJob,
   deleteIrrigationJob,
+  pauseIrrigationJob,
+  resumeIrrigationJob,
   estimateMinutesFromLiters,
   estimateProgramMinutes,
   formatEstimatedDuration,
@@ -72,6 +74,7 @@ function IrrigationProgramsPanel({
     motor_device_ids: [],
     steps: [emptyStep(0)],
     injector_ids: [],
+    skip_if_rain: programType !== 'fertigation',
   });
   const [jobForm, setJobForm] = useState({
     zone_id: '',
@@ -175,6 +178,7 @@ function IrrigationProgramsPanel({
       motor_device_ids: defaultMotorIds(),
       steps: [emptyStep(0)],
       injector_ids: programType === 'fertigation' ? defaultInjectorIds() : [],
+      skip_if_rain: programType !== 'fertigation',
     });
     setDialogOpen(true);
   };
@@ -201,6 +205,9 @@ function IrrigationProgramsPanel({
       motor_device_ids: program.motor_device_ids || [],
       steps: steps.length ? steps : [emptyStep(0)],
       injector_ids: (program.irrigation_program_devices || []).map((d) => d.device_id),
+      skip_if_rain: program.skip_if_rain != null
+        ? Boolean(program.skip_if_rain)
+        : programType !== 'fertigation',
     });
     setDialogOpen(true);
   };
@@ -248,6 +255,7 @@ function IrrigationProgramsPanel({
       days_of_week: form.days_of_week,
       start_times: form.start_times.filter(Boolean).map((t) => `${timeToInputValue(t)}:00`),
       motor_device_ids: form.motor_device_ids,
+      skip_if_rain: Boolean(form.skip_if_rain),
       updated_at: new Date().toISOString(),
     };
 
@@ -512,6 +520,30 @@ function IrrigationProgramsPanel({
     await load();
   };
 
+  const pauseJob = async (job) => {
+    setJobBusy(true);
+    const { error } = await pauseIrrigationJob(farmId, job);
+    setJobBusy(false);
+    if (error) {
+      setMessage({ type: 'error', text: scheduleTableHint(error.message) });
+      return;
+    }
+    setMessage({ type: 'success', text: 'Program paused. Resume when you want it to continue.' });
+    await load();
+  };
+
+  const resumeJob = async (job) => {
+    setJobBusy(true);
+    const { error } = await resumeIrrigationJob(job);
+    setJobBusy(false);
+    if (error) {
+      setMessage({ type: 'error', text: scheduleTableHint(error.message) });
+      return;
+    }
+    setMessage({ type: 'success', text: 'Program queued to resume. It will start on the next scheduler tick.' });
+    await load();
+  };
+
   const formatSteps = (steps) => (
     (steps || []).map((step) => {
       const zone = (zones || []).find((z) => z.id === step.zone_id);
@@ -685,7 +717,13 @@ function IrrigationProgramsPanel({
                     <TableCell>
                       <Chip
                         size="small"
-                        color={isManual ? 'warning' : (job.status === 'running' ? 'success' : 'default')}
+                        color={
+                          isManual
+                            ? 'warning'
+                            : (job.status === 'running'
+                              ? 'success'
+                              : (job.status === 'paused_manual' ? 'warning' : 'default'))
+                        }
                         label={jobStatusLabel(job.status)}
                       />
                     </TableCell>
@@ -694,6 +732,12 @@ function IrrigationProgramsPanel({
                       {est != null ? ` · about ${formatEstimatedDuration(est)}` : ''}
                     </TableCell>
                     <TableCell align="right">
+                      {job.status === 'running' && (
+                        <Button size="small" onClick={() => pauseJob(job)} disabled={jobBusy}>Pause</Button>
+                      )}
+                      {job.status === 'paused_manual' && (
+                        <Button size="small" onClick={() => resumeJob(job)} disabled={jobBusy}>Resume</Button>
+                      )}
                       <Button size="small" onClick={() => openEditJob(job)} disabled={jobBusy}>Modify</Button>
                       <Button size="small" color="error" onClick={() => removeJob(job)} disabled={jobBusy}>Delete</Button>
                     </TableCell>
@@ -718,13 +762,14 @@ function IrrigationProgramsPanel({
               <TableCell>{programType === 'fertigation' ? 'Zones & minutes' : 'Zones & liters'}</TableCell>
               <TableCell>Time</TableCell>
               <TableCell>On</TableCell>
+              <TableCell>Skip rain</TableCell>
               <TableCell align="right">Actions</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {programs.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={programType === 'fertigation' ? 10 : 9}>
+                <TableCell colSpan={programType === 'fertigation' ? 11 : 10}>
                   <Typography color="text.secondary">
                     {programType === 'fertigation'
                       ? 'No fertigation programs yet.'
@@ -768,6 +813,11 @@ function IrrigationProgramsPanel({
                       onChange={() => toggleActive(program)}
                       inputProps={{ 'aria-label': 'Active' }}
                     />
+                  </TableCell>
+                  <TableCell>
+                    {program.skip_if_rain != null
+                      ? (program.skip_if_rain ? 'Yes' : 'No')
+                      : (programType !== 'fertigation' ? 'Yes' : 'No')}
                   </TableCell>
                   <TableCell align="right">
                     <Button size="small" onClick={() => openEdit(program)}>Edit</Button>

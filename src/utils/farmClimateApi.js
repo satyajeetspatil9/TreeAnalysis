@@ -1,7 +1,11 @@
 import { calculateDailyGDD } from './farmClimateLogic';
 
+/** Konkan mango GDD year starts 1 September. Before that date, use last 1 September. */
 export function defaultGddSeasonStart(fromDate = new Date()) {
-  return `${fromDate.getFullYear()}-01-01`;
+  const year = fromDate.getFullYear();
+  const month = fromDate.getMonth();
+  const seasonYear = month >= 8 ? year : year - 1;
+  return `${seasonYear}-09-01`;
 }
 
 export async function fetchOpenMeteoCurrent(latitude, longitude) {
