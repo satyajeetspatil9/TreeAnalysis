@@ -1,26 +1,29 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Box, Typography, Paper, Grid, TextField, Button, FormControl, InputLabel, Select, MenuItem,
-  Alert, IconButton, Table, TableBody, TableCell, TableHead, TableRow, Stack,
+  Box, Typography, Paper, Grid, FormControl, InputLabel, Select, MenuItem,
+  Alert, IconButton, Table, TableBody, TableCell, TableHead, TableRow,
 } from '@mui/material';
+import { useTheme } from '@mui/material/styles';
 import DeleteIcon from '@mui/icons-material/Delete';
-import EditIcon from '@mui/icons-material/Edit';
+import {
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
+} from 'recharts';
 import { supabase } from '../../supabaseClient';
 import { useFarm } from '../../hooks/useFarm';
 import PageHeader from '../../components/common/PageHeader';
-import { calcIrrigationWaterLiters, formatWaterLiters } from '../../utils/irrigation';
+import { formatDate, formatNumber } from '../../utils/formatters';
 import {
-  getProductStock,
-  productStockLabel,
-  validateFertilizerStock,
-} from '../../utils/products';
-import { formatDate } from '../../utils/formatters';
+  formatWaterLiters,
+  resolveEventWaterLiters,
+  filterEventsByPeriod,
+  buildFarmFertigationChartData,
+  IRRIGATION_PERIOD_OPTIONS,
+  IRRIGATION_GROUP_OPTIONS,
+} from '../../utils/irrigation';
 import {
   deleteFertigationEvent,
-  emptyFertigationLineItem,
   formatFertilizerProductLines,
   loadFarmFertigationEvents,
-  resetFertigationForm,
 } from '../../utils/fertilizerEventMaintenance';
 
 function rlsHint(message) {
@@ -32,43 +35,17 @@ function rlsHint(message) {
   return message;
 }
 
-async function loadFertilizerProducts() {
-  const { data } = await supabase
-    .from('products')
-    .select('*, inventory(current_stock)')
-    .eq('active', true)
-    .eq('category', 'Fertilizer')
-    .order('name');
-  return data || [];
-}
-
 function FertigationPage() {
+  const theme = useTheme();
   const { farm } = useFarm();
   const [zones, setZones] = useState([]);
-  const [products, setProducts] = useState([]);
   const [events, setEvents] = useState([]);
-  const [form, setForm] = useState(resetFertigationForm());
-  const [fertilizers, setFertilizers] = useState([emptyFertigationLineItem()]);
-  const [editingId, setEditingId] = useState(null);
-  const [nutrients, setNutrients] = useState(null);
   const [message, setMessage] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [period, setPeriod] = useState('180d');
+  const [grouping, setGrouping] = useState('week');
 
   const zoneIds = useMemo(() => zones.map((z) => z.id), [zones]);
-
-  const selectedZone = useMemo(
-    () => zones.find((z) => String(z.id) === form.zone_id),
-    [zones, form.zone_id]
-  );
-
-  const estimatedWater = useMemo(
-    () => calcIrrigationWaterLiters(selectedZone?.flow_rate_lph, form.duration_minutes),
-    [selectedZone, form.duration_minutes]
-  );
-
-  const reloadProducts = async () => {
-    setProducts(await loadFertilizerProducts());
-  };
 
   const reloadEvents = useCallback(async () => {
     if (!zoneIds.length) {
@@ -86,7 +63,6 @@ function FertigationPage() {
     async function load() {
       if (!farm) {
         setZones([]);
-        setProducts([]);
         setEvents([]);
         return;
       }
@@ -96,7 +72,6 @@ function FertigationPage() {
         .eq('farm_id', farm.id)
         .order('zone_code');
       setZones(zonesData || []);
-      await reloadProducts();
     }
     load();
   }, [farm]);
@@ -105,46 +80,15 @@ function FertigationPage() {
     reloadEvents();
   }, [reloadEvents]);
 
-  const resetFormState = () => {
-    setEditingId(null);
-    setForm(resetFertigationForm());
-    setFertilizers([emptyFertigationLineItem()]);
-    setNutrients(null);
-  };
+  const filteredEvents = useMemo(
+    () => filterEventsByPeriod(events, period),
+    [events, period],
+  );
 
-  const calculateNutrients = () => {
-    const supplied = { N: 0, K: 0, Mg: 0 };
-    fertilizers.forEach((f) => {
-      const product = products.find((p) => String(p.id) === String(f.product_id));
-      if (!product || !f.quantity) return;
-      const qty = Number(f.quantity);
-      const profile = product.nutrient_composition || {};
-      supplied.N += qty * (Number(profile.N) || 0) / 100;
-      supplied.K += qty * (Number(profile.K) || 0) / 100;
-      supplied.Mg += qty * (Number(profile.Mg) || 0) / 100;
-    });
-    setNutrients(supplied);
-  };
-
-  const startEdit = (event) => {
-    setEditingId(event.id);
-    setForm({
-      zone_id: String(event.zone_id),
-      event_date: event.event_date,
-      duration_minutes: String(event.duration_minutes ?? ''),
-    });
-    setFertilizers(
-      (event.fertigation_products || []).length
-        ? event.fertigation_products.map((row) => ({
-          product_id: String(row.product_id),
-          quantity: String(row.quantity),
-        }))
-        : [emptyFertigationLineItem()]
-    );
-    setNutrients(null);
-    setMessage(null);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
+  const chartData = useMemo(
+    () => buildFarmFertigationChartData(filteredEvents, grouping),
+    [filteredEvents, grouping],
+  );
 
   const handleDelete = async (event) => {
     const label = `${formatDate(event.event_date)} · ${event.irrigation_zones?.zone_code || 'Zone'}`;
@@ -159,91 +103,9 @@ function FertigationPage() {
       return;
     }
 
-    if (editingId === event.id) resetFormState();
-    await reloadProducts();
     await reloadEvents();
     setMessage({ type: 'success', text: 'Fertigation record deleted. Stock restored.' });
     setSaving(false);
-  };
-
-  const handleApply = async () => {
-    if (!form.zone_id) {
-      setMessage({ type: 'error', text: 'Select irrigation zone.' });
-      return;
-    }
-    if (!form.duration_minutes) {
-      setMessage({ type: 'error', text: 'Enter duration (minutes).' });
-      return;
-    }
-    if (!selectedZone?.flow_rate_lph) {
-      setMessage({
-        type: 'error',
-        text: 'This zone has no flow rate. Set it under Irrigation → Zones first.',
-      });
-      return;
-    }
-
-    const stockCheck = validateFertilizerStock(products, fertilizers);
-    if (!stockCheck.ok) {
-      setMessage({ type: 'error', text: stockCheck.message });
-      return;
-    }
-
-    setSaving(true);
-    setMessage(null);
-    const wasEditing = editingId;
-    try {
-      if (editingId) {
-        const { error: deleteError } = await deleteFertigationEvent(supabase, editingId);
-        if (deleteError) throw deleteError;
-      }
-
-      const waterLiters = calcIrrigationWaterLiters(selectedZone.flow_rate_lph, form.duration_minutes);
-
-      const { data: event, error: eventError } = await supabase
-        .from('fertigation_events')
-        .insert([{
-          zone_id: Number(form.zone_id),
-          event_date: form.event_date,
-          duration_minutes: Number(form.duration_minutes),
-          water_liters: waterLiters,
-        }])
-        .select()
-        .single();
-
-      if (eventError) throw eventError;
-
-      const lineItems = fertilizers
-        .filter((f) => f.product_id && f.quantity)
-        .map((f) => {
-          const product = products.find((p) => String(p.id) === String(f.product_id));
-          return {
-            fertigation_event_id: event.id,
-            product_id: Number(f.product_id),
-            quantity: Number(f.quantity),
-            unit: product?.unit || 'kg',
-          };
-        });
-
-      if (lineItems.length > 0) {
-        const { error: productsError } = await supabase.from('fertigation_products').insert(lineItems);
-        if (productsError) throw productsError;
-      }
-
-      await reloadProducts();
-      await reloadEvents();
-      resetFormState();
-      setMessage({
-        type: 'success',
-        text: wasEditing
-          ? 'Fertigation updated. Stock and costs recalculated.'
-          : `Fertigation applied (${formatWaterLiters(waterLiters)}). Stock deducted from inventory.`,
-      });
-    } catch (err) {
-      setMessage({ type: 'error', text: rlsHint(err.message) });
-    } finally {
-      setSaving(false);
-    }
   };
 
   return (
@@ -251,147 +113,88 @@ function FertigationPage() {
       <PageHeader
         section="Monitoring"
         title="Fertigation"
-        subtitle="Apply fertilizer through drip. Products are deducted from Inventory stock."
+        subtitle="Fertilizer applied through drip from programs and logged events."
       />
 
       {message && <Alert severity={message.type} sx={{ mb: 2 }} onClose={() => setMessage(null)}>{message.text}</Alert>}
 
       {!farm && (
-        <Alert severity="info" sx={{ mb: 2 }}>Create a farm in Settings before recording fertigation.</Alert>
+        <Alert severity="info" sx={{ mb: 2 }}>Create a farm in Settings before viewing fertigation.</Alert>
       )}
 
       <Paper sx={{ p: 3, mb: 3 }} variant="outlined">
-        {editingId && (
-          <Alert severity="info" sx={{ mb: 2 }}>
-            Editing fertigation record #{editingId}. Saving replaces the old record and recalculates stock/cost.
-            <Button size="small" sx={{ ml: 2 }} onClick={resetFormState}>Cancel edit</Button>
-          </Alert>
-        )}
-
-        <Grid container spacing={2}>
-          <Grid item xs={12} md={3}>
-            <FormControl fullWidth required disabled={!farm}>
-              <InputLabel>Irrigation Zone</InputLabel>
-              <Select
-                value={form.zone_id}
-                label="Irrigation Zone"
-                onChange={(e) => setForm({ ...form, zone_id: e.target.value })}
-              >
-                {zones.map((z) => <MenuItem key={z.id} value={String(z.id)}>{z.zone_code}</MenuItem>)}
+        <Typography variant="h6" gutterBottom>Fertigation applied</Typography>
+        <Grid container spacing={2} sx={{ mb: 2 }}>
+          <Grid item xs={12} sm={6} md={3}>
+            <FormControl fullWidth size="small">
+              <InputLabel>Period</InputLabel>
+              <Select label="Period" value={period} onChange={(e) => setPeriod(e.target.value)}>
+                {IRRIGATION_PERIOD_OPTIONS.map((o) => (
+                  <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>
+                ))}
               </Select>
             </FormControl>
           </Grid>
-          <Grid item xs={12} md={3}>
-            <TextField
-              label="Date"
-              type="date"
-              fullWidth
-              required
-              InputLabelProps={{ shrink: true }}
-              value={form.event_date}
-              onChange={(e) => setForm({ ...form, event_date: e.target.value })}
-            />
-          </Grid>
-          <Grid item xs={12} md={3}>
-            <TextField
-              label="Duration (min)"
-              type="number"
-              fullWidth
-              required
-              value={form.duration_minutes}
-              onChange={(e) => setForm({ ...form, duration_minutes: e.target.value })}
-              helperText={
-                selectedZone?.flow_rate_lph
-                  ? `Zone flow: ${selectedZone.flow_rate_lph} L/hr`
-                  : form.zone_id
-                    ? 'Set flow rate on Irrigation → Zones'
-                    : undefined
-              }
-            />
-          </Grid>
-          <Grid item xs={12} md={3}>
-            <TextField
-              label="Estimated water (L)"
-              fullWidth
-              value={estimatedWater != null ? String(Math.round(estimatedWater)) : ''}
-              InputProps={{ readOnly: true }}
-              helperText="Auto: flow rate × duration"
-            />
+          <Grid item xs={12} sm={6} md={3}>
+            <FormControl fullWidth size="small">
+              <InputLabel>Group by</InputLabel>
+              <Select label="Group by" value={grouping} onChange={(e) => setGrouping(e.target.value)}>
+                {IRRIGATION_GROUP_OPTIONS.map((o) => (
+                  <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>
+                ))}
+              </Select>
+            </FormControl>
           </Grid>
         </Grid>
 
-        <Typography variant="h6" sx={{ mt: 3, mb: 1 }}>Fertilizers (from stock)</Typography>
-        {fertilizers.map((f, idx) => {
-          const product = products.find((p) => String(p.id) === String(f.product_id));
-          const stock = getProductStock(product);
-          return (
-            <Box
-              key={idx}
-              sx={{
-                display: 'flex',
-                flexDirection: 'row',
-                gap: 2,
-                mb: 1,
-                alignItems: 'flex-start',
-              }}
-            >
-              <FormControl fullWidth sx={{ flex: 2, minWidth: 0 }}>
-                <InputLabel>Product</InputLabel>
-                <Select
-                  value={f.product_id}
-                  label="Product"
-                  onChange={(e) => {
-                    const next = [...fertilizers];
-                    next[idx].product_id = e.target.value;
-                    setFertilizers(next);
-                  }}
-                >
-                  {products.map((p) => (
-                    <MenuItem key={p.id} value={String(p.id)} disabled={!editingId && getProductStock(p) <= 0}>
-                      {productStockLabel(p)}
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-              <TextField
-                label="Quantity"
-                type="number"
-                sx={{ flex: 1, minWidth: 120 }}
-                value={f.quantity}
-                onChange={(e) => {
-                  const next = [...fertilizers];
-                  next[idx].quantity = e.target.value;
-                  setFertilizers(next);
-                }}
-                helperText={product ? `Stock: ${stock} ${product.unit}` : 'Record purchase in Inventory first'}
-              />
-              <IconButton
-                sx={{ mt: 1, flexShrink: 0 }}
-                onClick={() => setFertilizers(fertilizers.filter((_, i) => i !== idx))}
-                disabled={fertilizers.length === 1}
-              >
-                <DeleteIcon />
-              </IconButton>
-            </Box>
-          );
-        })}
-        <Button onClick={() => setFertilizers([...fertilizers, emptyFertigationLineItem()])} sx={{ mb: 2 }}>
-          + Add Fertilizer
-        </Button>
-
-        <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-          <Button variant="outlined" onClick={calculateNutrients}>Calculate Nutrients</Button>
-          <Button variant="contained" onClick={handleApply} disabled={saving || !farm}>
-            {editingId ? 'Update fertigation' : 'Apply fertigation'}
-          </Button>
-        </Box>
-
-        {nutrients && (
-          <Paper sx={{ p: 2, mt: 2, bgcolor: 'action.hover' }}>
-            <Typography>N supplied: {nutrients.N.toFixed(2)} kg</Typography>
-            <Typography>K supplied: {nutrients.K.toFixed(2)} kg</Typography>
-            <Typography>Mg supplied: {nutrients.Mg.toFixed(2)} kg</Typography>
-          </Paper>
+        {chartData.length > 0 ? (
+          <Box sx={{ width: '100%', height: 320 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={theme.palette.divider} />
+                <XAxis dataKey="label" tick={{ fill: theme.palette.text.secondary, fontSize: 12 }} />
+                <YAxis
+                  yAxisId="water"
+                  tick={{ fill: theme.palette.text.secondary, fontSize: 12 }}
+                  label={{ value: 'Liters', angle: -90, position: 'insideLeft', fill: theme.palette.text.secondary }}
+                />
+                <YAxis
+                  yAxisId="product"
+                  orientation="right"
+                  tick={{ fill: theme.palette.text.secondary, fontSize: 12 }}
+                  label={{ value: 'Product qty', angle: 90, position: 'insideRight', fill: theme.palette.text.secondary }}
+                />
+                <Tooltip
+                  formatter={(value, name) => (
+                    name === 'Product qty'
+                      ? formatNumber(value, 2)
+                      : formatWaterLiters(value)
+                  )}
+                />
+                <Legend />
+                <Line
+                  yAxisId="water"
+                  type="monotone"
+                  dataKey="water"
+                  name="Water (L)"
+                  stroke={theme.palette.primary.main}
+                  strokeWidth={2}
+                  dot={{ r: 3 }}
+                />
+                <Line
+                  yAxisId="product"
+                  type="monotone"
+                  dataKey="productQty"
+                  name="Product qty"
+                  stroke={theme.palette.secondary.main}
+                  strokeWidth={2}
+                  dot={{ r: 3 }}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </Box>
+        ) : (
+          <Typography color="text.secondary">No fertigation events in the selected period.</Typography>
         )}
       </Paper>
 
@@ -408,25 +211,20 @@ function FertigationPage() {
             </TableRow>
           </TableHead>
           <TableBody>
-            {events.map((event) => (
-              <TableRow key={event.id} selected={editingId === event.id}>
+            {filteredEvents.map((event) => (
+              <TableRow key={event.id}>
                 <TableCell>{formatDate(event.event_date)}</TableCell>
                 <TableCell>{event.irrigation_zones?.zone_code || '—'}</TableCell>
                 <TableCell>{formatFertilizerProductLines(event.fertigation_products)}</TableCell>
-                <TableCell>{event.water_liters ? `${Math.round(event.water_liters)} L` : '—'}</TableCell>
+                <TableCell>{formatWaterLiters(resolveEventWaterLiters(event))}</TableCell>
                 <TableCell align="right">
-                  <Stack direction="row" spacing={0.5} justifyContent="flex-end">
-                    <IconButton size="small" aria-label="Edit" onClick={() => startEdit(event)} disabled={saving}>
-                      <EditIcon fontSize="small" />
-                    </IconButton>
-                    <IconButton size="small" aria-label="Delete" onClick={() => handleDelete(event)} disabled={saving}>
-                      <DeleteIcon fontSize="small" />
-                    </IconButton>
-                  </Stack>
+                  <IconButton size="small" aria-label="Delete" onClick={() => handleDelete(event)} disabled={saving}>
+                    <DeleteIcon fontSize="small" />
+                  </IconButton>
                 </TableCell>
               </TableRow>
             ))}
-            {events.length === 0 && (
+            {filteredEvents.length === 0 && (
               <TableRow><TableCell colSpan={5}>No fertigation records yet.</TableCell></TableRow>
             )}
           </TableBody>

@@ -4,13 +4,25 @@ import {
   TextField, Button, FormControl, InputLabel, Select, MenuItem, Alert, Grid,
   IconButton, Dialog, DialogTitle, DialogContent, DialogActions, DialogContentText,
 } from '@mui/material';
+import { useTheme } from '@mui/material/styles';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import {
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
+} from 'recharts';
 import { supabase } from '../../supabaseClient';
 import { useFarm } from '../../hooks/useFarm';
 import PageHeader from '../../components/common/PageHeader';
-import { formatDate } from '../../utils/formatters';
-import { calcIrrigationWaterLiters, formatWaterLiters } from '../../utils/irrigation';
+import { formatDate, formatNumber } from '../../utils/formatters';
+import {
+  calcIrrigationWaterLiters,
+  formatWaterLiters,
+  resolveEventWaterLiters,
+  filterEventsByPeriod,
+  buildFarmIrrigationChartData,
+  IRRIGATION_PERIOD_OPTIONS,
+  IRRIGATION_GROUP_OPTIONS,
+} from '../../utils/irrigation';
 
 function rlsHint(message) {
   if (!message?.includes('row-level security')) return message;
@@ -31,35 +43,27 @@ function buildEventPayload(zone, form) {
 }
 
 function IrrigationEventsPage() {
+  const theme = useTheme();
   const { farm } = useFarm();
   const [zones, setZones] = useState([]);
   const [events, setEvents] = useState([]);
-  const [form, setForm] = useState(emptyForm);
   const [editingEvent, setEditingEvent] = useState(null);
   const [editForm, setEditForm] = useState(emptyForm);
   const [deletingEvent, setDeletingEvent] = useState(null);
   const [message, setMessage] = useState(null);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
-
-  const selectedZone = useMemo(
-    () => zones.find((z) => String(z.id) === form.zone_id),
-    [zones, form.zone_id]
-  );
+  const [period, setPeriod] = useState('180d');
+  const [grouping, setGrouping] = useState('week');
 
   const editZone = useMemo(
     () => zones.find((z) => String(z.id) === editForm.zone_id),
-    [zones, editForm.zone_id]
-  );
-
-  const estimatedWater = useMemo(
-    () => calcIrrigationWaterLiters(selectedZone?.flow_rate_lph, form.duration_minutes),
-    [selectedZone, form.duration_minutes]
+    [zones, editForm.zone_id],
   );
 
   const editEstimatedWater = useMemo(
     () => calcIrrigationWaterLiters(editZone?.flow_rate_lph, editForm.duration_minutes),
-    [editZone, editForm.duration_minutes]
+    [editZone, editForm.duration_minutes],
   );
 
   const loadData = useCallback(async () => {
@@ -87,7 +91,7 @@ function IrrigationEventsPage() {
       .select('*, irrigation_zones(zone_code, flow_rate_lph)')
       .in('zone_id', zoneIds)
       .order('event_date', { ascending: false })
-      .limit(50);
+      .limit(200);
     setEvents(eventsData || []);
   }, [farm]);
 
@@ -95,33 +99,23 @@ function IrrigationEventsPage() {
     loadData();
   }, [loadData]);
 
+  const filteredEvents = useMemo(
+    () => filterEventsByPeriod(events, period),
+    [events, period],
+  );
+
+  const chartData = useMemo(
+    () => buildFarmIrrigationChartData(filteredEvents, grouping),
+    [filteredEvents, grouping],
+  );
+
   const validateEventForm = (eventForm, zone) => {
     if (!eventForm.zone_id) return 'Select a zone.';
     if (!eventForm.duration_minutes) return 'Enter duration (minutes).';
     if (!zone?.flow_rate_lph) {
-      return 'This zone has no flow rate. Set it under Irrigation → Zones first.';
+      return 'This zone has no flow rate. Set it under Farm Setting → Zones first.';
     }
     return null;
-  };
-
-  const handleSave = async () => {
-    const validationError = validateEventForm(form, selectedZone);
-    if (validationError) {
-      setMessage({ type: 'error', text: validationError });
-      return;
-    }
-
-    const waterLiters = calcIrrigationWaterLiters(selectedZone.flow_rate_lph, form.duration_minutes);
-
-    const { error } = await supabase.from('irrigation_events').insert([buildEventPayload(selectedZone, form)]);
-
-    if (error) {
-      setMessage({ type: 'error', text: rlsHint(error.message) });
-    } else {
-      setMessage({ type: 'success', text: `Irrigation recorded — ${formatWaterLiters(waterLiters)} applied.` });
-      setForm({ zone_id: form.zone_id, event_date: form.event_date, duration_minutes: '' });
-      loadData();
-    }
   };
 
   const openEdit = (event) => {
@@ -189,82 +183,93 @@ function IrrigationEventsPage() {
     <Box>
       <PageHeader
         section="Monitoring"
-        title="Irrigation Events"
-        subtitle="Record how long a zone ran. Water is calculated from zone flow rate × duration. Edit or delete past events in the table below."
+        title="Irrigation"
+        subtitle="Water applied from programs and logged events. Edit or delete rows in the table."
       />
 
       {message && <Alert severity={message.type} sx={{ mb: 2 }} onClose={() => setMessage(null)}>{message.text}</Alert>}
 
       {!farm && (
-        <Alert severity="info" sx={{ mb: 2 }}>Create a farm in Settings before recording irrigation.</Alert>
+        <Alert severity="info" sx={{ mb: 2 }}>Create a farm in Settings before viewing irrigation.</Alert>
       )}
 
-      <Paper sx={{ p: 3, mb: 3 }}>
-        <Typography variant="h6" gutterBottom>Record event</Typography>
-        <Grid container spacing={2}>
-          <Grid item xs={12} md={4}>
-            <FormControl fullWidth required disabled={!farm}>
-              <InputLabel>Zone</InputLabel>
-              <Select
-                value={form.zone_id}
-                label="Zone"
-                onChange={(e) => setForm({ ...form, zone_id: e.target.value })}
-              >
-                {zones.map((z) => (
-                  <MenuItem key={z.id} value={String(z.id)}>{z.zone_code}</MenuItem>
+      <Paper sx={{ p: 3, mb: 3 }} variant="outlined">
+        <Typography variant="h6" gutterBottom>Water applied</Typography>
+        <Grid container spacing={2} sx={{ mb: 2 }}>
+          <Grid item xs={12} sm={6} md={3}>
+            <FormControl fullWidth size="small">
+              <InputLabel>Period</InputLabel>
+              <Select label="Period" value={period} onChange={(e) => setPeriod(e.target.value)}>
+                {IRRIGATION_PERIOD_OPTIONS.map((o) => (
+                  <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>
                 ))}
               </Select>
             </FormControl>
           </Grid>
-          <Grid item xs={12} md={4}>
-            <TextField
-              label="Date"
-              type="date"
-              fullWidth
-              required
-              InputLabelProps={{ shrink: true }}
-              value={form.event_date}
-              onChange={(e) => setForm({ ...form, event_date: e.target.value })}
-            />
-          </Grid>
-          <Grid item xs={12} md={4}>
-            <TextField
-              label="Duration (min)"
-              type="number"
-              fullWidth
-              required
-              value={form.duration_minutes}
-              onChange={(e) => setForm({ ...form, duration_minutes: e.target.value })}
-              helperText={
-                selectedZone?.flow_rate_lph
-                  ? `Zone flow: ${selectedZone.flow_rate_lph} L/hr`
-                  : form.zone_id
-                    ? 'Set flow rate on Irrigation → Zones'
-                    : 'Select a zone first'
-              }
-            />
-          </Grid>
-          <Grid item xs={12} md={4}>
-            <TextField
-              label="Estimated water (L)"
-              fullWidth
-              value={estimatedWater != null ? String(Math.round(estimatedWater)) : ''}
-              InputProps={{ readOnly: true }}
-              helperText="Auto: flow rate × duration"
-            />
+          <Grid item xs={12} sm={6} md={3}>
+            <FormControl fullWidth size="small">
+              <InputLabel>Group by</InputLabel>
+              <Select label="Group by" value={grouping} onChange={(e) => setGrouping(e.target.value)}>
+                {IRRIGATION_GROUP_OPTIONS.map((o) => (
+                  <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>
+                ))}
+              </Select>
+            </FormControl>
           </Grid>
         </Grid>
-        <Button
-          variant="contained"
-          sx={{ mt: 2 }}
-          onClick={handleSave}
-          disabled={!farm || !form.zone_id || !form.duration_minutes}
-        >
-          Save Event
-        </Button>
+
+        {chartData.length > 0 ? (
+          <Box sx={{ width: '100%', height: 320 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={theme.palette.divider} />
+                <XAxis dataKey="label" tick={{ fill: theme.palette.text.secondary, fontSize: 12 }} />
+                <YAxis
+                  yAxisId="water"
+                  tick={{ fill: theme.palette.text.secondary, fontSize: 12 }}
+                  label={{ value: 'Liters', angle: -90, position: 'insideLeft', fill: theme.palette.text.secondary }}
+                />
+                <YAxis
+                  yAxisId="duration"
+                  orientation="right"
+                  tick={{ fill: theme.palette.text.secondary, fontSize: 12 }}
+                  label={{ value: 'Minutes', angle: 90, position: 'insideRight', fill: theme.palette.text.secondary }}
+                />
+                <Tooltip
+                  formatter={(value, name) => (
+                    name === 'Duration'
+                      ? `${formatNumber(value, 0)} min`
+                      : formatWaterLiters(value)
+                  )}
+                />
+                <Legend />
+                <Line
+                  yAxisId="water"
+                  type="monotone"
+                  dataKey="water"
+                  name="Water (L)"
+                  stroke={theme.palette.primary.main}
+                  strokeWidth={2}
+                  dot={{ r: 3 }}
+                />
+                <Line
+                  yAxisId="duration"
+                  type="monotone"
+                  dataKey="duration"
+                  name="Duration"
+                  stroke={theme.palette.info.main}
+                  strokeWidth={2}
+                  dot={{ r: 3 }}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </Box>
+        ) : (
+          <Typography color="text.secondary">No irrigation events in the selected period.</Typography>
+        )}
       </Paper>
 
-      <Paper>
+      <Paper variant="outlined">
         <Table size="small">
           <TableHead>
             <TableRow>
@@ -277,24 +282,17 @@ function IrrigationEventsPage() {
             </TableRow>
           </TableHead>
           <TableBody>
-            {events.length === 0 ? (
+            {filteredEvents.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={6} align="center">No irrigation events yet.</TableCell>
               </TableRow>
             ) : (
-              events.map((e) => (
+              filteredEvents.map((e) => (
                 <TableRow key={e.id} hover>
                   <TableCell>{e.irrigation_zones?.zone_code}</TableCell>
                   <TableCell>{formatDate(e.event_date)}</TableCell>
                   <TableCell>{e.duration_minutes ? `${e.duration_minutes} min` : '—'}</TableCell>
-                  <TableCell>
-                    {formatWaterLiters(
-                      e.water_liters ?? calcIrrigationWaterLiters(
-                        e.flow_rate_lph ?? e.irrigation_zones?.flow_rate_lph,
-                        e.duration_minutes
-                      )
-                    )}
-                  </TableCell>
+                  <TableCell>{formatWaterLiters(resolveEventWaterLiters(e))}</TableCell>
                   <TableCell>{e.flow_rate_lph ?? e.irrigation_zones?.flow_rate_lph ?? '—'}</TableCell>
                   <TableCell align="right">
                     <IconButton size="small" onClick={() => openEdit(e)} aria-label="Edit event">
@@ -351,7 +349,7 @@ function IrrigationEventsPage() {
                 helperText={
                   editZone?.flow_rate_lph
                     ? `Zone flow: ${editZone.flow_rate_lph} L/hr`
-                    : 'Set flow rate on Irrigation → Zones'
+                    : 'Set flow rate on Farm Setting → Zones'
                 }
               />
             </Grid>

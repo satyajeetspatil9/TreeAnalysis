@@ -25,13 +25,13 @@ export async function loadFarmFertigationEvents(supabase, zoneIds) {
     .from('fertigation_events')
     .select(`
       id, zone_id, event_date, duration_minutes, water_liters,
-      irrigation_zones(zone_code),
+      irrigation_zones(zone_code, flow_rate_lph),
       fertigation_products(id, product_id, quantity, unit, products(name))
     `)
     .in('zone_id', zoneIds)
     .order('event_date', { ascending: false })
     .order('id', { ascending: false })
-    .limit(50);
+    .limit(200);
   if (error) throw error;
   return data || [];
 }

@@ -132,3 +132,71 @@ export function buildIrrigationChartData(events, treeCount, grouping = 'event') 
 
   return [...buckets.values()].sort((a, b) => a.key.localeCompare(b.key));
 }
+
+/** Farm monitoring chart: total water and duration by period. */
+export function buildFarmIrrigationChartData(events, grouping = 'week') {
+  const rows = buildIrrigationChartData(events, 1, grouping);
+  return rows.map((row) => ({
+    key: row.key,
+    label: row.label,
+    water: row.zoneWater || 0,
+    duration: row.duration || 0,
+    eventCount: row.eventCount || 0,
+  }));
+}
+
+/** Farm fertigation chart: water and summed product quantity by period. */
+export function buildFarmFertigationChartData(events, grouping = 'week') {
+  const sorted = [...(events || [])].sort(
+    (a, b) => new Date(a.event_date) - new Date(b.event_date),
+  );
+
+  const toPoint = (e) => {
+    const water = resolveEventWaterLiters(e) || Number(e.water_liters) || 0;
+    const productQty = (e.fertigation_products || []).reduce(
+      (sum, row) => sum + (Number(row.quantity) || 0),
+      0,
+    );
+    return {
+      water,
+      productQty,
+      duration: Number(e.duration_minutes) || 0,
+    };
+  };
+
+  if (grouping === 'event') {
+    return sorted.map((e) => {
+      const point = toPoint(e);
+      const zone = e.irrigation_zones?.zone_code;
+      return {
+        key: e.id,
+        label: `${new Date(e.event_date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}${zone ? ` ${zone}` : ''}`,
+        water: point.water,
+        productQty: point.productQty,
+        duration: point.duration,
+        eventCount: 1,
+      };
+    });
+  }
+
+  const buckets = new Map();
+  sorted.forEach((e) => {
+    const key = periodKey(e.event_date, grouping);
+    const bucket = buckets.get(key) || {
+      key,
+      label: periodLabel(key, grouping),
+      water: 0,
+      productQty: 0,
+      duration: 0,
+      eventCount: 0,
+    };
+    const point = toPoint(e);
+    bucket.water += point.water;
+    bucket.productQty += point.productQty;
+    bucket.duration += point.duration;
+    bucket.eventCount += 1;
+    buckets.set(key, bucket);
+  });
+
+  return [...buckets.values()].sort((a, b) => a.key.localeCompare(b.key));
+}
