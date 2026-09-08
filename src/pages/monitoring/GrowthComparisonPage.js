@@ -3,6 +3,7 @@ import {
   Alert,
   Box,
   Button,
+  Chip,
   Dialog,
   DialogActions,
   DialogContent,
@@ -11,6 +12,7 @@ import {
   Grid,
   IconButton,
   Paper,
+  Stack,
   Table,
   TableBody,
   TableCell,
@@ -21,6 +23,7 @@ import {
 } from '@mui/material';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import { Link as RouterLink } from 'react-router-dom';
 import {
   CartesianGrid,
   Line,
@@ -44,6 +47,7 @@ import {
   recordToGrowthForm,
   trunkMmToCm,
 } from '../../utils/treeGrowth';
+import { treeDashboardUrl } from '../../utils/treeDashboard';
 
 function computeAverages(records) {
   const heightValues = records
@@ -89,6 +93,58 @@ function sortRecords(records) {
   return records.slice().sort((a, b) =>
     getTreeDisplayId(a.trees || {}).localeCompare(getTreeDisplayId(b.trees || {}))
   );
+}
+
+function isBelowAverage(value, average) {
+  if (value == null || value === '' || average == null) return false;
+  return Number(value) < average;
+}
+
+function TreeLink({ trees }) {
+  const code = getTreeDisplayId(trees || {});
+  if (!code) return '—';
+  return (
+    <Typography
+      component={RouterLink}
+      to={treeDashboardUrl(code, 'growth')}
+      sx={{ color: 'primary.main', textDecoration: 'none', fontWeight: 600 }}
+    >
+      {code}
+    </Typography>
+  );
+}
+
+function buildBelowAverageRows(records, averages) {
+  return records
+    .map((record) => {
+      const height = record.height_cm != null && record.height_cm !== '' ? Number(record.height_cm) : null;
+      const trunk = trunkMmToCm(record.trunk_diameter_mm);
+      const canopyNs = record.canopy_ns_cm != null && record.canopy_ns_cm !== '' ? Number(record.canopy_ns_cm) : null;
+      const canopyEw = record.canopy_ew_cm != null && record.canopy_ew_cm !== '' ? Number(record.canopy_ew_cm) : null;
+      const below = [];
+      if (isBelowAverage(height, averages.height)) below.push('Height');
+      if (isBelowAverage(trunk, averages.trunk)) below.push('Trunk');
+      if (isBelowAverage(canopyNs, averages.canopyNs) || isBelowAverage(canopyEw, averages.canopyEw)) {
+        below.push('Canopy');
+      }
+      const heightDelta = height != null && averages.height != null ? height - averages.height : null;
+      return {
+        record,
+        height,
+        trunk,
+        canopyNs,
+        canopyEw,
+        below,
+        heightDelta,
+      };
+    })
+    .filter((row) => row.below.length > 0)
+    .sort((a, b) => {
+      if (a.heightDelta != null && b.heightDelta != null) return a.heightDelta - b.heightDelta;
+      if (a.heightDelta != null) return -1;
+      if (b.heightDelta != null) return 1;
+      return getTreeDisplayId(a.record.trees || {}).localeCompare(getTreeDisplayId(b.record.trees || {}));
+    });
 }
 
 function sortAllRecords(records) {
@@ -213,6 +269,11 @@ function GrowthComparisonPage() {
         canopyEw: Number(r.canopy_ew_cm),
       })),
     [latestRecords]
+  );
+
+  const belowAverageRows = useMemo(
+    () => buildBelowAverageRows(latestRecords, averages),
+    [latestRecords, averages]
   );
 
   const openEditRecord = (record) => {
@@ -458,6 +519,69 @@ function GrowthComparisonPage() {
         </Grid>
       )}
 
+      {latestRecords.length > 0 && (
+        <Paper sx={{ mb: 3 }} variant="outlined">
+          <Box sx={{ p: 2, pb: 1 }}>
+            <Typography variant="h6">Trees below average</Typography>
+            <Typography variant="body2" color="text.secondary">
+              Latest measurement vs farm average. A tree is listed if height, trunk, or canopy is below average.
+            </Typography>
+          </Box>
+          {belowAverageRows.length === 0 ? (
+            <Box sx={{ px: 2, pb: 2 }}>
+              <Typography color="text.secondary">No trees are below the current averages.</Typography>
+            </Box>
+          ) : (
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell>Tree</TableCell>
+                  <TableCell>Height</TableCell>
+                  <TableCell>vs Avg Height</TableCell>
+                  <TableCell>Trunk</TableCell>
+                  <TableCell>vs Avg Trunk</TableCell>
+                  <TableCell>Canopy (N-S × E-W)</TableCell>
+                  <TableCell>Below on</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {belowAverageRows.map((row) => (
+                  <TableRow key={row.record.tree_id} hover>
+                    <TableCell>
+                      <TreeLink trees={row.record.trees} />
+                    </TableCell>
+                    <TableCell>
+                      {row.height != null ? `${formatNumber(row.height, 1)} cm` : '—'}
+                    </TableCell>
+                    <TableCell>
+                      {row.height != null && averages.height != null
+                        ? `${formatNumber(row.height - averages.height, 1)} cm`
+                        : '—'}
+                    </TableCell>
+                    <TableCell>
+                      {row.trunk != null ? `${formatNumber(row.trunk, 1)} cm` : '—'}
+                    </TableCell>
+                    <TableCell>
+                      {row.trunk != null && averages.trunk != null
+                        ? `${formatNumber(row.trunk - averages.trunk, 1)} cm`
+                        : '—'}
+                    </TableCell>
+                    <TableCell>{formatCanopyLabel(row.canopyNs, row.canopyEw)}</TableCell>
+                    <TableCell>
+                      <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+                        {row.below.map((label) => (
+                          <Chip key={label} size="small" color="warning" label={label} />
+                        ))}
+                      </Stack>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </Paper>
+      )}
+
       <Paper variant="outlined">
         <Box sx={{ p: 2, pb: 0 }}>
           <Typography variant="h6" gutterBottom>All Growth Measurements</Typography>
@@ -485,7 +609,7 @@ function GrowthComparisonPage() {
             ) : (
               sortAllRecords(allRecords).map((r) => (
                 <TableRow key={r.id}>
-                  <TableCell>{getTreeDisplayId(r.trees || {})}</TableCell>
+                  <TableCell><TreeLink trees={r.trees} /></TableCell>
                   <TableCell>{formatDate(r.measurement_date)}</TableCell>
                   <TableCell>{formatNumber(r.height_cm, 1)}</TableCell>
                   <TableCell>{formatNumber(trunkMmToCm(r.trunk_diameter_mm), 1)}</TableCell>
