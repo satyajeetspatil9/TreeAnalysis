@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link as RouterLink } from 'react-router-dom';
 import {
   Alert, Box, Button, Chip, Paper, Stack, Table, TableBody, TableCell, TableHead, TableRow, Typography,
@@ -7,14 +7,22 @@ import { supabase } from '../../supabaseClient';
 import { useFarm } from '../../hooks/useFarm';
 import PageHeader from '../../components/common/PageHeader';
 import { formatDate, formatNumber, getTreeDisplayId } from '../../utils/formatters';
-import { TREE_LIST_SELECT, getIrrigationZoneId, getIrrigationZoneCode } from '../../utils/schema';
+import { TREE_LIST_SELECT } from '../../utils/schema';
 import { resolveStage } from '../../utils/farmClimateLogic';
 import { loadFarmClimateSnapshot } from '../../utils/farmClimateData';
 import { npkTargetsForStage } from '../../utils/fertilizerStage';
+import { getLatestObservationByTree } from '../../utils/soil';
+import { treeDashboardUrl } from '../../utils/treeDashboard';
 import {
   formatSuggestedInputNames,
+  lowNutrientLabels,
+  mergeTreeNutrientProfile,
   suggestFertilizerInputs,
 } from '../../utils/farmInputCatalog';
+
+function sortPlans(plans) {
+  return plans.slice().sort((a, b) => a.treeLabel.localeCompare(b.treeLabel, undefined, { numeric: true }));
+}
 
 function FertilizerOptimizerPage() {
   const { farm } = useFarm();
@@ -22,8 +30,7 @@ function FertilizerOptimizerPage() {
   const [lab, setLab] = useState(null);
   const [stage, setStage] = useState('');
   const [gdd, setGdd] = useState(null);
-  const [targets, setTargets] = useState(null);
-  const [suggested, setSuggested] = useState([]);
+  const [plans, setPlans] = useState([]);
   const [rows, setRows] = useState([]);
   const [saving, setSaving] = useState(false);
 
@@ -41,20 +48,44 @@ function FertilizerOptimizerPage() {
     const { data: trees } = await supabase
       .from('trees')
       .select(TREE_LIST_SELECT)
-      .eq('status', 'Active')
-      .limit(40);
+      .eq('status', 'Active');
+
+    const { data: observations } = await supabase
+      .from('soil_observations')
+      .select('tree_id, nitrogen, phosphorus, potassium, ph, observed_at')
+      .order('observed_at', { ascending: false })
+      .limit(2000);
+
     const snapshot = await loadFarmClimateSnapshot(supabase, farm, trees || [], 'Mango');
     const nextStage = resolveStage('Mango', snapshot.gdd);
     setGdd(snapshot.gdd);
     setStage(nextStage);
-    setTargets(npkTargetsForStage(nextStage, latestLab || {}));
-    setSuggested(suggestFertilizerInputs(latestLab || {}, nextStage));
+
+    const latestByTree = getLatestObservationByTree(observations || []);
+    const nextPlans = (trees || []).map((tree) => {
+      const observation = latestByTree[tree.id] || null;
+      const profile = mergeTreeNutrientProfile(observation, latestLab || {});
+      const products = suggestFertilizerInputs(profile, nextStage);
+      const targets = npkTargetsForStage(nextStage, profile);
+      const treeLabel = getTreeDisplayId(tree);
+      const lows = lowNutrientLabels(profile);
+      return {
+        tree,
+        treeLabel,
+        observation,
+        profile,
+        products,
+        targets,
+        lows,
+      };
+    });
+    setPlans(sortPlans(nextPlans));
 
     const { data: recs, error } = await supabase
       .from('fertilizer_recommendations')
       .select('*, trees(tree_positions(position_code))')
       .order('recommended_date', { ascending: false })
-      .limit(50);
+      .limit(200);
     if (error) {
       setMessage({ type: 'error', text: `${error.message} Run supabase/migrations/051_production_climate_phenology.sql` });
       setRows([]);
@@ -65,45 +96,34 @@ function FertilizerOptimizerPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  const treesNeedingInputs = useMemo(
+    () => plans.filter((plan) => plan.products.length > 0),
+    [plans]
+  );
+
   const generate = async () => {
     if (!farm) return;
-    const { data: trees, error: treeError } = await supabase
-      .from('trees')
-      .select(TREE_LIST_SELECT)
-      .eq('status', 'Active')
-      .limit(40);
-    if (treeError) {
-      setMessage({ type: 'error', text: treeError.message });
-      return;
-    }
-    if (!trees?.length) {
+    if (!plans.length) {
       setMessage({ type: 'error', text: 'Add active trees before generating recommendations.' });
       return;
     }
-    const snapshot = await loadFarmClimateSnapshot(supabase, farm, trees, 'Mango');
-    const nextStage = resolveStage('Mango', snapshot.gdd);
-    const nextTargets = npkTargetsForStage(nextStage, lab || {});
-    const products = suggestFertilizerInputs(lab || {}, nextStage);
-    const productNote = formatSuggestedInputNames(products);
     const today = new Date().toISOString().slice(0, 10);
-    const seenZones = new Set();
-    const payload = [];
-    trees.forEach((tree) => {
-      const zoneId = getIrrigationZoneId(tree);
-      const key = zoneId || tree.id;
-      if (seenZones.has(key)) return;
-      seenZones.add(key);
-      payload.push({
-        tree_id: tree.id,
+    const payload = plans.map((plan) => {
+      const productNote = formatSuggestedInputNames(plan.products);
+      const gapNote = plan.lows.length
+        ? `Low: ${plan.lows.join(', ')}.`
+        : 'No nutrient gaps on the latest tree reading.';
+      return {
+        tree_id: plan.tree.id,
         recommended_date: today,
-        growth_stage: nextStage,
-        target_n: nextTargets.n,
-        target_p: nextTargets.p,
-        target_k: nextTargets.k,
-        recommended_products: products,
+        growth_stage: stage,
+        target_n: plan.targets.n,
+        target_p: plan.targets.p,
+        target_k: plan.targets.k,
+        recommended_products: plan.products,
         status: 'Draft',
-        notes: `${nextTargets.notes} Zone ${getIrrigationZoneCode(tree)}. Inputs: ${productNote}.`,
-      });
+        notes: `${gapNote} ${plan.targets.notes}${productNote !== '—' ? ` Inputs: ${productNote}.` : ''}`,
+      };
     });
     setSaving(true);
     const { error } = await supabase.from('fertilizer_recommendations').insert(payload);
@@ -112,7 +132,10 @@ function FertilizerOptimizerPage() {
       setMessage({ type: 'error', text: `${error.message} Run supabase/migrations/051_production_climate_phenology.sql` });
       return;
     }
-    setMessage({ type: 'success', text: `Saved ${payload.length} draft recommendation${payload.length === 1 ? '' : 's'}.` });
+    setMessage({
+      type: 'success',
+      text: `Saved ${payload.length} tree draft${payload.length === 1 ? '' : 's'} (${treesNeedingInputs.length} with inputs).`,
+    });
     await load();
   };
 
@@ -121,10 +144,10 @@ function FertilizerOptimizerPage() {
       <PageHeader
         section="Inputs"
         title="Fertilizer recommendation"
-        subtitle="One draft dose per irrigation zone from the latest farm lab report, GDD stage, and Administration available inputs."
+        subtitle="One draft per tree from that tree’s latest soil reading. Only inputs that close a low nutrient are listed."
         action={(
-          <Button variant="contained" onClick={generate} disabled={saving || !farm}>
-            {saving ? 'Saving…' : 'Generate from lab + stage'}
+          <Button variant="contained" onClick={generate} disabled={saving || !farm || !plans.length}>
+            {saving ? 'Saving…' : 'Generate per tree'}
           </Button>
         )}
       />
@@ -132,13 +155,9 @@ function FertilizerOptimizerPage() {
       <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
         <Typography variant="body2">
           Stage {stage || '—'} · GDD {formatNumber(gdd, 0)}
-          {lab ? ` · Lab ${formatDate(lab.sample_date)}` : ' · No farm lab report yet'}
+          {lab ? ` · Farm lab ${formatDate(lab.sample_date)}` : ' · No farm lab report yet'}
+          {` · ${treesNeedingInputs.length} of ${plans.length} tree${plans.length === 1 ? '' : 's'} need inputs`}
         </Typography>
-        {targets && (
-          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-            Targets N {formatNumber(targets.n, 1)} · P {formatNumber(targets.p, 1)} · K {formatNumber(targets.k, 1)} kg/ha. {targets.notes}
-          </Typography>
-        )}
         <Button component={RouterLink} to="/orchard/soil-report" size="small" sx={{ mt: 1, mr: 1 }}>
           Add soil lab report
         </Button>
@@ -147,48 +166,69 @@ function FertilizerOptimizerPage() {
         </Button>
       </Paper>
 
-      <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
-        <Typography variant="h6" gutterBottom>Suggested inputs</Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-          From Administration → Available inputs, matched to this lab and stage. Dashparni Ark and AgniAstra are pest-only and not included.
-        </Typography>
-        {suggested.length === 0 ? (
-          <Typography color="text.secondary">No suggestions yet.</Typography>
-        ) : (
-          <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
-            {suggested.map((item) => (
-              <Chip
-                key={item.id}
-                label={item.name}
-                title={`${item.category} — ${item.reason}`}
-                variant="outlined"
-              />
-            ))}
-          </Stack>
-        )}
-        {suggested.length > 0 && (
-          <Table size="small" sx={{ mt: 2 }}>
-            <TableHead>
+      <Paper variant="outlined" sx={{ mb: 2 }}>
+        <Box sx={{ p: 2, pb: 1 }}>
+          <Typography variant="h6">Per-tree nutrient needs</Typography>
+          <Typography variant="body2" color="text.secondary">
+            Tree 7-in-1 N, P, K, and pH first. Farm lab fills OC, S, Zn, and B when the tree has no value.
+          </Typography>
+        </Box>
+        <Table size="small">
+          <TableHead>
+            <TableRow>
+              <TableCell>Tree</TableCell>
+              <TableCell>Low nutrients</TableCell>
+              <TableCell>Inputs</TableCell>
+              <TableCell>Last soil reading</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {plans.length === 0 ? (
               <TableRow>
-                <TableCell>Input</TableCell>
-                <TableCell>Category</TableCell>
-                <TableCell>Why</TableCell>
+                <TableCell colSpan={4} align="center">No active trees.</TableCell>
               </TableRow>
-            </TableHead>
-            <TableBody>
-              {suggested.map((item) => (
-                <TableRow key={item.id}>
-                  <TableCell>{item.name}</TableCell>
-                  <TableCell>{item.category}</TableCell>
-                  <TableCell>{item.reason}</TableCell>
+            ) : (
+              plans.map((plan) => (
+                <TableRow key={plan.tree.id} hover>
+                  <TableCell>
+                    <Typography
+                      component={RouterLink}
+                      to={treeDashboardUrl(plan.treeLabel, 'soil')}
+                      sx={{ color: 'primary.main', textDecoration: 'none', fontWeight: 600 }}
+                    >
+                      {plan.treeLabel}
+                    </Typography>
+                  </TableCell>
+                  <TableCell>
+                    {plan.lows.length ? (
+                      <Stack direction="row" spacing={0.5} useFlexGap flexWrap="wrap">
+                        {plan.lows.map((label) => (
+                          <Chip key={label} size="small" color="warning" label={label} />
+                        ))}
+                      </Stack>
+                    ) : (
+                      'None'
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    {plan.products.length
+                      ? plan.products.map((item) => item.name).join(', ')
+                      : '—'}
+                  </TableCell>
+                  <TableCell>
+                    {plan.observation?.observed_at ? formatDate(plan.observation.observed_at) : 'No tree reading'}
+                  </TableCell>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        )}
+              ))
+            )}
+          </TableBody>
+        </Table>
       </Paper>
 
       <Paper variant="outlined">
+        <Box sx={{ p: 2, pb: 0 }}>
+          <Typography variant="h6" gutterBottom>Saved drafts</Typography>
+        </Box>
         <Table size="small">
           <TableHead>
             <TableRow>

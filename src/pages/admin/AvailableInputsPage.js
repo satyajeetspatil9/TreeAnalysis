@@ -12,7 +12,7 @@ function AvailableInputsPage() {
       <PageHeader
         section="Administration"
         title="Available inputs"
-        subtitle="Farm-allowed organic, mineral, microbial, and botanical inputs. Fertilizer recommendation picks from this list."
+        subtitle="Farm-allowed inputs. Fertilizer recommendation uses only the items that match a tree’s low nutrients."
         action={(
           <Button component={RouterLink} to="/inputs/optimizer" variant="outlined">
             Fertilizer rec.

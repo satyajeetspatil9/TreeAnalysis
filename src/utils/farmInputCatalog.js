@@ -40,26 +40,42 @@ function stageKey(stage) {
   return String(stage || '').toLowerCase();
 }
 
+/** Tree 7-in-1 reading first; farm lab fills nutrients the sensor does not have. */
+export function mergeTreeNutrientProfile(observation, lab = {}) {
+  return {
+    nitrogen: observation?.nitrogen ?? lab?.nitrogen ?? null,
+    phosphorus: observation?.phosphorus ?? lab?.phosphorus ?? null,
+    potassium: observation?.potassium ?? lab?.potassium ?? null,
+    ph: observation?.ph ?? lab?.ph ?? null,
+    organic_carbon: observation?.organic_carbon ?? lab?.organic_carbon ?? null,
+    sulphur: observation?.sulphur ?? lab?.sulphur ?? null,
+    zinc: observation?.zinc ?? lab?.zinc ?? null,
+    boron: observation?.boron ?? lab?.boron ?? null,
+  };
+}
+
+export function lowNutrientLabels(profile = {}) {
+  const checks = [
+    ['nitrogen', 'N'],
+    ['phosphorus', 'P'],
+    ['potassium', 'K'],
+    ['ph', 'pH'],
+    ['organic_carbon', 'OC'],
+    ['sulphur', 'S'],
+    ['zinc', 'Zn'],
+    ['boron', 'B'],
+  ];
+  return checks
+    .filter(([key]) => isLow(key, profile[key]))
+    .map(([, label]) => label);
+}
+
 /**
- * Pick from the farm input catalog using latest lab values and GDD stage.
- * Pest inputs stay on the admin list only.
+ * One catalog input per nutrient that is actually low on this tree.
+ * Stage only chooses which N source; it does not add extra products.
  */
-export function suggestFertilizerInputs(lab = {}, stage = '') {
-  const key = stageKey(stage);
-  const flowering = key.includes('flower');
-  const fruit = key.includes('fruit') || key.includes('nut');
-  const maturity = key.includes('maturity');
-  const vegetative = !flowering && !fruit && !maturity;
-
-  const nLow = isLow('nitrogen', lab.nitrogen);
-  const pLow = isLow('phosphorus', lab.phosphorus);
-  const kLow = isLow('potassium', lab.potassium);
-  const phLow = isLow('ph', lab.ph);
-  const ocLow = isLow('organic_carbon', lab.organic_carbon);
-  const sLow = isLow('sulphur', lab.sulphur);
-  const znLow = isLow('zinc', lab.zinc);
-  const bLow = isLow('boron', lab.boron);
-
+export function suggestFertilizerInputs(profile = {}, stage = '') {
+  const flowering = stageKey(stage).includes('flower');
   const picks = [];
   const seen = new Set();
 
@@ -76,56 +92,31 @@ export function suggestFertilizerInputs(lab = {}, stage = '') {
     });
   };
 
-  add('vermicompost', ocLow ? 'Organic carbon is low — build soil and nutrients.' : 'Base organic manure.');
-  add('owdc', 'Support decomposition of organics.');
-  add('jeevamrut', 'Keep soil microbial activity up.');
-  add('vam-amf', 'Root symbiosis for nutrient uptake.');
-
-  if (!flowering && (nLow || vegetative)) {
-    add('poultry-manure', nLow ? 'Nitrogen is low.' : 'Vegetative growth needs nitrogen.');
+  if (isLow('organic_carbon', profile.organic_carbon)) {
+    add('vermicompost', 'Organic carbon is low.');
   }
-  if (nLow || vegetative || flowering) {
-    add('neem-cake', flowering ? 'Moderate N with soil benefits during flowering.' : 'Organic nitrogen.');
+  if (isLow('nitrogen', profile.nitrogen)) {
+    add(flowering ? 'neem-cake' : 'poultry-manure', flowering
+      ? 'Nitrogen is low; neem cake during flowering.'
+      : 'Nitrogen is low.');
   }
-  if (nLow && !flowering) {
-    add('groundnut-cake', 'Extra organic nitrogen.');
-    add('fish-hydrolysate', 'Liquid N plus biostimulant.');
+  if (isLow('phosphorus', profile.phosphorus)) {
+    add('bone-meal', 'Phosphorus is low.');
   }
-
-  if (pLow || flowering) {
-    add('bone-meal', pLow ? 'Phosphorus is low (with calcium).' : 'Support bloom with P and Ca.');
-    add('rock-phosphate', 'Mineral phosphorus.');
+  if (isLow('potassium', profile.potassium)) {
+    add('natural-k-minerals', 'Potassium is low.');
   }
-
-  if (kLow || fruit) {
-    add('wood-ash', kLow ? 'Potassium is low (with calcium).' : 'Fruit fill needs potassium.');
-    add('natural-k-minerals', 'Mineral potassium.');
+  if (isLow('ph', profile.ph)) {
+    add('agricultural-lime', 'pH is low.');
   }
-
-  if (phLow) {
-    add('agricultural-lime', 'pH is low — calcium and pH correction.');
+  if (isLow('sulphur', profile.sulphur)) {
+    add('gypsum', 'Sulphur is low.');
   }
-
-  if (sLow) {
-    add('gypsum', 'Sulphur (and calcium) from gypsum.');
-    add('sulfur', 'Mineral sulphur.');
-  } else if (phLow) {
-    add('gypsum', 'Calcium without raising pH as strongly as lime.');
+  if (isLow('zinc', profile.zinc)) {
+    add('zinc-sulfate', 'Zinc is low.');
   }
-
-  add('magnesium-sulfate', sLow ? 'Magnesium plus sulphur.' : 'Magnesium and sulphur maintenance.');
-
-  if (znLow) add('zinc-sulfate', 'Zinc is low.');
-  if (bLow) add('borax', 'Boron is low.');
-  if (znLow || bLow) add('owdc-micronutrients', 'Decomposition plus micronutrients.');
-
-  if (vegetative) {
-    add('vermiwash', 'Liquid biostimulant.');
-    add('milk-eggs-jaggery', 'Fermented microbial food.');
-    add('rice-water', 'Microbial substrate.');
-    add('tender-coconut-water', 'Growth-supporting compounds.');
-  } else if (!maturity) {
-    add('vermiwash', 'Light biostimulant.');
+  if (isLow('boron', profile.boron)) {
+    add('borax', 'Boron is low.');
   }
 
   return picks;
