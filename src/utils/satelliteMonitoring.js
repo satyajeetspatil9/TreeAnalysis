@@ -1,6 +1,7 @@
 import {
   friendlyIndexStatus,
   friendlyOverallStatus,
+  friendlyRadarWetnessStatus,
   friendlyStressStatus,
   overallStressLevel,
 } from './satelliteDisplay';
@@ -41,7 +42,7 @@ export function extractSatelliteIndicators(analysis, lastGoodRadar = null, optio
   const overallFriendly = friendlyOverallStatus(overall.status, overall.severity);
   const cloudy = isRadarOnlyMode(analysis);
   const hideOptical = cloudy && hideOpticalWhenCloudy;
-  const radarFriendly = friendlyStressStatus(radarModel.statusRaw);
+  const radarFriendly = friendlyRadarWetnessStatus(radarModel.statusRaw);
 
   return {
     radarOnly: cloudy,

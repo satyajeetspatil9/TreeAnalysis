@@ -21,7 +21,7 @@ export const SATELLITE_INDEX_INFO = {
   S1_VV: {
     title: 'Radar moisture signal',
     short: 'Under-canopy moisture (Sentinel-1)',
-    hint: 'Used to detect unusual wetness changes over time.',
+    hint: 'Very dry, dry, normal moisture, good moisture, or very high moisture from Sentinel-1 radar.',
   },
 };
 
@@ -196,6 +196,64 @@ const OVERALL_STATUS_FRIENDLY = {
 
 function normalizeKey(text) {
   return String(text || '').trim().toLowerCase();
+}
+
+const RADAR_WETNESS_FRIENDLY = {
+  'very dry': {
+    label: 'Very dry',
+    summary: 'Ground looks very dry under the tree.',
+    action: 'Check drip irrigation and soil moisture.',
+  },
+  dry: {
+    label: 'Dry',
+    summary: 'Ground looks dry under the tree.',
+    action: 'Check soil moisture if the tree looks stressed.',
+  },
+  'normal moisture': {
+    label: 'Normal moisture',
+    summary: 'Ground wetness is in a normal range.',
+    action: 'No unusual wet or dry signal from radar.',
+  },
+  'good moisture': {
+    label: 'Good moisture',
+    summary: 'Ground looks adequately wet under the tree.',
+    action: 'Irrigation appears sufficient for now.',
+  },
+  'very high moisture': {
+    label: 'Very high moisture',
+    summary: 'Ground looks very wet under the tree.',
+    action: 'Check for standing water or a long irrigation run.',
+  },
+};
+
+/** Map API or inferred radar wetness to the five dB bands. */
+export function classifyRadarWetnessLevel(rawStatus) {
+  const key = normalizeKey(rawStatus);
+  if (!key || key === 'no data' || key === 'nodata' || key.includes('no data') || key === 'earlier radar') {
+    return null;
+  }
+  if (RADAR_WETNESS_FRIENDLY[key]) return key;
+  if (key.includes('very high') || key.includes('very wet')) return 'very high moisture';
+  if (key === 'very dry') return 'very dry';
+  if (key === 'dry' || key.includes('drier')) return 'dry';
+  if (key.includes('good moisture') || key === 'good') return 'good moisture';
+  if (key === 'ok' || key.includes('normal') || key.includes('moderate')) return 'normal moisture';
+  return null;
+}
+
+export function friendlyRadarWetnessStatus(rawStatus) {
+  const level = classifyRadarWetnessLevel(rawStatus);
+  if (level) return RADAR_WETNESS_FRIENDLY[level];
+  return friendlyIndexStatus(rawStatus);
+}
+
+export function radarWetnessChipColor(label) {
+  const level = classifyRadarWetnessLevel(label) || normalizeKey(label);
+  if (level === 'very dry') return 'error';
+  if (level === 'dry') return 'warning';
+  if (level === 'normal moisture' || level === 'good moisture') return 'success';
+  if (level === 'very high moisture') return 'info';
+  return severityToChipColor(label);
 }
 
 export function friendlyIndexStatus(rawStatus) {

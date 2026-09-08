@@ -20,6 +20,8 @@ import {
   actionHintColor,
   confidenceChipColor,
   friendlyIndexStatus,
+  friendlyRadarWetnessStatus,
+  radarWetnessChipColor,
   friendlyOverallStatus,
   friendlyReason,
   friendlyStressStatus,
@@ -67,11 +69,16 @@ function IndexCard({
   useStressLabels = false,
   emphasizeValue = false,
 }) {
-  const friendly = useStressLabels
-    ? friendlyStressStatus(statusRaw)
-    : friendlyIndexStatus(statusRaw);
+  const radarWetness = indicatorId === 'S1_VV';
+  const friendly = radarWetness
+    ? friendlyRadarWetnessStatus(statusRaw)
+    : useStressLabels
+      ? friendlyStressStatus(statusRaw)
+      : friendlyIndexStatus(statusRaw);
   const technical = formatTechnicalIndex(technicalKey, value);
-  const chipColor = stressLevelColor(friendly.label);
+  const chipColor = radarWetness
+    ? radarWetnessChipColor(friendly.label)
+    : stressLevelColor(friendly.label);
 
   return (
     <Paper variant="outlined" sx={{ p: 2, height: '100%', overflow: 'hidden' }}>

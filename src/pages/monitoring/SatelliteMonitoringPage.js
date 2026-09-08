@@ -54,6 +54,7 @@ import {
   matchesSatelliteStressFilter,
 } from '../../utils/satelliteMonitoring';
 import {
+  radarWetnessChipColor,
   severityToChipColor,
   stressLevelColor,
   stressPercentTextColor,
@@ -83,7 +84,7 @@ function FilterSelect({
   );
 }
 
-function IndicatorChip({ friendly, fallback = '—' }) {
+function IndicatorChip({ friendly, fallback = '—', wetness = false }) {
   if (!friendly?.label) {
     return (
       <Typography variant="body2" color="text.secondary">{fallback}</Typography>
@@ -94,7 +95,7 @@ function IndicatorChip({ friendly, fallback = '—' }) {
     <Chip
       label={friendly.label}
       size="small"
-      color={stressLevelColor(friendly.label)}
+      color={wetness ? radarWetnessChipColor(friendly.label) : stressLevelColor(friendly.label)}
       sx={{ maxWidth: '100%' }}
     />
   );
@@ -550,7 +551,7 @@ function SatelliteMonitoringPage() {
                         <Typography variant="body2" color="text.secondary">—</Typography>
                       ) : (
                         <Box>
-                          <IndicatorChip friendly={row.indicators[column.key]} />
+                          <IndicatorChip friendly={row.indicators[column.key]} wetness={column.key === 'radar'} />
                           {column.key === 'radar' && row.indicators.radarFromPriorWeek && (row.indicators.radarAsOf || row.cache?.last_good_radar_week) && (
                             <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>
                               from {formatDate(row.indicators.radarAsOf || row.cache.last_good_radar_week)}
