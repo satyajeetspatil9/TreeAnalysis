@@ -19,6 +19,7 @@ import { supabase } from '../../supabaseClient';
 import PageHeader from '../../components/common/PageHeader';
 import { formatDate, formatNumber, getTreeDisplayId } from '../../utils/formatters';
 import { treeDashboardUrl } from '../../utils/treeDashboard';
+import { getTreeGps } from '../../utils/schema';
 import {
   SOIL_NUTRIENT_STANDARDS,
   evaluateSoilStandard,
@@ -56,6 +57,60 @@ function MoistureDot({ color }) {
   );
 }
 
+function layoutByGps(rows) {
+  if (!rows.length) return { aspect: 1.4, items: [] };
+  const lats = rows.map((row) => row.gps.latitude);
+  const lngs = rows.map((row) => row.gps.longitude);
+  const minLat = Math.min(...lats);
+  const maxLat = Math.max(...lats);
+  const minLng = Math.min(...lngs);
+  const maxLng = Math.max(...lngs);
+  const latSpan = maxLat - minLat || 1e-6;
+  const lngSpan = maxLng - minLng || 1e-6;
+  const midLat = (minLat + maxLat) / 2;
+  const widthM = lngSpan * 111320 * Math.cos((midLat * Math.PI) / 180);
+  const heightM = latSpan * 111320;
+  const aspect = Math.min(2.4, Math.max(0.7, widthM / heightM));
+
+  const pad = 0.08;
+  return {
+    aspect,
+    items: rows.map((row) => ({
+      ...row,
+      x: pad + ((row.gps.longitude - minLng) / lngSpan) * (1 - 2 * pad),
+      y: pad + ((maxLat - row.gps.latitude) / latSpan) * (1 - 2 * pad),
+    })),
+  };
+}
+
+function TreeMoistureMarker({ row, color, tooltip }) {
+  return (
+    <Tooltip title={tooltip} arrow>
+      <Box
+        component={RouterLink}
+        to={treeDashboardUrl(row.tree, 'soil')}
+        sx={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: 0.5,
+          textDecoration: 'none',
+          color: 'text.primary',
+          py: 0.25,
+          px: 0.5,
+          borderRadius: 1,
+          '&:hover': { bgcolor: 'action.hover' },
+        }}
+      >
+        <Typography variant="caption" sx={{ fontWeight: 700, lineHeight: 1.2, whiteSpace: 'nowrap' }}>
+          {row.tree}
+        </Typography>
+        <MoistureDot color={color} />
+      </Box>
+    </Tooltip>
+  );
+}
+
 function MoistureMonitoringPage() {
   const theme = useTheme();
   const [observations, setObservations] = useState([]);
@@ -66,7 +121,7 @@ function MoistureMonitoringPage() {
     setLoading(true);
     const { data, error } = await supabase
       .from('soil_observations')
-      .select('id, tree_id, moisture_percent, observed_at, trees(tree_positions(position_code))')
+      .select('id, tree_id, moisture_percent, observed_at, trees(tree_positions(position_code, latitude, longitude))')
       .not('moisture_percent', 'is', null)
       .order('observed_at', { ascending: false })
       .limit(2000);
@@ -101,10 +156,21 @@ function MoistureMonitoringPage() {
           observedAt: obs.observed_at,
           status: evaluation.status,
           statusLabel: evaluation.label,
+          gps: getTreeGps(obs.trees || {}),
         };
       })
       .sort((a, b) => a.tree.localeCompare(b.tree, undefined, { numeric: true, sensitivity: 'base' }));
   }, [observations]);
+
+  const gpsRows = useMemo(() => rows.filter((row) => row.gps), [rows]);
+  const noGpsRows = useMemo(() => rows.filter((row) => !row.gps), [rows]);
+  const gpsLayout = useMemo(() => layoutByGps(gpsRows), [gpsRows]);
+
+  const markerTooltip = (row) => [
+    row.statusLabel || 'Moisture',
+    `${formatNumber(row.moisture, 0)}%`,
+    row.observedAt ? formatDate(row.observedAt) : null,
+  ].filter(Boolean).join(' · ');
 
   return (
     <Box>
@@ -139,49 +205,66 @@ function MoistureMonitoringPage() {
               <Chip size="small" color="error" label="High" />
             </Box>
             {rows.length > 0 ? (
-              <Box
-                sx={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fill, minmax(72px, 1fr))',
-                  gap: 2.5,
-                  py: 1,
-                }}
-              >
-                {rows.map((row) => {
-                  const color = moistureDotColor(theme, row.status);
-                  const tooltip = [
-                    row.statusLabel || 'Moisture',
-                    `${formatNumber(row.moisture, 0)}%`,
-                    row.observedAt ? formatDate(row.observedAt) : null,
-                  ].filter(Boolean).join(' · ');
-                  return (
-                    <Tooltip key={row.treeId} title={tooltip} arrow>
-                      <Box
-                        component={RouterLink}
-                        to={treeDashboardUrl(row.tree, 'soil')}
-                        sx={{
-                          display: 'flex',
-                          flexDirection: 'column',
-                          alignItems: 'center',
-                          gap: 0.75,
-                          textDecoration: 'none',
-                          color: 'text.primary',
-                          py: 0.5,
-                          borderRadius: 1,
-                          '&:hover': {
-                            bgcolor: alpha(theme.palette.action.hover, 0.6),
-                          },
-                        }}
-                      >
-                        <Typography variant="body2" sx={{ fontWeight: 600, lineHeight: 1.2 }}>
-                          {row.tree}
-                        </Typography>
-                        <MoistureDot color={color} />
-                      </Box>
-                    </Tooltip>
-                  );
-                })}
-              </Box>
+              <>
+                {gpsLayout.items.length > 0 ? (
+                  <Box sx={{ position: 'relative' }}>
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+                      North ↑ · placed by GPS
+                    </Typography>
+                    <Box
+                      sx={{
+                        position: 'relative',
+                        width: '100%',
+                        aspectRatio: String(gpsLayout.aspect),
+                        minHeight: 320,
+                        maxHeight: 640,
+                        bgcolor: alpha(theme.palette.grey[500], 0.06),
+                        borderRadius: 1,
+                      }}
+                    >
+                      {gpsLayout.items.map((row) => (
+                        <Box
+                          key={row.treeId}
+                          sx={{
+                            position: 'absolute',
+                            left: `${row.x * 100}%`,
+                            top: `${row.y * 100}%`,
+                            transform: 'translate(-50%, -50%)',
+                            zIndex: 1,
+                          }}
+                        >
+                          <TreeMoistureMarker
+                            row={row}
+                            color={moistureDotColor(theme, row.status)}
+                            tooltip={markerTooltip(row)}
+                          />
+                        </Box>
+                      ))}
+                    </Box>
+                  </Box>
+                ) : (
+                  <Typography color="text.secondary" sx={{ mb: 1 }}>
+                    Trees with moisture readings need GPS on their position to appear on this layout.
+                  </Typography>
+                )}
+                {noGpsRows.length > 0 && (
+                  <Box sx={{ mt: 2 }}>
+                    <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
+                      {noGpsRows.length} tree{noGpsRows.length === 1 ? '' : 's'} without GPS
+                    </Typography>
+                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2 }}>
+                      {noGpsRows.map((row) => (
+                        <TreeMoistureMarker
+                          key={row.treeId}
+                          row={row}
+                          color={moistureDotColor(theme, row.status)}
+                          tooltip={markerTooltip(row)}
+                        />
+                      ))}
+                    </Box>
+                  </Box>
+                )}
+              </>
             ) : (
               <Typography color="text.secondary">
                 No moisture readings yet. Record them on Soil monitoring or a tree Soil tab.
