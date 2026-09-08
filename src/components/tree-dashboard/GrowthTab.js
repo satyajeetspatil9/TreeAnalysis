@@ -6,7 +6,7 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
 import { supabase } from '../../supabaseClient';
-import { formatNumber } from '../../utils/formatters';
+import { formatNumberSmart } from '../../utils/formatters';
 import {
   GROWTH_MEASUREMENT_FIELDS,
   buildGrowthPayload,
@@ -110,6 +110,8 @@ function GrowthTab({ tree }) {
     date: new Date(r.measurement_date).toLocaleDateString('en-IN', { month: 'short', year: '2-digit' }),
     height: r.height_cm != null ? Number(r.height_cm) / 100 : null,
     trunk: trunkMmToCm(r.trunk_diameter_mm),
+    canopyNs: r.canopy_ns_cm != null ? Number(r.canopy_ns_cm) / 100 : null,
+    canopyEw: r.canopy_ew_cm != null ? Number(r.canopy_ew_cm) / 100 : null,
   }));
 
   const handleAdd = async () => {
@@ -152,16 +154,16 @@ function GrowthTab({ tree }) {
         <Grid item xs={12} md={4}>
           <GrowthMetricCard
             label="Height"
-            value={heightCm != null ? `${formatNumber(heightCm / 100, 2)} m` : '—'}
-            average={averages.height != null ? `${formatNumber(averages.height / 100, 2)} m` : '—'}
+            value={heightCm != null ? `${formatNumberSmart(heightCm / 100)} m` : '—'}
+            average={averages.height != null ? `${formatNumberSmart(averages.height / 100)} m` : '—'}
             comparison={heightComparison}
           />
         </Grid>
         <Grid item xs={12} md={4}>
           <GrowthMetricCard
             label="Trunk diameter"
-            value={trunkCm != null ? `${formatNumber(trunkCm, 1)} cm` : '—'}
-            average={averages.trunk != null ? `${formatNumber(averages.trunk, 1)} cm` : '—'}
+            value={trunkCm != null ? `${formatNumberSmart(trunkCm)} cm` : '—'}
+            average={averages.trunk != null ? `${formatNumberSmart(averages.trunk)} cm` : '—'}
             comparison={trunkComparison}
           />
         </Grid>
@@ -170,12 +172,12 @@ function GrowthTab({ tree }) {
             label="Canopy (N-S × E-W)"
             value={
               canopyNs != null && canopyEw != null
-                ? `${formatNumber(canopyNs / 100, 1)} × ${formatNumber(canopyEw / 100, 1)} m`
+                ? `${formatNumberSmart(canopyNs / 100)} × ${formatNumberSmart(canopyEw / 100)} m`
                 : '—'
             }
             average={
               averages.canopyNs != null && averages.canopyEw != null
-                ? `${formatNumber(averages.canopyNs / 100, 1)} × ${formatNumber(averages.canopyEw / 100, 1)} m`
+                ? `${formatNumberSmart(averages.canopyNs / 100)} × ${formatNumberSmart(averages.canopyEw / 100)} m`
                 : '—'
             }
             comparison={canopyNs != null && canopyEw != null ? canopyComparison : { status: 'unknown', label: '' }}
@@ -194,8 +196,10 @@ function GrowthTab({ tree }) {
               <YAxis yAxisId="right" orientation="right" />
               <Tooltip />
               <Legend />
-              <Line yAxisId="left" type="monotone" dataKey="height" stroke="#2e7d32" name="Height (m)" />
-              <Line yAxisId="right" type="monotone" dataKey="trunk" stroke="#1565c0" name="Trunk (cm)" />
+              <Line yAxisId="left" type="monotone" dataKey="height" stroke="#2e7d32" name="Height (m)" connectNulls />
+              <Line yAxisId="left" type="monotone" dataKey="canopyNs" stroke="#6a1b9a" name="Canopy N-S (m)" connectNulls />
+              <Line yAxisId="left" type="monotone" dataKey="canopyEw" stroke="#ab47bc" name="Canopy E-W (m)" connectNulls />
+              <Line yAxisId="right" type="monotone" dataKey="trunk" stroke="#1565c0" name="Trunk (cm)" connectNulls />
             </LineChart>
           </ResponsiveContainer>
         </Paper>

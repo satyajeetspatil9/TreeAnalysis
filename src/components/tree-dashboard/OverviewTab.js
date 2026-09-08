@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Grid, Paper, Typography, Box, CircularProgress } from '@mui/material';
 import { supabase } from '../../supabaseClient';
-import { formatDate, formatNumber } from '../../utils/formatters';
+import { formatDate, formatNumber, formatNumberSmart } from '../../utils/formatters';
 import { getIrrigationZoneId } from '../../utils/schema';
 import { evaluateSoilStandard, getSoilStandard, soilStatusBadgeSx, soilStatusColor } from '../../utils/soil';
 import HealthIndicator from '../common/HealthIndicator';
@@ -125,7 +125,7 @@ function OverviewTab({ tree, zoneCode }) {
         </Grid>
         <Grid item xs={6} sm={4} md={2}><SummaryCard label="pH" value={summary.ph != null ? formatNumber(summary.ph, 1) : '—'} /></Grid>
         <Grid item xs={6} sm={4} md={2}><SummaryCard label="EC" value={summary.ec != null ? formatNumber(summary.ec, 2) : '—'} /></Grid>
-        <Grid item xs={6} sm={4} md={2}><SummaryCard label="Growth" value={summary.height != null ? `${formatNumber(summary.height, 2)} m` : '—'} /></Grid>
+        <Grid item xs={6} sm={4} md={2}><SummaryCard label="Growth" value={summary.height != null ? `${formatNumberSmart(summary.height)} m` : '—'} /></Grid>
         <Grid item xs={6} sm={4} md={2}><SummaryCard label="Last irrigation" value={summary.lastIrrigation ? formatDate(summary.lastIrrigation) : '—'} /></Grid>
         <Grid item xs={6} sm={4} md={2}><SummaryCard label="Last fertigation" value={summary.lastFertigation ? formatDate(summary.lastFertigation) : '—'} /></Grid>
       </Grid>

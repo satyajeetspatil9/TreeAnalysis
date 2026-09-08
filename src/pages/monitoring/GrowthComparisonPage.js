@@ -36,7 +36,7 @@ import {
 } from 'recharts';
 import { supabase } from '../../supabaseClient';
 import PageHeader from '../../components/common/PageHeader';
-import { formatDate, formatNumber, getTreeDisplayId } from '../../utils/formatters';
+import { formatDate, formatNumberSmart, getTreeDisplayId } from '../../utils/formatters';
 import {
   GROWTH_MEASUREMENT_FIELDS,
   buildGrowthUpdatePayload,
@@ -52,12 +52,12 @@ import { treeDashboardUrl } from '../../utils/treeDashboard';
 
 function formatCanopyLabel(nsCm, ewCm) {
   if (nsCm == null || ewCm == null || nsCm === '' || ewCm === '') return '—';
-  return `${formatNumber(Number(nsCm) / 100, 1)} × ${formatNumber(Number(ewCm) / 100, 1)} m`;
+  return `${formatNumberSmart(Number(nsCm) / 100)} × ${formatNumberSmart(Number(ewCm) / 100)} m`;
 }
 
 function diffFromAverage(value, average) {
   if (value == null || value === '' || average == null) return '—';
-  return `${formatNumber(Number(value) - average, 1)}`;
+  return `${formatNumberSmart(Number(value) - average)}`;
 }
 
 function sortRecords(records) {
@@ -132,10 +132,10 @@ function HeightTooltip({ active, payload, average }) {
   return (
     <Paper sx={{ p: 1.5 }} variant="outlined">
       <Typography variant="caption" display="block" sx={{ fontWeight: 600 }}>{row?.tree}</Typography>
-      <Typography variant="body2">Height: {formatNumber(row?.height, 1)} cm</Typography>
+      <Typography variant="body2">Height: {formatNumberSmart(row?.height)} cm</Typography>
       {average != null && (
         <Typography variant="caption" color="text.secondary">
-          vs avg: {formatNumber(Number(row?.height) - average, 1)} cm
+          vs avg: {formatNumberSmart(Number(row?.height) - average)} cm
         </Typography>
       )}
     </Paper>
@@ -148,10 +148,10 @@ function TrunkTooltip({ active, payload, average }) {
   return (
     <Paper sx={{ p: 1.5 }} variant="outlined">
       <Typography variant="caption" display="block" sx={{ fontWeight: 600 }}>{row?.tree}</Typography>
-      <Typography variant="body2">Trunk: {formatNumber(row?.trunk, 1)} cm</Typography>
+      <Typography variant="body2">Trunk: {formatNumberSmart(row?.trunk)} cm</Typography>
       {average != null && (
         <Typography variant="caption" color="text.secondary">
-          vs avg: {formatNumber(Number(row?.trunk) - average, 1)} cm
+          vs avg: {formatNumberSmart(Number(row?.trunk) - average)} cm
         </Typography>
       )}
     </Paper>
@@ -164,16 +164,16 @@ function CanopyTooltip({ active, payload, averages }) {
   return (
     <Paper sx={{ p: 1.5 }} variant="outlined">
       <Typography variant="caption" display="block" sx={{ fontWeight: 600 }}>{row?.tree}</Typography>
-      <Typography variant="body2">Canopy N-S: {formatNumber(row?.canopyNs, 1)} cm</Typography>
-      <Typography variant="body2">Canopy E-W: {formatNumber(row?.canopyEw, 1)} cm</Typography>
+      <Typography variant="body2">Canopy N-S: {formatNumberSmart(row?.canopyNs)} cm</Typography>
+      <Typography variant="body2">Canopy E-W: {formatNumberSmart(row?.canopyEw)} cm</Typography>
       {averages.canopyNs != null && row?.canopyNs != null && (
         <Typography variant="caption" color="text.secondary" display="block">
-          N-S vs avg: {formatNumber(Number(row.canopyNs) - averages.canopyNs, 1)} cm
+          N-S vs avg: {formatNumberSmart(Number(row.canopyNs) - averages.canopyNs)} cm
         </Typography>
       )}
       {averages.canopyEw != null && row?.canopyEw != null && (
         <Typography variant="caption" color="text.secondary" display="block">
-          E-W vs avg: {formatNumber(Number(row.canopyEw) - averages.canopyEw, 1)} cm
+          E-W vs avg: {formatNumberSmart(Number(row.canopyEw) - averages.canopyEw)} cm
         </Typography>
       )}
     </Paper>
@@ -335,7 +335,7 @@ function GrowthComparisonPage() {
           <Grid item xs={6} sm={3}>
             <Typography variant="caption" color="text.secondary">Average height</Typography>
             <Typography variant="h6">
-              {averages.height != null ? `${formatNumber(averages.height, 1)} cm` : '—'}
+              {averages.height != null ? `${formatNumberSmart(averages.height)} cm` : '—'}
             </Typography>
             <Typography variant="caption" color="text.secondary">
               {averages.heightCount} tree{averages.heightCount === 1 ? '' : 's'}
@@ -344,7 +344,7 @@ function GrowthComparisonPage() {
           <Grid item xs={6} sm={3}>
             <Typography variant="caption" color="text.secondary">Average trunk</Typography>
             <Typography variant="h6">
-              {averages.trunk != null ? `${formatNumber(averages.trunk, 1)} cm` : '—'}
+              {averages.trunk != null ? `${formatNumberSmart(averages.trunk)} cm` : '—'}
             </Typography>
             <Typography variant="caption" color="text.secondary">
               {averages.trunkCount} tree{averages.trunkCount === 1 ? '' : 's'}
@@ -522,19 +522,19 @@ function GrowthComparisonPage() {
                       <TreeLink trees={row.record.trees} />
                     </TableCell>
                     <TableCell>
-                      {row.height != null ? `${formatNumber(row.height, 1)} cm` : '—'}
+                      {row.height != null ? `${formatNumberSmart(row.height)} cm` : '—'}
                     </TableCell>
                     <TableCell>
                       {row.height != null && averages.height != null
-                        ? `${formatNumber(row.height - averages.height, 1)} cm`
+                        ? `${formatNumberSmart(row.height - averages.height)} cm`
                         : '—'}
                     </TableCell>
                     <TableCell>
-                      {row.trunk != null ? `${formatNumber(row.trunk, 1)} cm` : '—'}
+                      {row.trunk != null ? `${formatNumberSmart(row.trunk)} cm` : '—'}
                     </TableCell>
                     <TableCell>
                       {row.trunk != null && averages.trunk != null
-                        ? `${formatNumber(row.trunk - averages.trunk, 1)} cm`
+                        ? `${formatNumberSmart(row.trunk - averages.trunk)} cm`
                         : '—'}
                     </TableCell>
                     <TableCell>{formatCanopyLabel(row.canopyNs, row.canopyEw)}</TableCell>
@@ -582,8 +582,8 @@ function GrowthComparisonPage() {
                 <TableRow key={r.id}>
                   <TableCell><TreeLink trees={r.trees} /></TableCell>
                   <TableCell>{formatDate(r.measurement_date)}</TableCell>
-                  <TableCell>{formatNumber(r.height_cm, 1)}</TableCell>
-                  <TableCell>{formatNumber(trunkMmToCm(r.trunk_diameter_mm), 1)}</TableCell>
+                  <TableCell>{formatNumberSmart(r.height_cm)}</TableCell>
+                  <TableCell>{formatNumberSmart(trunkMmToCm(r.trunk_diameter_mm))}</TableCell>
                   <TableCell>{formatCanopyLabel(r.canopy_ns_cm, r.canopy_ew_cm)}</TableCell>
                   <TableCell>
                     {diffFromAverage(r.height_cm, averages.height)}

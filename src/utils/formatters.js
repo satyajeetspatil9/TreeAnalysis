@@ -23,6 +23,14 @@ export function formatNumber(value, decimals = 1) {
   return Number(value).toFixed(decimals);
 }
 
+/** Whole numbers stay unpadded; otherwise show up to `maxDecimals` (default 2). */
+export function formatNumberSmart(value, maxDecimals = 2) {
+  if (value == null || value === '' || Number.isNaN(Number(value))) return '—';
+  const rounded = Number(Number(value).toFixed(maxDecimals));
+  if (Number.isInteger(rounded)) return String(rounded);
+  return rounded.toFixed(maxDecimals);
+}
+
 export function getTreeDisplayId(tree) {
   return tree?.tree_positions?.position_code
     || tree?.position_code
