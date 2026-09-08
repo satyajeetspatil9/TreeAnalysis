@@ -334,6 +334,7 @@ export default function IrrigationProgramFormDialog({
             </FormControl>
           </Grid>
 
+          {!isFertigation && (
           <Grid item xs={12}>
             <FormControlLabel
               control={(
@@ -348,6 +349,14 @@ export default function IrrigationProgramFormDialog({
               When checked, this program will not start if rainfall is above 0 mm. Water now still runs.
             </Typography>
           </Grid>
+          )}
+          {isFertigation && (
+          <Grid item xs={12}>
+            <Typography variant="body2" color="text.secondary">
+              Fertigation always starts on schedule, even if Climate shows rain.
+            </Typography>
+          </Grid>
+          )}
 
           <Grid item xs={12}>
             <FormControl component="fieldset" variant="standard" fullWidth sx={fieldsetSx}>

@@ -255,7 +255,7 @@ function IrrigationProgramsPanel({
       days_of_week: form.days_of_week,
       start_times: form.start_times.filter(Boolean).map((t) => `${timeToInputValue(t)}:00`),
       motor_device_ids: form.motor_device_ids,
-      skip_if_rain: Boolean(form.skip_if_rain),
+      skip_if_rain: programType === 'fertigation' ? false : Boolean(form.skip_if_rain),
       updated_at: new Date().toISOString(),
     };
 
@@ -762,14 +762,14 @@ function IrrigationProgramsPanel({
               <TableCell>{programType === 'fertigation' ? 'Zones & minutes' : 'Zones & liters'}</TableCell>
               <TableCell>Time</TableCell>
               <TableCell>On</TableCell>
-              <TableCell>Skip rain</TableCell>
+              {programType !== 'fertigation' && <TableCell>Skip rain</TableCell>}
               <TableCell align="right">Actions</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {programs.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={programType === 'fertigation' ? 11 : 10}>
+                <TableCell colSpan={programType === 'fertigation' ? 10 : 10}>
                   <Typography color="text.secondary">
                     {programType === 'fertigation'
                       ? 'No fertigation programs yet.'
@@ -814,11 +814,13 @@ function IrrigationProgramsPanel({
                       inputProps={{ 'aria-label': 'Active' }}
                     />
                   </TableCell>
+                  {programType !== 'fertigation' && (
                   <TableCell>
                     {program.skip_if_rain != null
                       ? (program.skip_if_rain ? 'Yes' : 'No')
-                      : (programType !== 'fertigation' ? 'Yes' : 'No')}
+                      : 'Yes'}
                   </TableCell>
+                  )}
                   <TableCell align="right">
                     <Button size="small" onClick={() => openEdit(program)}>Edit</Button>
                     <Button size="small" color="error" onClick={() => deleteProgram(program)}>Delete</Button>

@@ -248,8 +248,9 @@ function elapsedMinutes(job: Job, now: Date) {
 
 function programSkipsIfRain(program: Job | undefined) {
   if (!program) return false;
+  if (program.program_type === 'fertigation') return false;
   if (program.skip_if_rain != null) return Boolean(program.skip_if_rain);
-  return program.program_type !== 'fertigation';
+  return true;
 }
 
 /** Same rain signal as Climate: weather_observations first, else Open-Meteo current precipitation. */
@@ -710,7 +711,9 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
 
     if (hasRun && (hitLiters || hitDuration || hitCap)) {
       const reason = hitLiters ? 'target_liters' : (hitDuration ? 'duration_done' : 'max_duration');
-      if (job.job_type !== 'fertigation') {
+      if (job.job_type === 'fertigation') {
+        await recordFertigationEvent(supabase, job, zone, now, elapsed);
+      } else {
         await recordWaterIrrigationEvent(supabase, job, zone, now, elapsed);
       }
 
@@ -930,6 +933,53 @@ async function recordWaterIrrigationEvent(
     flow_rate_lph: flow,
     notes,
   });
+}
+
+async function recordFertigationEvent(
+  supabase: Supabase,
+  job: Job,
+  zone: { flow_rate_lph?: number | null } | undefined,
+  now: Date,
+  elapsed: number,
+) {
+  if (!job.zone_id) return;
+
+  const liters = Number(job.liters_delivered) || 0;
+  const flow = zone?.flow_rate_lph != null ? Number(zone.flow_rate_lph) : null;
+  let duration = elapsed;
+  if (!(duration > 0) && liters > 0 && flow && flow > 0) duration = (liters / flow) * 60;
+  if (!(duration > 0) && job.on_duration_minutes != null) {
+    duration = Number(job.on_duration_minutes) || duration;
+  }
+  if (!(duration > 0)) return;
+
+  const waterLiters = liters > 0
+    ? liters
+    : (flow && flow > 0 && duration > 0 ? (flow * duration) / 60 : null);
+
+  const local = partsInTz(now, FARM_TZ);
+  const notes = `irrigation_job:${job.id}:seq:${job.current_step_seq ?? 0}`;
+
+  const { data: existing, error: existingError } = await supabase
+    .from('fertigation_events')
+    .select('id')
+    .eq('notes', notes)
+    .maybeSingle();
+  if (!existingError && existing) return;
+
+  const payload: Record<string, unknown> = {
+    zone_id: job.zone_id,
+    event_date: local.dateKey,
+    duration_minutes: Math.max(1, Math.round(duration)),
+    water_liters: waterLiters != null && waterLiters > 0 ? waterLiters : null,
+    notes,
+  };
+
+  const { error } = await supabase.from('fertigation_events').insert(payload);
+  if (error && /notes/.test(error.message || '')) {
+    delete payload.notes;
+    await supabase.from('fertigation_events').insert(payload);
+  }
 }
 
 Deno.serve(async (req) => {

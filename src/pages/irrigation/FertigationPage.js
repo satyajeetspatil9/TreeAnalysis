@@ -113,7 +113,7 @@ function FertigationPage() {
       <PageHeader
         section="Monitoring"
         title="Fertigation"
-        subtitle="Fertilizer applied through drip from programs and logged events."
+        subtitle="Fertilizer applied through drip. Completed fertigation programs appear here automatically."
       />
 
       {message && <Alert severity={message.type} sx={{ mb: 2 }} onClose={() => setMessage(null)}>{message.text}</Alert>}
