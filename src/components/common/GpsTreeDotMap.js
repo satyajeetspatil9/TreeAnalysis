@@ -45,27 +45,23 @@ export function StatusDot({ color }) {
 }
 
 export function TreeDotMarker({ label, to, color, tooltip }) {
+  const title = [label, tooltip].filter(Boolean).join(' · ');
   return (
-    <Tooltip title={tooltip || label} arrow>
+    <Tooltip title={title} arrow>
       <Box
         component={RouterLink}
         to={to}
+        aria-label={title}
         sx={{
           display: 'flex',
-          flexDirection: 'column',
           alignItems: 'center',
-          gap: 0.5,
+          justifyContent: 'center',
           textDecoration: 'none',
-          color: 'text.primary',
-          py: 0.25,
-          px: 0.5,
-          borderRadius: 1,
+          p: 0.25,
+          borderRadius: '50%',
           '&:hover': { bgcolor: 'action.hover' },
         }}
       >
-        <Typography variant="caption" sx={{ fontWeight: 700, lineHeight: 1.2, whiteSpace: 'nowrap' }}>
-          {label}
-        </Typography>
         <StatusDot color={color} />
       </Box>
     </Tooltip>
