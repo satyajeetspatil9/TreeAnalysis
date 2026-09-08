@@ -37,6 +37,7 @@ import CostAnalysisPage from './pages/finance/CostAnalysisPage';
 import HarvestPage from './pages/production/HarvestPage';
 import RevenuePage from './pages/production/RevenuePage';
 import SettingsPage from './pages/admin/SettingsPage';
+import AvailableInputsPage from './pages/admin/AvailableInputsPage';
 
 function ProtectedApp() {
   const { session, loading } = useAuth();
@@ -88,6 +89,7 @@ function ProtectedApp() {
           <Route path="production/harvest" element={<HarvestPage />} />
           <Route path="production/revenue" element={<RevenuePage />} />
           <Route path="admin/settings" element={<SettingsPage />} />
+          <Route path="admin/farm-inputs" element={<AvailableInputsPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>

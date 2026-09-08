@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link as RouterLink } from 'react-router-dom';
 import {
-  Alert, Box, Button, Paper, Table, TableBody, TableCell, TableHead, TableRow, Typography,
+  Alert, Box, Button, Chip, Paper, Stack, Table, TableBody, TableCell, TableHead, TableRow, Typography,
 } from '@mui/material';
 import { supabase } from '../../supabaseClient';
 import { useFarm } from '../../hooks/useFarm';
@@ -11,6 +11,10 @@ import { TREE_LIST_SELECT, getIrrigationZoneId, getIrrigationZoneCode } from '..
 import { resolveStage } from '../../utils/farmClimateLogic';
 import { loadFarmClimateSnapshot } from '../../utils/farmClimateData';
 import { npkTargetsForStage } from '../../utils/fertilizerStage';
+import {
+  formatSuggestedInputNames,
+  suggestFertilizerInputs,
+} from '../../utils/farmInputCatalog';
 
 function FertilizerOptimizerPage() {
   const { farm } = useFarm();
@@ -19,6 +23,7 @@ function FertilizerOptimizerPage() {
   const [stage, setStage] = useState('');
   const [gdd, setGdd] = useState(null);
   const [targets, setTargets] = useState(null);
+  const [suggested, setSuggested] = useState([]);
   const [rows, setRows] = useState([]);
   const [saving, setSaving] = useState(false);
 
@@ -43,6 +48,7 @@ function FertilizerOptimizerPage() {
     setGdd(snapshot.gdd);
     setStage(nextStage);
     setTargets(npkTargetsForStage(nextStage, latestLab || {}));
+    setSuggested(suggestFertilizerInputs(latestLab || {}, nextStage));
 
     const { data: recs, error } = await supabase
       .from('fertilizer_recommendations')
@@ -77,6 +83,8 @@ function FertilizerOptimizerPage() {
     const snapshot = await loadFarmClimateSnapshot(supabase, farm, trees, 'Mango');
     const nextStage = resolveStage('Mango', snapshot.gdd);
     const nextTargets = npkTargetsForStage(nextStage, lab || {});
+    const products = suggestFertilizerInputs(lab || {}, nextStage);
+    const productNote = formatSuggestedInputNames(products);
     const today = new Date().toISOString().slice(0, 10);
     const seenZones = new Set();
     const payload = [];
@@ -92,8 +100,9 @@ function FertilizerOptimizerPage() {
         target_n: nextTargets.n,
         target_p: nextTargets.p,
         target_k: nextTargets.k,
+        recommended_products: products,
         status: 'Draft',
-        notes: `${nextTargets.notes} Zone ${getIrrigationZoneCode(tree)}.`,
+        notes: `${nextTargets.notes} Zone ${getIrrigationZoneCode(tree)}. Inputs: ${productNote}.`,
       });
     });
     setSaving(true);
@@ -112,7 +121,7 @@ function FertilizerOptimizerPage() {
       <PageHeader
         section="Inputs"
         title="Fertilizer recommendation"
-        subtitle="One draft dose per irrigation zone from the latest farm lab report and current GDD stage."
+        subtitle="One draft dose per irrigation zone from the latest farm lab report, GDD stage, and Administration available inputs."
         action={(
           <Button variant="contained" onClick={generate} disabled={saving || !farm}>
             {saving ? 'Saving…' : 'Generate from lab + stage'}
@@ -130,10 +139,55 @@ function FertilizerOptimizerPage() {
             Targets N {formatNumber(targets.n, 1)} · P {formatNumber(targets.p, 1)} · K {formatNumber(targets.k, 1)} kg/ha. {targets.notes}
           </Typography>
         )}
-        <Button component={RouterLink} to="/orchard/soil-report" size="small" sx={{ mt: 1 }}>
+        <Button component={RouterLink} to="/orchard/soil-report" size="small" sx={{ mt: 1, mr: 1 }}>
           Add soil lab report
         </Button>
+        <Button component={RouterLink} to="/admin/farm-inputs" size="small" sx={{ mt: 1 }}>
+          Available inputs
+        </Button>
       </Paper>
+
+      <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
+        <Typography variant="h6" gutterBottom>Suggested inputs</Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+          From Administration → Available inputs, matched to this lab and stage. Dashparni Ark and AgniAstra are pest-only and not included.
+        </Typography>
+        {suggested.length === 0 ? (
+          <Typography color="text.secondary">No suggestions yet.</Typography>
+        ) : (
+          <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
+            {suggested.map((item) => (
+              <Chip
+                key={item.id}
+                label={item.name}
+                title={`${item.category} — ${item.reason}`}
+                variant="outlined"
+              />
+            ))}
+          </Stack>
+        )}
+        {suggested.length > 0 && (
+          <Table size="small" sx={{ mt: 2 }}>
+            <TableHead>
+              <TableRow>
+                <TableCell>Input</TableCell>
+                <TableCell>Category</TableCell>
+                <TableCell>Why</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {suggested.map((item) => (
+                <TableRow key={item.id}>
+                  <TableCell>{item.name}</TableCell>
+                  <TableCell>{item.category}</TableCell>
+                  <TableCell>{item.reason}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </Paper>
+
       <Paper variant="outlined">
         <Table size="small">
           <TableHead>
@@ -144,6 +198,7 @@ function FertilizerOptimizerPage() {
               <TableCell>N</TableCell>
               <TableCell>P</TableCell>
               <TableCell>K</TableCell>
+              <TableCell>Inputs</TableCell>
               <TableCell>Status</TableCell>
               <TableCell>Notes</TableCell>
             </TableRow>
@@ -157,6 +212,7 @@ function FertilizerOptimizerPage() {
                 <TableCell>{formatNumber(row.target_n, 1)}</TableCell>
                 <TableCell>{formatNumber(row.target_p, 1)}</TableCell>
                 <TableCell>{formatNumber(row.target_k, 1)}</TableCell>
+                <TableCell>{formatSuggestedInputNames(row.recommended_products)}</TableCell>
                 <TableCell>{row.status}</TableCell>
                 <TableCell>{row.notes}</TableCell>
               </TableRow>

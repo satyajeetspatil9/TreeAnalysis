@@ -98,6 +98,7 @@ export const navSections = [
     icon: SettingsIcon,
     items: [
       { label: 'Settings', path: '/admin/settings', icon: SettingsIcon, description: 'Farm, varieties, sensors' },
+      { label: 'Available inputs', path: '/admin/farm-inputs', icon: AgricultureIcon, description: 'Organic and mineral inputs for fertilizer rec.' },
     ],
   },
 ];
