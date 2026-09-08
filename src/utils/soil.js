@@ -343,7 +343,7 @@ export function getLowNutrientsFromObservation(observation) {
   const lows = [];
 
   SENSOR_READING_FIELDS.forEach(({ key, label, unit, decimals, standardKey }) => {
-    if (!standardKey) return;
+    if (!standardKey || key === 'moisture_percent') return;
     const standard = getSoilStandard(standardKey);
     const value = observation?.[key];
     const evaluation = evaluateSoilStandard(standard, value);

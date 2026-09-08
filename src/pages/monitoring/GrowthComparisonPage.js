@@ -24,19 +24,12 @@ import {
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import { Link as RouterLink } from 'react-router-dom';
-import {
-  CartesianGrid,
-  Line,
-  LineChart,
-  ReferenceLine,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
+import { useTheme } from '@mui/material/styles';
 import { supabase } from '../../supabaseClient';
 import PageHeader from '../../components/common/PageHeader';
+import { GpsTreeDotMap } from '../../components/common/GpsTreeDotMap';
 import { formatDate, formatNumberSmart, getTreeDisplayId } from '../../utils/formatters';
+import { getTreeGps } from '../../utils/schema';
 import {
   GROWTH_MEASUREMENT_FIELDS,
   buildGrowthUpdatePayload,
@@ -44,11 +37,60 @@ import {
   growthRlsHint,
   hasGrowthMeasurement,
   computeGrowthAverages,
+  compareGrowthToAverage,
   pickLatestGrowthByTree,
   recordToGrowthForm,
   trunkMmToCm,
 } from '../../utils/treeGrowth';
 import { treeDashboardUrl } from '../../utils/treeDashboard';
+
+const GROWTH_MAP_LAYERS = [
+  { key: 'height', label: 'Height' },
+  { key: 'trunk', label: 'Trunk' },
+  { key: 'canopy', label: 'Canopy' },
+];
+
+function combineCanopyStatus(nsStatus, ewStatus) {
+  if (nsStatus === 'low' || ewStatus === 'low') return { status: 'low', label: 'Below avg' };
+  if (nsStatus === 'unknown' && ewStatus === 'unknown') return { status: 'unknown', label: '' };
+  if (nsStatus === 'good' || ewStatus === 'good') return { status: 'good', label: 'Above avg' };
+  return { status: 'ok', label: 'At avg' };
+}
+
+function growthLayerComparison(record, layer, averages) {
+  if (layer === 'height') {
+    const value = record.height_cm != null && record.height_cm !== '' ? Number(record.height_cm) : null;
+    return {
+      comparison: compareGrowthToAverage(value, averages.height),
+      detail: value != null ? `${formatNumberSmart(value)} cm` : null,
+    };
+  }
+  if (layer === 'trunk') {
+    const value = trunkMmToCm(record.trunk_diameter_mm);
+    return {
+      comparison: compareGrowthToAverage(value, averages.trunk),
+      detail: value != null ? `${formatNumberSmart(value)} cm` : null,
+    };
+  }
+
+  const ns = record.canopy_ns_cm != null && record.canopy_ns_cm !== '' ? Number(record.canopy_ns_cm) : null;
+  const ew = record.canopy_ew_cm != null && record.canopy_ew_cm !== '' ? Number(record.canopy_ew_cm) : null;
+  const nsComparison = compareGrowthToAverage(ns, averages.canopyNs);
+  const ewComparison = compareGrowthToAverage(ew, averages.canopyEw);
+  const parts = [];
+  if (ns != null) parts.push(`N-S ${formatNumberSmart(ns)} cm`);
+  if (ew != null) parts.push(`E-W ${formatNumberSmart(ew)} cm`);
+  return {
+    comparison: combineCanopyStatus(nsComparison.status, ewComparison.status),
+    detail: parts.join(' · ') || null,
+  };
+}
+
+function growthDotColor(theme, status) {
+  if (status === 'low') return theme.palette.warning.main;
+  if (status === 'good' || status === 'ok') return theme.palette.success.main;
+  return theme.palette.grey[400];
+}
 
 function formatCanopyLabel(nsCm, ewCm) {
   if (nsCm == null || ewCm == null || nsCm === '' || ewCm === '') return '—';
@@ -58,12 +100,6 @@ function formatCanopyLabel(nsCm, ewCm) {
 function diffFromAverage(value, average) {
   if (value == null || value === '' || average == null) return '—';
   return `${formatNumberSmart(Number(value) - average)}`;
-}
-
-function sortRecords(records) {
-  return records.slice().sort((a, b) =>
-    getTreeDisplayId(a.trees || {}).localeCompare(getTreeDisplayId(b.trees || {}))
-  );
 }
 
 function isBelowAverage(value, average) {
@@ -126,62 +162,10 @@ function sortAllRecords(records) {
   });
 }
 
-function HeightTooltip({ active, payload, average }) {
-  if (!active || !payload?.length) return null;
-  const row = payload[0]?.payload;
-  return (
-    <Paper sx={{ p: 1.5 }} variant="outlined">
-      <Typography variant="caption" display="block" sx={{ fontWeight: 600 }}>{row?.tree}</Typography>
-      <Typography variant="body2">Height: {formatNumberSmart(row?.height)} cm</Typography>
-      {average != null && (
-        <Typography variant="caption" color="text.secondary">
-          vs avg: {formatNumberSmart(Number(row?.height) - average)} cm
-        </Typography>
-      )}
-    </Paper>
-  );
-}
-
-function TrunkTooltip({ active, payload, average }) {
-  if (!active || !payload?.length) return null;
-  const row = payload[0]?.payload;
-  return (
-    <Paper sx={{ p: 1.5 }} variant="outlined">
-      <Typography variant="caption" display="block" sx={{ fontWeight: 600 }}>{row?.tree}</Typography>
-      <Typography variant="body2">Trunk: {formatNumberSmart(row?.trunk)} cm</Typography>
-      {average != null && (
-        <Typography variant="caption" color="text.secondary">
-          vs avg: {formatNumberSmart(Number(row?.trunk) - average)} cm
-        </Typography>
-      )}
-    </Paper>
-  );
-}
-
-function CanopyTooltip({ active, payload, averages }) {
-  if (!active || !payload?.length) return null;
-  const row = payload[0]?.payload;
-  return (
-    <Paper sx={{ p: 1.5 }} variant="outlined">
-      <Typography variant="caption" display="block" sx={{ fontWeight: 600 }}>{row?.tree}</Typography>
-      <Typography variant="body2">Canopy N-S: {formatNumberSmart(row?.canopyNs)} cm</Typography>
-      <Typography variant="body2">Canopy E-W: {formatNumberSmart(row?.canopyEw)} cm</Typography>
-      {averages.canopyNs != null && row?.canopyNs != null && (
-        <Typography variant="caption" color="text.secondary" display="block">
-          N-S vs avg: {formatNumberSmart(Number(row.canopyNs) - averages.canopyNs)} cm
-        </Typography>
-      )}
-      {averages.canopyEw != null && row?.canopyEw != null && (
-        <Typography variant="caption" color="text.secondary" display="block">
-          E-W vs avg: {formatNumberSmart(Number(row.canopyEw) - averages.canopyEw)} cm
-        </Typography>
-      )}
-    </Paper>
-  );
-}
-
 function GrowthComparisonPage() {
+  const theme = useTheme();
   const [allRecords, setAllRecords] = useState([]);
+  const [mapLayer, setMapLayer] = useState('height');
   const [message, setMessage] = useState(null);
   const [editingRecord, setEditingRecord] = useState(null);
   const [editForm, setEditForm] = useState(emptyGrowthForm());
@@ -192,7 +176,7 @@ function GrowthComparisonPage() {
   const loadRecords = useCallback(async () => {
     const { data, error } = await supabase
       .from('tree_growth')
-      .select('*, trees(tree_positions(position_code), variety)')
+      .select('*, trees(tree_positions(position_code, latitude, longitude), variety)')
       .order('measurement_date', { ascending: false });
 
     if (error) {
@@ -211,40 +195,29 @@ function GrowthComparisonPage() {
   const latestRecords = useMemo(() => pickLatestGrowthByTree(allRecords), [allRecords]);
   const averages = useMemo(() => computeGrowthAverages(latestRecords), [latestRecords]);
 
-  const heightChartData = useMemo(
-    () => sortRecords(latestRecords)
-      .filter((r) => r.height_cm != null && r.height_cm !== '')
-      .map((r) => ({
-        tree: getTreeDisplayId(r.trees || {}),
-        height: Number(r.height_cm),
-      })),
-    [latestRecords]
-  );
-
-  const trunkChartData = useMemo(
-    () => sortRecords(latestRecords)
-      .filter((r) => r.trunk_diameter_mm != null && r.trunk_diameter_mm !== '')
-      .map((r) => ({
-        tree: getTreeDisplayId(r.trees || {}),
-        trunk: trunkMmToCm(r.trunk_diameter_mm),
-      })),
-    [latestRecords]
-  );
-
-  const canopyChartData = useMemo(
-    () => sortRecords(latestRecords)
-      .filter((r) => r.canopy_ns_cm != null && r.canopy_ew_cm != null)
-      .map((r) => ({
-        tree: getTreeDisplayId(r.trees || {}),
-        canopyNs: Number(r.canopy_ns_cm),
-        canopyEw: Number(r.canopy_ew_cm),
-      })),
-    [latestRecords]
-  );
-
   const belowAverageRows = useMemo(
     () => buildBelowAverageRows(latestRecords, averages),
     [latestRecords, averages]
+  );
+
+  const mapLayerMeta = GROWTH_MAP_LAYERS.find((layer) => layer.key === mapLayer) || GROWTH_MAP_LAYERS[0];
+  const mapItems = useMemo(
+    () => latestRecords
+      .map((record) => {
+        const { comparison, detail } = growthLayerComparison(record, mapLayer, averages);
+        if (comparison.status === 'unknown') return null;
+        const code = getTreeDisplayId(record.trees || {});
+        return {
+          id: record.tree_id,
+          label: code,
+          to: treeDashboardUrl(code, 'growth'),
+          color: growthDotColor(theme, comparison.status),
+          gps: getTreeGps(record.trees || {}),
+          tooltip: [comparison.label, detail].filter(Boolean).join(' · '),
+        };
+      })
+      .filter(Boolean),
+    [latestRecords, mapLayer, averages, theme]
   );
 
   const openEditRecord = (record) => {
@@ -308,20 +281,11 @@ function GrowthComparisonPage() {
     loadRecords();
   };
 
-  const xAxisProps = {
-    dataKey: 'tree',
-    interval: 0,
-    angle: -35,
-    textAnchor: 'end',
-    height: 72,
-    tick: { fontSize: 11 },
-  };
-
   return (
     <Box>
       <PageHeader
         title="Growth Comparison"
-        subtitle="Charts compare the latest measurement per tree. Edit or delete any recorded measurement below."
+        subtitle="Latest measurement per tree vs farm average. Switch Height, Trunk, or Canopy on the map. Edit or delete any recorded measurement below."
       />
 
       {message && (
@@ -367,127 +331,45 @@ function GrowthComparisonPage() {
       </Paper>
 
       {latestRecords.length > 0 && (
-        <Grid container spacing={2} sx={{ mb: 3 }}>
-          <Grid item xs={12} lg={4}>
-            <Paper sx={{ p: 2 }} variant="outlined">
-              <Typography variant="h6" gutterBottom>Height by Tree</Typography>
-              {heightChartData.length > 0 ? (
-                <ResponsiveContainer width="100%" height={300}>
-                  <LineChart data={heightChartData} margin={{ top: 12, right: 12, left: 0, bottom: 8 }}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis {...xAxisProps} />
-                    <YAxis tickFormatter={(value) => `${value} cm`} width={52} />
-                    <Tooltip content={<HeightTooltip average={averages.height} />} />
-                    {averages.height != null && (
-                      <ReferenceLine
-                        y={averages.height}
-                        stroke="#ef6c00"
-                        strokeDasharray="4 4"
-                        label={{ value: 'Avg', position: 'insideTopRight', fill: '#ef6c00', fontSize: 12 }}
-                      />
-                    )}
-                    <Line
-                      type="monotone"
-                      dataKey="height"
-                      stroke="#2e7d32"
-                      strokeWidth={2}
-                      dot={{ r: 4 }}
-                      activeDot={{ r: 6 }}
-                      name="Height (cm)"
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
-              ) : (
-                <Typography color="text.secondary">No height measurements yet.</Typography>
-              )}
-            </Paper>
-          </Grid>
-          <Grid item xs={12} lg={4}>
-            <Paper sx={{ p: 2 }} variant="outlined">
-              <Typography variant="h6" gutterBottom>Trunk by Tree</Typography>
-              {trunkChartData.length > 0 ? (
-                <ResponsiveContainer width="100%" height={300}>
-                  <LineChart data={trunkChartData} margin={{ top: 12, right: 12, left: 0, bottom: 8 }}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis {...xAxisProps} />
-                    <YAxis tickFormatter={(value) => `${value} cm`} width={52} />
-                    <Tooltip content={<TrunkTooltip average={averages.trunk} />} />
-                    {averages.trunk != null && (
-                      <ReferenceLine
-                        y={averages.trunk}
-                        stroke="#ef6c00"
-                        strokeDasharray="4 4"
-                        label={{ value: 'Avg', position: 'insideTopRight', fill: '#ef6c00', fontSize: 12 }}
-                      />
-                    )}
-                    <Line
-                      type="monotone"
-                      dataKey="trunk"
-                      stroke="#1565c0"
-                      strokeWidth={2}
-                      dot={{ r: 4 }}
-                      activeDot={{ r: 6 }}
-                      name="Trunk (cm)"
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
-              ) : (
-                <Typography color="text.secondary">No trunk measurements yet.</Typography>
-              )}
-            </Paper>
-          </Grid>
-          <Grid item xs={12} lg={4}>
-            <Paper sx={{ p: 2 }} variant="outlined">
-              <Typography variant="h6" gutterBottom>Canopy by Tree</Typography>
-              {canopyChartData.length > 0 ? (
-                <ResponsiveContainer width="100%" height={300}>
-                  <LineChart data={canopyChartData} margin={{ top: 12, right: 12, left: 0, bottom: 8 }}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis {...xAxisProps} />
-                    <YAxis tickFormatter={(value) => `${value} cm`} width={52} />
-                    <Tooltip content={<CanopyTooltip averages={averages} />} />
-                    {averages.canopyNs != null && (
-                      <ReferenceLine
-                        y={averages.canopyNs}
-                        stroke="#ef6c00"
-                        strokeDasharray="4 4"
-                        label={{ value: 'Avg N-S', position: 'insideTopRight', fill: '#ef6c00', fontSize: 11 }}
-                      />
-                    )}
-                    {averages.canopyEw != null && (
-                      <ReferenceLine
-                        y={averages.canopyEw}
-                        stroke="#8e24aa"
-                        strokeDasharray="2 6"
-                        label={{ value: 'Avg E-W', position: 'insideBottomRight', fill: '#8e24aa', fontSize: 11 }}
-                      />
-                    )}
-                    <Line
-                      type="monotone"
-                      dataKey="canopyNs"
-                      stroke="#6a1b9a"
-                      strokeWidth={2}
-                      dot={{ r: 4 }}
-                      activeDot={{ r: 6 }}
-                      name="Canopy N-S (cm)"
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="canopyEw"
-                      stroke="#ab47bc"
-                      strokeWidth={2}
-                      dot={{ r: 4 }}
-                      activeDot={{ r: 6 }}
-                      name="Canopy E-W (cm)"
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
-              ) : (
-                <Typography color="text.secondary">No canopy measurements yet.</Typography>
-              )}
-            </Paper>
-          </Grid>
-        </Grid>
+        <Paper sx={{ p: 2, mb: 3 }} variant="outlined">
+          <Box sx={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 2, flexWrap: 'wrap', mb: 1 }}>
+            <Box>
+              <Typography variant="h6">{mapLayerMeta.label} by tree</Typography>
+              <Typography variant="body2" color="text.secondary">
+                Same GPS layout as Moisture. Yellow is below farm average; green is at or above.
+              </Typography>
+            </Box>
+            <Typography variant="caption" color="text.secondary">
+              {mapItems.length} tree{mapItems.length === 1 ? '' : 's'}
+            </Typography>
+          </Box>
+          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 1.5 }}>
+            {GROWTH_MAP_LAYERS.map((layer) => (
+              <Chip
+                key={layer.key}
+                clickable
+                label={layer.label}
+                variant={mapLayer === layer.key ? 'filled' : 'outlined'}
+                color={mapLayer === layer.key ? 'primary' : 'default'}
+                onClick={() => setMapLayer(layer.key)}
+              />
+            ))}
+          </Box>
+          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 2 }}>
+            <Chip size="small" color="warning" label="Below avg" />
+            <Chip size="small" color="success" label="At or above avg" />
+          </Box>
+          {mapItems.length > 0 ? (
+            <GpsTreeDotMap
+              items={mapItems}
+              emptyGpsText="Trees with this measurement need GPS on their position to appear on this layout."
+            />
+          ) : (
+            <Typography color="text.secondary">
+              No {mapLayerMeta.label.toLowerCase()} measurements yet.
+            </Typography>
+          )}
+        </Paper>
       )}
 
       {latestRecords.length > 0 && (

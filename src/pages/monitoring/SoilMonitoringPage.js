@@ -5,6 +5,7 @@ import {
   IconButton, Dialog, DialogTitle, DialogContent, DialogActions, DialogContentText, Chip, Stack,
   alpha,
 } from '@mui/material';
+import { useTheme } from '@mui/material/styles';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import { Link as RouterLink } from 'react-router-dom';
@@ -12,7 +13,10 @@ import { supabase } from '../../supabaseClient';
 import { formatDate, formatNumber, getTreeDisplayId } from '../../utils/formatters';
 import { useFarm } from '../../hooks/useFarm';
 import PageHeader from '../../components/common/PageHeader';
+import { GpsTreeDotMap } from '../../components/common/GpsTreeDotMap';
 import { LabReportFieldRow } from '../../components/soil/LabReportFieldRow';
+import { getTreeGps } from '../../utils/schema';
+import { treeDashboardUrl } from '../../utils/treeDashboard';
 import {
   SENSOR_READING_FIELDS,
   LAB_NUTRIENT_FIELDS,
@@ -28,6 +32,7 @@ import {
   buildTreeNutrientDeficiencyReport,
   buildFarmLabNutrientDeficiencyReport,
   getLatestObservationByTree,
+  getLowNutrientsFromObservation,
   soilRangeFieldSx,
   soilReadingCellSx,
 } from '../../utils/soil';
@@ -44,7 +49,99 @@ function formatSensorTableValue(field, value) {
   return formatNumber(value, field.decimals ?? 2);
 }
 
+function observationHasSensorNutrients(observation) {
+  return SENSOR_READING_FIELDS.some(({ key, standardKey }) => (
+    standardKey
+    && key !== 'moisture_percent'
+    && observation?.[key] != null
+    && observation[key] !== ''
+  ));
+}
+
+function nutrientChipLabel(nutrient) {
+  return `${nutrient.label}: ${formatNumber(nutrient.value, nutrient.decimals)}${nutrient.unit ? ` ${nutrient.unit}` : ''} (target ${nutrient.rangeLabel})`;
+}
+
+const lowNutrientChipSx = (theme) => ({
+  height: 'auto',
+  bgcolor: alpha(theme.palette.warning.main, 0.35),
+  color: theme.palette.warning.contrastText,
+  border: `1px solid ${theme.palette.warning.main}`,
+  '& .MuiChip-label': {
+    whiteSpace: 'normal',
+    py: 0.75,
+    px: 1,
+    fontSize: '0.95rem',
+    fontWeight: 600,
+  },
+});
+
+function LowNutrientChips({ nutrients }) {
+  return (
+    <Stack direction="row" spacing={0.75} useFlexGap flexWrap="wrap">
+      {nutrients.map((nutrient) => (
+        <Chip
+          key={nutrient.key}
+          color="warning"
+          label={nutrientChipLabel(nutrient)}
+          sx={lowNutrientChipSx}
+        />
+      ))}
+    </Stack>
+  );
+}
+
+function NutrientBelowPaper({ hasIssues, title, subtitle, children }) {
+  return (
+    <Paper
+      variant="outlined"
+      sx={(theme) => ({
+        p: 2.5,
+        height: '100%',
+        border: '2px solid',
+        borderColor: hasIssues
+          ? theme.palette.warning.main
+          : alpha(theme.palette.success.main, 0.45),
+        borderLeftWidth: 8,
+        borderLeftColor: hasIssues
+          ? theme.palette.warning.dark
+          : theme.palette.success.main,
+        bgcolor: hasIssues
+          ? alpha(theme.palette.warning.main, 0.16)
+          : alpha(theme.palette.success.main, 0.08),
+        '& .MuiTableCell-root': { fontSize: '1rem', borderColor: alpha(theme.palette.warning.main, 0.25) },
+        '& .MuiTableHead-root .MuiTableCell-root': {
+          bgcolor: hasIssues
+            ? alpha(theme.palette.warning.main, 0.28)
+            : alpha(theme.palette.success.main, 0.12),
+          color: hasIssues
+            ? theme.palette.warning.contrastText
+            : theme.palette.text.primary,
+        },
+      })}
+    >
+      <Typography
+        variant="h5"
+        gutterBottom
+        sx={(theme) => ({
+          fontWeight: 700,
+          color: hasIssues
+            ? theme.palette.warning.light
+            : theme.palette.success.light,
+        })}
+      >
+        {title}
+      </Typography>
+      <Typography variant="body1" sx={{ mb: 2, color: 'text.primary' }}>
+        {subtitle}
+      </Typography>
+      {children}
+    </Paper>
+  );
+}
+
 function SoilMonitoringPage() {
+  const theme = useTheme();
   const { farm, loading: farmLoading } = useFarm();
   const [observations, setObservations] = useState([]);
   const [sensorObservations, setSensorObservations] = useState([]);
@@ -64,7 +161,7 @@ function SoilMonitoringPage() {
   const load = useCallback(async () => {
     const { data } = await supabase
       .from('soil_observations')
-      .select('*, trees(tree_positions(position_code))')
+      .select('*, trees(tree_positions(position_code, latitude, longitude))')
       .order('observed_at', { ascending: false })
       .limit(500);
     setSensorObservations(data || []);
@@ -91,7 +188,7 @@ function SoilMonitoringPage() {
 
     const { data: treeData } = await supabase
       .from('trees')
-      .select('id, tree_positions(position_code)')
+      .select('id, tree_positions(position_code, latitude, longitude)')
       .eq('status', 'Active');
     setTrees((treeData || []).sort((a, b) =>
       getTreeDisplayId(a).localeCompare(getTreeDisplayId(b)),
@@ -118,11 +215,54 @@ function SoilMonitoringPage() {
     [labReports],
   );
 
-  const hasNutrientDeficiencies = nutrientDeficiencies.length > 0 || Boolean(labNutrientDeficiency);
-
-  const treesWithRecentReadings = useMemo(
-    () => Object.keys(getLatestObservationByTree(sensorObservations)).length,
+  const sensorNutrientTreeCount = useMemo(
+    () => Object.values(getLatestObservationByTree(sensorObservations))
+      .filter(observationHasSensorNutrients).length,
     [sensorObservations],
+  );
+
+  const sensorMapItems = useMemo(
+    () => Object.values(getLatestObservationByTree(sensorObservations))
+      .filter(observationHasSensorNutrients)
+      .map((observation) => {
+        const code = getTreeDisplayId(observation.trees || {});
+        const lowNutrients = getLowNutrientsFromObservation(observation);
+        return {
+          id: observation.tree_id,
+          label: code,
+          to: treeDashboardUrl(code, 'soil'),
+          color: lowNutrients.length ? theme.palette.warning.main : theme.palette.success.main,
+          gps: getTreeGps(observation.trees || {}),
+          tooltip: lowNutrients.length
+            ? lowNutrients.map((nutrient) => nutrient.label).join(', ')
+            : 'Meets required',
+        };
+      }),
+    [sensorObservations, theme],
+  );
+
+  const labMapItems = useMemo(
+    () => trees.map((tree) => {
+      const code = getTreeDisplayId(tree);
+      const lowNutrients = labNutrientDeficiency?.lowNutrients || [];
+      return {
+        id: tree.id,
+        label: code,
+        to: treeDashboardUrl(code, 'soil'),
+        color: labNutrientDeficiency
+          ? theme.palette.warning.main
+          : labReports.length
+            ? theme.palette.success.main
+            : theme.palette.grey[400],
+        gps: getTreeGps(tree),
+        tooltip: labNutrientDeficiency
+          ? lowNutrients.map((nutrient) => nutrient.label).join(', ')
+          : labReports.length
+            ? 'Meets required'
+            : 'No lab report',
+      };
+    }),
+    [trees, labNutrientDeficiency, labReports.length, theme],
   );
 
   const validateSensorForm = (form, treeId) => {
@@ -267,153 +407,135 @@ function SoilMonitoringPage() {
         </Button>
       </Alert>
 
-      <Paper
-        sx={(theme) => ({
-          p: 2.5,
-          mb: 3,
-          border: '2px solid',
-          borderColor: hasNutrientDeficiencies
-            ? theme.palette.warning.main
-            : alpha(theme.palette.success.main, 0.45),
-          borderLeftWidth: 8,
-          borderLeftColor: hasNutrientDeficiencies
-            ? theme.palette.warning.dark
-            : theme.palette.success.main,
-          bgcolor: hasNutrientDeficiencies
-            ? alpha(theme.palette.warning.main, 0.16)
-            : alpha(theme.palette.success.main, 0.08),
-          '& .MuiTableCell-root': { fontSize: '1rem', borderColor: alpha(theme.palette.warning.main, 0.25) },
-          '& .MuiTableHead-root .MuiTableCell-root': {
-            bgcolor: hasNutrientDeficiencies
-              ? alpha(theme.palette.warning.main, 0.28)
-              : alpha(theme.palette.success.main, 0.12),
-            color: hasNutrientDeficiencies
-              ? theme.palette.warning.contrastText
-              : theme.palette.text.primary,
-          },
-        })}
-        variant="outlined"
-      >
-        <Typography
-          variant="h5"
-          gutterBottom
-          sx={(theme) => ({
-            fontWeight: 700,
-            color: hasNutrientDeficiencies
-              ? theme.palette.warning.light
-              : theme.palette.success.light,
-          })}
-        >
-          Nutrients Below Required
-        </Typography>
-        <Typography variant="body1" sx={{ mb: 2, color: 'text.primary' }}>
-          Compares each tree&apos;s latest 7-in-1 sensor reading and your farm&apos;s latest lab report
-          against required ranges. Trees below required levels are added to Monitoring → Alerts automatically.
-        </Typography>
-        {treesWithRecentReadings === 0 && labReports.length === 0 ? (
-          <Typography variant="body1" color="text.secondary">
-            No sensor readings or lab reports yet. Add them under Farm Setting → Add Soil Report.
-          </Typography>
-        ) : !hasNutrientDeficiencies ? (
-          <Alert severity="success" sx={{ mb: 0, fontSize: '1rem' }}>
-            {treesWithRecentReadings > 0
-              ? `All ${treesWithRecentReadings} tree${treesWithRecentReadings === 1 ? '' : 's'} with sensor readings meet required nutrient levels.`
-              : 'Latest lab report meets required nutrient levels.'}
-            {treesWithRecentReadings > 0 && labReports.length > 0 ? ' Latest lab report also meets required levels.' : ''}
-          </Alert>
-        ) : (
-          <Table>
-            <TableHead>
-              <TableRow>
-                <TableCell sx={{ fontWeight: 700 }}>Source</TableCell>
-                <TableCell sx={{ fontWeight: 700 }}>Latest reading</TableCell>
-                <TableCell sx={{ fontWeight: 700 }}>Below required</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {labNutrientDeficiency && (
-                <TableRow
-                  key={`lab-${labNutrientDeficiency.reportId}`}
-                  sx={(theme) => ({
-                    '&:nth-of-type(odd)': {
-                      bgcolor: alpha(theme.palette.warning.main, 0.08),
-                    },
-                  })}
-                >
-                  <TableCell sx={{ fontWeight: 700, color: 'warning.light' }}>
-                    Farm (lab report)
-                    {labNutrientDeficiency.labName ? ` · ${labNutrientDeficiency.labName}` : ''}
-                  </TableCell>
-                  <TableCell>{formatDate(labNutrientDeficiency.sampleDate)}</TableCell>
-                  <TableCell>
-                    <Stack direction="row" spacing={0.75} useFlexGap flexWrap="wrap">
-                      {labNutrientDeficiency.lowNutrients.map((nutrient) => (
-                        <Chip
-                          key={nutrient.key}
-                          color="warning"
-                          label={`${nutrient.label}: ${formatNumber(nutrient.value, nutrient.decimals)}${nutrient.unit ? ` ${nutrient.unit}` : ''} (target ${nutrient.rangeLabel})`}
-                          sx={(theme) => ({
-                            height: 'auto',
-                            bgcolor: alpha(theme.palette.warning.main, 0.35),
-                            color: theme.palette.warning.contrastText,
-                            border: `1px solid ${theme.palette.warning.main}`,
-                            '& .MuiChip-label': {
-                              whiteSpace: 'normal',
-                              py: 0.75,
-                              px: 1,
-                              fontSize: '0.95rem',
-                              fontWeight: 600,
-                            },
-                          })}
-                        />
-                      ))}
-                    </Stack>
-                  </TableCell>
-                </TableRow>
-              )}
-              {nutrientDeficiencies.map((row) => (
-                <TableRow
-                  key={row.treeId}
-                  sx={(theme) => ({
-                    '&:nth-of-type(odd)': {
-                      bgcolor: alpha(theme.palette.warning.main, 0.08),
-                    },
-                  })}
-                >
-                  <TableCell sx={{ fontWeight: 700, color: 'warning.light' }}>
-                    {getTreeDisplayId(row.trees || {})}
-                  </TableCell>
-                  <TableCell>{formatDate(row.observedAt)}</TableCell>
-                  <TableCell>
-                    <Stack direction="row" spacing={0.75} useFlexGap flexWrap="wrap">
-                      {row.lowNutrients.map((nutrient) => (
-                        <Chip
-                          key={nutrient.key}
-                          color="warning"
-                          label={`${nutrient.label}: ${formatNumber(nutrient.value, nutrient.decimals)}${nutrient.unit ? ` ${nutrient.unit}` : ''} (target ${nutrient.rangeLabel})`}
-                          sx={(theme) => ({
-                            height: 'auto',
-                            bgcolor: alpha(theme.palette.warning.main, 0.35),
-                            color: theme.palette.warning.contrastText,
-                            border: `1px solid ${theme.palette.warning.main}`,
-                            '& .MuiChip-label': {
-                              whiteSpace: 'normal',
-                              py: 0.75,
-                              px: 1,
-                              fontSize: '0.95rem',
-                              fontWeight: 600,
-                            },
-                          })}
-                        />
-                      ))}
-                    </Stack>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        )}
-      </Paper>
+      <Grid container spacing={2} sx={{ mb: 3 }}>
+        <Grid item xs={12}>
+          <NutrientBelowPaper
+            hasIssues={nutrientDeficiencies.length > 0}
+            title="Nutrients Below Required for 7-in-1 Sensor Readings"
+            subtitle="Latest 7-in-1 reading per tree vs required ranges. Moisture is shown on Monitoring → Moisture. Trees below required levels are added to Monitoring → Alerts automatically."
+          >
+            {sensorNutrientTreeCount === 0 ? (
+              <Typography variant="body1" color="text.secondary">
+                No 7-in-1 nutrient readings yet. Add them under Farm Setting → Add Soil Report.
+              </Typography>
+            ) : (
+              <>
+                <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 2 }}>
+                  <Chip size="small" color="warning" label="Below required" />
+                  <Chip size="small" color="success" label="Meets required" />
+                </Box>
+                <Box sx={{ mb: nutrientDeficiencies.length > 0 ? 2 : 0 }}>
+                  <GpsTreeDotMap
+                    items={sensorMapItems}
+                    emptyGpsText="Trees with 7-in-1 readings need GPS on their position to appear on this layout."
+                  />
+                </Box>
+                {nutrientDeficiencies.length === 0 ? (
+                  <Alert severity="success" sx={{ mt: 2, fontSize: '1rem' }}>
+                    All {sensorNutrientTreeCount} tree{sensorNutrientTreeCount === 1 ? '' : 's'} with 7-in-1 readings meet required nutrient levels.
+                  </Alert>
+                ) : (
+                  <Table>
+                    <TableHead>
+                      <TableRow>
+                        <TableCell sx={{ fontWeight: 700 }}>Tree</TableCell>
+                        <TableCell sx={{ fontWeight: 700 }}>Latest reading</TableCell>
+                        <TableCell sx={{ fontWeight: 700 }}>Below required</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {nutrientDeficiencies.map((row) => {
+                        const code = getTreeDisplayId(row.trees || {});
+                        return (
+                          <TableRow
+                            key={row.treeId}
+                            sx={(t) => ({
+                              '&:nth-of-type(odd)': {
+                                bgcolor: alpha(t.palette.warning.main, 0.08),
+                              },
+                            })}
+                          >
+                            <TableCell sx={{ fontWeight: 700 }}>
+                              <Typography
+                                component={RouterLink}
+                                to={treeDashboardUrl(code, 'soil')}
+                                sx={{ color: 'warning.light', textDecoration: 'none', fontWeight: 700 }}
+                              >
+                                {code}
+                              </Typography>
+                            </TableCell>
+                            <TableCell>{formatDate(row.observedAt)}</TableCell>
+                            <TableCell>
+                              <LowNutrientChips nutrients={row.lowNutrients} />
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                )}
+              </>
+            )}
+          </NutrientBelowPaper>
+        </Grid>
+        <Grid item xs={12}>
+          <NutrientBelowPaper
+            hasIssues={Boolean(labNutrientDeficiency)}
+            title="Nutrients Below Required for Lab Reports"
+            subtitle="Farm lab results vs required ranges. The map uses the latest merged lab values for the whole orchard."
+          >
+            {labReports.length === 0 ? (
+              <Typography variant="body1" color="text.secondary">
+                No lab reports yet. Add them under Farm Setting → Add Soil Report.
+              </Typography>
+            ) : (
+              <>
+                <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 2 }}>
+                  <Chip size="small" color="warning" label="Below required" />
+                  <Chip size="small" color="success" label="Meets required" />
+                </Box>
+                <Box sx={{ mb: 2 }}>
+                  <GpsTreeDotMap
+                    items={labMapItems}
+                    emptyGpsText="Trees need GPS on their position to appear on this layout."
+                  />
+                </Box>
+                {labNutrientDeficiency ? (
+                  <Table>
+                    <TableHead>
+                      <TableRow>
+                        <TableCell sx={{ fontWeight: 700 }}>Lab</TableCell>
+                        <TableCell sx={{ fontWeight: 700 }}>Latest sample</TableCell>
+                        <TableCell sx={{ fontWeight: 700 }}>Below required</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      <TableRow
+                        sx={(t) => ({
+                          bgcolor: alpha(t.palette.warning.main, 0.08),
+                        })}
+                      >
+                        <TableCell sx={{ fontWeight: 700, color: 'warning.light' }}>
+                          Farm
+                          {labNutrientDeficiency.labName ? ` · ${labNutrientDeficiency.labName}` : ''}
+                        </TableCell>
+                        <TableCell>{formatDate(labNutrientDeficiency.sampleDate)}</TableCell>
+                        <TableCell>
+                          <LowNutrientChips nutrients={labNutrientDeficiency.lowNutrients} />
+                        </TableCell>
+                      </TableRow>
+                    </TableBody>
+                  </Table>
+                ) : (
+                  <Alert severity="success" sx={{ fontSize: '1rem' }}>
+                    Latest lab report meets required nutrient levels.
+                  </Alert>
+                )}
+              </>
+            )}
+          </NutrientBelowPaper>
+        </Grid>
+      </Grid>
 
       <Paper sx={{ p: 2, mb: 3 }} variant="outlined">
         <Typography variant="subtitle2" gutterBottom sx={{ fontWeight: 600 }}>
