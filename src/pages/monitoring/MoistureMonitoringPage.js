@@ -16,10 +16,14 @@ import { useTheme } from '@mui/material/styles';
 import { Link as RouterLink } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
 import PageHeader from '../../components/common/PageHeader';
-import { GpsTreeDotMap } from '../../components/common/GpsTreeDotMap';
+import OrchardZoneLayout, { TreeCircleLink } from '../../components/orchard/OrchardZoneLayout';
 import { formatDate, formatNumber, getTreeDisplayId } from '../../utils/formatters';
 import { treeDashboardUrl } from '../../utils/treeDashboard';
-import { getTreeGps } from '../../utils/schema';
+import {
+  ORCHARD_ROWS_SELECT,
+  collectRowPositions,
+} from '../../utils/orchardLayout';
+import { formatLocationLabel, parsePositionCode } from '../../utils/positionCode';
 import {
   SOIL_NUTRIENT_STANDARDS,
   evaluateSoilStandard,
@@ -45,26 +49,35 @@ function moistureDotColor(theme, status) {
 function MoistureMonitoringPage() {
   const theme = useTheme();
   const [observations, setObservations] = useState([]);
+  const [orchardRows, setOrchardRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
-    const { data, error } = await supabase
-      .from('soil_observations')
-      .select('id, tree_id, moisture_percent, observed_at, trees(tree_positions(position_code, latitude, longitude))')
-      .not('moisture_percent', 'is', null)
-      .order('observed_at', { ascending: false })
-      .limit(2000);
+    const [{ data: soilData, error: soilError }, { data: rowsData, error: rowsError }] = await Promise.all([
+      supabase
+        .from('soil_observations')
+        .select('id, tree_id, moisture_percent, observed_at, trees(tree_positions(position_code, latitude, longitude))')
+        .not('moisture_percent', 'is', null)
+        .order('observed_at', { ascending: false })
+        .limit(2000),
+      supabase
+        .from('rows')
+        .select(ORCHARD_ROWS_SELECT)
+        .order('name'),
+    ]);
 
-    if (error) {
-      setMessage({ type: 'error', text: error.message });
+    if (soilError || rowsError) {
+      setMessage({ type: 'error', text: (soilError || rowsError).message });
       setObservations([]);
+      setOrchardRows([]);
       setLoading(false);
       return;
     }
 
-    setObservations(data || []);
+    setObservations(soilData || []);
+    setOrchardRows(rowsData || []);
     setLoading(false);
   }, []);
 
@@ -87,26 +100,20 @@ function MoistureMonitoringPage() {
           observedAt: obs.observed_at,
           status: evaluation.status,
           statusLabel: evaluation.label,
-          gps: getTreeGps(obs.trees || {}),
         };
       })
       .sort((a, b) => a.tree.localeCompare(b.tree, undefined, { numeric: true, sensitivity: 'base' }));
   }, [observations]);
 
-  const mapItems = useMemo(
-    () => rows.map((row) => ({
-      id: row.treeId,
-      label: row.tree,
-      to: treeDashboardUrl(row.tree, 'soil'),
-      color: moistureDotColor(theme, row.status),
-      gps: row.gps,
-      tooltip: [
-        row.statusLabel || 'Moisture',
-        `${formatNumber(row.moisture, 0)}%`,
-        row.observedAt ? formatDate(row.observedAt) : null,
-      ].filter(Boolean).join(' · '),
-    })),
-    [rows, theme],
+  const readingByTreeId = useMemo(() => {
+    const map = new Map();
+    rows.forEach((row) => map.set(row.treeId, row));
+    return map;
+  }, [rows]);
+
+  const positions = useMemo(
+    () => orchardRows.flatMap((row) => collectRowPositions(row)),
+    [orchardRows],
   );
 
   return (
@@ -140,15 +147,39 @@ function MoistureMonitoringPage() {
               <Chip size="small" color="warning" label="Low" />
               <Chip size="small" color="success" label="Adequate" />
               <Chip size="small" color="error" label="High" />
+              <Chip size="small" label="No reading" />
             </Box>
-            {rows.length > 0 ? (
-              <GpsTreeDotMap
-                items={mapItems}
-                emptyGpsText="Trees with moisture readings need GPS on their position to appear on this layout."
+            {positions.length > 0 ? (
+              <OrchardZoneLayout
+                positions={positions}
+                renderTree={(pos) => {
+                  const reading = readingByTreeId.get(pos.activeTree?.id);
+                  const parsed = parsePositionCode(pos.position_code);
+                  const tooltip = reading
+                    ? [
+                      pos.position_code,
+                      reading.statusLabel || 'Moisture',
+                      `${formatNumber(reading.moisture, 0)}%`,
+                      reading.observedAt ? formatDate(reading.observedAt) : null,
+                    ].filter(Boolean).join(' · ')
+                    : [
+                      pos.position_code,
+                      parsed ? formatLocationLabel(parsed) : null,
+                      'No moisture reading',
+                    ].filter(Boolean).join(' · ');
+                  return (
+                    <TreeCircleLink
+                      pos={pos}
+                      to={treeDashboardUrl(pos.position_code, 'soil')}
+                      color={moistureDotColor(theme, reading?.status)}
+                      tooltip={tooltip}
+                    />
+                  );
+                }}
               />
             ) : (
               <Typography color="text.secondary">
-                No moisture readings yet. Record them on Soil monitoring or a tree Soil tab.
+                No tree positions found. Add trees in Farm Setup and Trees first.
               </Typography>
             )}
           </Paper>

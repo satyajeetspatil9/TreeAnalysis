@@ -2,17 +2,15 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link as RouterLink, useNavigate } from 'react-router-dom';
 import {
   Box, Typography, Paper, CircularProgress, Alert, TextField, InputAdornment,
-  IconButton, Chip, Grid, FormControl, InputLabel, Select, MenuItem, Button, Tooltip,
+  IconButton, Chip, Grid, FormControl, InputLabel, Select, MenuItem, Button,
   Collapse, useMediaQuery,
 } from '@mui/material';
-import { alpha, useTheme } from '@mui/material/styles';
+import { useTheme } from '@mui/material/styles';
 import SearchIcon from '@mui/icons-material/Search';
 import ClearIcon from '@mui/icons-material/Clear';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import FilterListIcon from '@mui/icons-material/FilterList';
 import { supabase } from '../supabaseClient';
-import { parsePositionCode, formatLocationLabel, normalizeRow } from '../utils/positionCode';
-import { getActiveIrrigationLink, getActiveTreeInstance } from '../utils/schema';
 import {
   EMPTY_TREE_FILTERS,
   applyFilterPatch,
@@ -22,292 +20,16 @@ import {
   matchesTreeFilters,
   normalizeFilterValue,
 } from '../utils/treeSearch';
+import {
+  ORCHARD_ROWS_SELECT,
+  collectRowPositions,
+  getPositionRowBand,
+} from '../utils/orchardLayout';
+import OrchardZoneLayout from '../components/orchard/OrchardZoneLayout';
 import { CommonBelowNutrientsSummary } from '../components/soil/CommonBelowNutrientsSummary';
 import PageHeader from '../components/common/PageHeader';
 
-const SECOND_SECTION_START_ROW = 9;
 const QUICK_RESULT_LIMIT = 8;
-
-const ROW_BANDS = [
-  { key: 'upper', fallbackLabel: `Zone · rows ${SECOND_SECTION_START_ROW}+`, rowHint: `Rows ${SECOND_SECTION_START_ROW}+` },
-  { key: 'lower', fallbackLabel: `Zone · rows 1–${SECOND_SECTION_START_ROW - 1}`, rowHint: `Rows 1–${SECOND_SECTION_START_ROW - 1}` },
-];
-
-const BLOCK_ACCENT = {
-  B: 'info',
-  A: 'primary',
-};
-
-function collectRowPositions(row) {
-  const rowCode = normalizeRow(row.name);
-  return (row.lot_rows || []).flatMap((lr) =>
-    (lr.lots?.tree_positions || [])
-      .filter((pos) => parsePositionCode(pos.position_code)?.row === rowCode)
-      .map((pos) => {
-        const activeTree = getActiveTreeInstance(pos.trees);
-        return activeTree
-          ? { ...pos, activeTree, rowId: row.id, rowCode, sectionName: row.sections?.name }
-          : null;
-      })
-      .filter(Boolean),
-  );
-}
-
-function rowNumberFromCode(rowCode) {
-  const n = Number(String(rowCode || '').replace(/^R/i, ''));
-  return Number.isFinite(n) ? n : 0;
-}
-
-function getPositionRowNumber(pos) {
-  const parsed = parsePositionCode(pos?.position_code);
-  return rowNumberFromCode(parsed?.row || pos?.rowCode);
-}
-
-function getPositionRowBand(pos) {
-  return getPositionRowNumber(pos) >= SECOND_SECTION_START_ROW ? 'upper' : 'lower';
-}
-
-function getPositionZoneCode(pos) {
-  return getActiveIrrigationLink(pos?.activeTree)?.irrigation_zones?.zone_code || null;
-}
-
-function zoneTitleForPositions(positions, fallbackLabel) {
-  const codes = [...new Set(positions.map(getPositionZoneCode).filter(Boolean))].sort();
-  if (codes.length === 1) return codes[0];
-  if (codes.length > 1) return codes.join(' · ');
-  return fallbackLabel;
-}
-
-function positionsInSectionBand(positions, section, band) {
-  return positions
-    .filter((pos) => getPositionBlock(pos) === section && getPositionRowBand(pos) === band)
-    .sort((a, b) => a.position_code.localeCompare(b.position_code));
-}
-
-function groupPositionsByRow(positions) {
-  const map = new Map();
-  positions.forEach((pos) => {
-    const row = parsePositionCode(pos.position_code)?.row || pos.rowCode || '—';
-    if (!map.has(row)) map.set(row, []);
-    map.get(row).push(pos);
-  });
-  return [...map.entries()].sort(
-    (a, b) => rowNumberFromCode(b[0]) - rowNumberFromCode(a[0]),
-  );
-}
-
-function treeCodeSortValue(pos) {
-  return parsePositionCode(pos.position_code)?.tree || pos.position_code;
-}
-
-function groupRowLots(rowPositions) {
-  const byLot = new Map();
-  rowPositions.forEach((pos) => {
-    const lot = parsePositionCode(pos.position_code)?.lot || '—';
-    if (!byLot.has(lot)) byLot.set(lot, []);
-    byLot.get(lot).push(pos);
-  });
-  return [...byLot.entries()]
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([lot, trees]) => [
-      lot,
-      trees.slice().sort((a, b) => treeCodeSortValue(a).localeCompare(treeCodeSortValue(b), undefined, { numeric: true })),
-    ]);
-}
-
-function TreeNameLink({ pos }) {
-  const theme = useTheme();
-  const parsed = parsePositionCode(pos.position_code);
-  const treeName = parsed?.tree || pos.position_code.split('-').pop() || pos.position_code;
-  const title = [
-    pos.position_code,
-    pos.activeTree?.variety,
-    parsed ? formatLocationLabel(parsed) : null,
-  ].filter(Boolean).join(' · ');
-
-  return (
-    <Tooltip title={title} arrow>
-      <Box
-        component={RouterLink}
-        to={`/tree/${pos.position_code}`}
-        aria-label={title}
-        sx={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          width: 40,
-          height: 40,
-          borderRadius: '50%',
-          textDecoration: 'none',
-          bgcolor: 'success.main',
-          color: 'success.contrastText',
-          flexShrink: 0,
-          '&:hover': { bgcolor: theme.palette.success.dark },
-        }}
-      >
-        <Typography
-          component="span"
-          sx={{
-            fontWeight: 800,
-            fontSize: '0.7rem',
-            lineHeight: 1,
-            letterSpacing: '-0.02em',
-            fontVariantNumeric: 'tabular-nums',
-            color: 'inherit',
-          }}
-        >
-          {treeName}
-        </Typography>
-      </Box>
-    </Tooltip>
-  );
-}
-
-function ZoneCard({ section, band, positions, cardRef }) {
-  const theme = useTheme();
-  const rows = groupPositionsByRow(positions);
-  const zoneTitle = zoneTitleForPositions(positions, band.fallbackLabel);
-
-  return (
-    <Paper
-      ref={cardRef}
-      sx={{
-        p: 1.5,
-        flex: 1,
-        bgcolor: alpha(theme.palette.background.paper, 0.6),
-      }}
-      variant="outlined"
-    >
-      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, mb: 1, flexWrap: 'wrap' }}>
-        <Box>
-          <Typography variant="subtitle1" sx={{ fontWeight: 800, lineHeight: 1.2 }}>
-            {zoneTitle}
-          </Typography>
-          <Typography variant="caption" color="text.secondary">
-            Block {section} · {band.rowHint}
-          </Typography>
-        </Box>
-        <Chip size="small" variant="outlined" label={`${positions.length} tree${positions.length === 1 ? '' : 's'}`} />
-      </Box>
-      {positions.length === 0 ? (
-        <Typography variant="body2" color="text.secondary">No trees in this zone.</Typography>
-      ) : (
-        rows.map(([rowCode, rowPositions]) => {
-          const lots = groupRowLots(rowPositions);
-          const showLot = lots.length > 1;
-          return (
-            <Box
-              key={rowCode}
-              sx={{
-                display: 'grid',
-                gridTemplateColumns: '40px minmax(0, 1fr)',
-                columnGap: 0.75,
-                alignItems: 'start',
-                py: 0.75,
-                borderBottom: '1px solid',
-                borderColor: 'divider',
-                '&:last-of-type': { borderBottom: 0 },
-              }}
-            >
-              <Typography
-                variant="caption"
-                sx={{ fontWeight: 700, color: 'text.secondary', pt: 0.5, lineHeight: 1.2 }}
-              >
-                {rowCode}
-              </Typography>
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, minWidth: 0 }}>
-                {lots.map(([lot, trees]) => (
-                  <Box
-                    key={lot}
-                    sx={{
-                      display: 'grid',
-                      gridTemplateColumns: showLot ? '36px minmax(0, 1fr)' : 'minmax(0, 1fr)',
-                      columnGap: 0.5,
-                      alignItems: 'start',
-                    }}
-                  >
-                    {showLot && (
-                      <Typography variant="caption" sx={{ fontWeight: 600, color: 'text.secondary', pt: 0.5 }}>
-                        {lot}
-                      </Typography>
-                    )}
-                    <Box
-                      sx={{
-                        display: 'grid',
-                        gridTemplateColumns: 'repeat(auto-fill, 40px)',
-                        justifyContent: 'start',
-                        gap: 0.5,
-                      }}
-                    >
-                      {trees.map((pos) => (
-                        <TreeNameLink key={pos.id} pos={pos} />
-                      ))}
-                    </Box>
-                  </Box>
-                ))}
-              </Box>
-            </Box>
-          );
-        })
-      )}
-    </Paper>
-  );
-}
-
-function BlockColumn({ block, positions, firstMatchKey, firstMatchRef, blockRef }) {
-  const theme = useTheme();
-  const accent = theme.palette[BLOCK_ACCENT[block]]?.main || theme.palette.primary.main;
-
-  return (
-    <Paper
-      ref={blockRef}
-      sx={{
-        height: '100%',
-        display: 'flex',
-        flexDirection: 'column',
-        overflow: 'hidden',
-        border: '1px solid',
-        borderColor: alpha(accent, 0.45),
-      }}
-    >
-      <Box
-        sx={{
-          px: 2,
-          py: 1.5,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          bgcolor: alpha(accent, 0.16),
-          borderBottom: '1px solid',
-          borderColor: alpha(accent, 0.28),
-        }}
-      >
-        <Typography variant="h5" sx={{ fontWeight: 800 }}>
-          Block {block}
-        </Typography>
-        <Chip
-          size="small"
-          label={`${positionsInSectionBand(positions, block, 'upper').length
-            + positionsInSectionBand(positions, block, 'lower').length} trees`}
-        />
-      </Box>
-      <Box sx={{ p: 1.5, display: 'flex', flexDirection: 'column', gap: 1.5, flex: 1 }}>
-        {ROW_BANDS.map((band) => {
-          const key = `${block}-${band.key}`;
-          return (
-            <ZoneCard
-              key={key}
-              section={block}
-              band={band}
-              positions={positionsInSectionBand(positions, block, band.key)}
-              cardRef={firstMatchKey === key ? firstMatchRef : null}
-            />
-          );
-        })}
-      </Box>
-    </Paper>
-  );
-}
 
 function FilterSelect({
   label, value, options, onChange, disabled = false,
@@ -347,26 +69,7 @@ function FarmMapPage() {
         const [{ data, error: rowsError }, { data: soilData }] = await Promise.all([
           supabase
             .from('rows')
-            .select(`
-            id, name,
-            sections ( name ),
-            lot_rows (
-              lots (
-                id, name,
-                tree_positions (
-                  id, position_code,
-                  trees (
-                    id, status, variety, planting_date,
-                    tree_irrigation_zones (
-                      zone_id,
-                      end_date,
-                      irrigation_zones ( id, zone_code )
-                    )
-                  )
-                )
-              )
-            )
-          `)
+            .select(ORCHARD_ROWS_SELECT)
             .order('name'),
           supabase
             .from('soil_observations')
@@ -426,11 +129,6 @@ function FarmMapPage() {
     if (singleMatch?.position_code) {
       navigate(`/tree/${singleMatch.position_code}`);
     }
-  };
-
-  const scrollToBlock = (block) => {
-    const node = block === 'B' ? blockBRef.current : blockARef.current;
-    node?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
   useEffect(() => {
@@ -609,32 +307,13 @@ function FarmMapPage() {
       )}
 
       {allPositions.length > 0 && (
-        <>
-          <Box sx={{ display: { xs: 'flex', md: 'none' }, gap: 1, mb: 2 }}>
-            <Button fullWidth variant="outlined" onClick={() => scrollToBlock('B')}>Block B</Button>
-            <Button fullWidth variant="outlined" onClick={() => scrollToBlock('A')}>Block A</Button>
-          </Box>
-          <Grid container spacing={2}>
-            <Grid item xs={12} md={6}>
-              <BlockColumn
-                block="B"
-                positions={mapPositions}
-                firstMatchKey={firstMatchKey}
-                firstMatchRef={firstMatchRef}
-                blockRef={blockBRef}
-              />
-            </Grid>
-            <Grid item xs={12} md={6}>
-              <BlockColumn
-                block="A"
-                positions={mapPositions}
-                firstMatchKey={firstMatchKey}
-                firstMatchRef={firstMatchRef}
-                blockRef={blockARef}
-              />
-            </Grid>
-          </Grid>
-        </>
+        <OrchardZoneLayout
+          positions={mapPositions}
+          firstMatchKey={firstMatchKey}
+          firstMatchRef={firstMatchRef}
+          blockBRef={blockBRef}
+          blockARef={blockARef}
+        />
       )}
     </Box>
   );
