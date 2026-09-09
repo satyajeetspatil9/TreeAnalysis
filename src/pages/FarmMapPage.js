@@ -23,7 +23,8 @@ import {
 import {
   ORCHARD_ROWS_SELECT,
   collectRowPositions,
-  getPositionRowBand,
+  getPositionBandKey,
+  positionsInBlock,
 } from '../utils/orchardLayout';
 import OrchardZoneLayout from '../components/orchard/OrchardZoneLayout';
 import { CommonBelowNutrientsSummary } from '../components/soil/CommonBelowNutrientsSummary';
@@ -111,7 +112,10 @@ function FarmMapPage() {
   const previewResults = filtersActive ? filteredPositions.slice(0, QUICK_RESULT_LIMIT) : [];
   const mapPositions = filtersActive ? filteredPositions : allPositions;
   const firstMatchKey = filtersActive && filteredPositions[0]
-    ? `${getPositionBlock(filteredPositions[0])}-${getPositionRowBand(filteredPositions[0])}`
+    ? `${getPositionBlock(filteredPositions[0])}-${getPositionBandKey(
+      filteredPositions[0],
+      positionsInBlock(mapPositions, getPositionBlock(filteredPositions[0])),
+    )}`
     : null;
   const singleMatch = filteredPositions.length === 1 ? filteredPositions[0] : null;
 

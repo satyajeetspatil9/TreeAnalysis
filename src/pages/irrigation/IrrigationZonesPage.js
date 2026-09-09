@@ -19,7 +19,7 @@ function rlsHint(message) {
   return `${message} Open Settings → Save Farm to link the farm to your account, then run migration 008_fix_irrigation_rls.sql in Supabase SQL Editor.`;
 }
 
-const emptyForm = { zone_code: '', description: '', flow_rate_lph: '' };
+const emptyForm = { zone_code: '', description: '', row_count: '', flow_rate_lph: '' };
 const today = () => new Date().toISOString().slice(0, 10);
 
 async function getZoneUsage(zoneId) {
@@ -139,6 +139,7 @@ function IrrigationZonesPage() {
     setEditForm({
       zone_code: zone.zone_code || '',
       description: zone.description || '',
+      row_count: zone.row_count ?? '',
       flow_rate_lph: zone.flow_rate_lph ?? '',
     });
   };
@@ -229,6 +230,7 @@ function IrrigationZonesPage() {
       farm_id: farm.id,
       zone_code: form.zone_code.trim().toUpperCase(),
       description: form.description.trim() || null,
+      row_count: form.row_count ? Number(form.row_count) : null,
       flow_rate_lph: form.flow_rate_lph ? Number(form.flow_rate_lph) : null,
     }]);
 
@@ -253,6 +255,7 @@ function IrrigationZonesPage() {
       .update({
         zone_code: editForm.zone_code.trim().toUpperCase(),
         description: editForm.description.trim() || null,
+        row_count: editForm.row_count !== '' ? Number(editForm.row_count) : null,
         flow_rate_lph: editForm.flow_rate_lph !== '' ? Number(editForm.flow_rate_lph) : null,
       })
       .eq('id', editingZone.id);
@@ -361,7 +364,7 @@ function IrrigationZonesPage() {
       <PageHeader
         section="Farm Setting"
         title="Irrigation Zones"
-        subtitle="Create zones, assign trees, edit details, or delete unused zones — all in one place."
+        subtitle="Create zones, set how many rows each covers, assign trees, and edit details."
       />
 
       {!farm && (
@@ -375,7 +378,7 @@ function IrrigationZonesPage() {
       <Paper sx={{ p: 3, mb: 3 }}>
         <Typography variant="h6" gutterBottom>Add irrigation zone</Typography>
         <Grid container spacing={2}>
-          <Grid item xs={12} md={4}>
+          <Grid item xs={12} md={3}>
             <TextField
               label="Zone code"
               fullWidth
@@ -386,17 +389,29 @@ function IrrigationZonesPage() {
               disabled={!farm}
             />
           </Grid>
-          <Grid item xs={12} md={4}>
+          <Grid item xs={12} md={3}>
             <TextField
               label="Description"
               fullWidth
               value={form.description}
               onChange={(e) => setForm({ ...form, description: e.target.value })}
-              placeholder="Block A, R01–R08 drip line"
+              placeholder="Block A lower drip line"
               disabled={!farm}
             />
           </Grid>
-          <Grid item xs={12} md={4}>
+          <Grid item xs={12} md={3}>
+            <TextField
+              label="Number of rows"
+              type="number"
+              fullWidth
+              value={form.row_count}
+              onChange={(e) => setForm({ ...form, row_count: e.target.value })}
+              inputProps={{ min: 1, step: 1 }}
+              helperText="From the bottom of the block"
+              disabled={!farm}
+            />
+          </Grid>
+          <Grid item xs={12} md={3}>
             <TextField
               label="Flow rate (L/hr)"
               type="number"
@@ -439,6 +454,9 @@ function IrrigationZonesPage() {
                   {zone.description || 'No description'}
                 </Typography>
                 <Typography variant="body2">{zone.treeCount} trees assigned</Typography>
+                <Typography variant="body2">
+                  Rows: {zone.row_count ? zone.row_count : '—'}
+                </Typography>
                 <Typography variant="body2" sx={{ mb: 2 }}>
                   Flow: {zone.flow_rate_lph ? `${zone.flow_rate_lph} L/hr` : '—'}
                 </Typography>
@@ -554,6 +572,16 @@ function IrrigationZonesPage() {
             margin="normal"
             value={editForm.description}
             onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
+          />
+          <TextField
+            label="Number of rows"
+            type="number"
+            fullWidth
+            margin="normal"
+            value={editForm.row_count}
+            onChange={(e) => setEditForm({ ...editForm, row_count: e.target.value })}
+            inputProps={{ min: 1, step: 1 }}
+            helperText="How many orchard rows this zone covers, counting from the bottom of the block"
           />
           <TextField
             label="Flow rate (L/hr)"

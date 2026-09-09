@@ -5,10 +5,10 @@ import { Link as RouterLink } from 'react-router-dom';
 import { formatLocationLabel, parsePositionCode } from '../../utils/positionCode';
 import {
   BLOCK_ACCENT,
-  ROW_BANDS,
+  buildBlockZoneBands,
   groupPositionsByRow,
   groupRowLots,
-  positionsInSectionBand,
+  positionsInBlock,
   treeShortName,
   zoneTitleForPositions,
 } from '../../utils/orchardLayout';
@@ -159,6 +159,8 @@ function ZoneCard({ section, band, positions, cardRef, renderTree }) {
 function BlockColumn({ block, positions, firstMatchKey, firstMatchRef, blockRef, renderTree }) {
   const theme = useTheme();
   const accent = theme.palette[BLOCK_ACCENT[block]]?.main || theme.palette.primary.main;
+  const blockPositions = positionsInBlock(positions, block);
+  const bands = buildBlockZoneBands(blockPositions);
 
   return (
     <Paper
@@ -189,19 +191,18 @@ function BlockColumn({ block, positions, firstMatchKey, firstMatchRef, blockRef,
         </Typography>
         <Chip
           size="small"
-          label={`${positionsInSectionBand(positions, block, 'upper').length
-            + positionsInSectionBand(positions, block, 'lower').length} trees`}
+          label={`${blockPositions.length} tree${blockPositions.length === 1 ? '' : 's'}`}
         />
       </Box>
       <Box sx={{ p: 1.5, display: 'flex', flexDirection: 'column', gap: 1.5, flex: 1 }}>
-        {ROW_BANDS.map((band) => {
+        {bands.map((band) => {
           const key = `${block}-${band.key}`;
           return (
             <ZoneCard
               key={key}
               section={block}
               band={band}
-              positions={positionsInSectionBand(positions, block, band.key)}
+              positions={band.positions}
               cardRef={firstMatchKey === key ? firstMatchRef : null}
               renderTree={renderTree}
             />

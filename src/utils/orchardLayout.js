@@ -2,12 +2,11 @@ import { parsePositionCode, normalizeRow } from './positionCode';
 import { getActiveIrrigationLink, getActiveTreeInstance } from './schema';
 import { getPositionBlock } from './treeSearch';
 
-export const SECOND_SECTION_START_ROW = 9;
-
-export const ROW_BANDS = [
-  { key: 'upper', fallbackLabel: `Zone · rows ${SECOND_SECTION_START_ROW}+`, rowHint: `Rows ${SECOND_SECTION_START_ROW}+` },
-  { key: 'lower', fallbackLabel: `Zone · rows 1–${SECOND_SECTION_START_ROW - 1}`, rowHint: `Rows 1–${SECOND_SECTION_START_ROW - 1}` },
-];
+export function formatRowCode(rowNumber) {
+  const n = Number(rowNumber);
+  if (!Number.isFinite(n) || n <= 0) return '—';
+  return `R${String(Math.trunc(n)).padStart(2, '0')}`;
+}
 
 export const BLOCK_ACCENT = {
   B: 'info',
@@ -27,7 +26,7 @@ export const ORCHARD_ROWS_SELECT = `
           tree_irrigation_zones (
             zone_id,
             end_date,
-            irrigation_zones ( id, zone_code )
+            irrigation_zones ( id, zone_code, description, row_count )
           )
         )
       )
@@ -60,12 +59,168 @@ export function getPositionRowNumber(pos) {
   return rowNumberFromCode(parsed?.row || pos?.rowCode);
 }
 
-export function getPositionRowBand(pos) {
-  return getPositionRowNumber(pos) >= SECOND_SECTION_START_ROW ? 'upper' : 'lower';
+export function getPositionZone(pos) {
+  return getActiveIrrigationLink(pos?.activeTree)?.irrigation_zones || null;
 }
 
 export function getPositionZoneCode(pos) {
-  return getActiveIrrigationLink(pos?.activeTree)?.irrigation_zones?.zone_code || null;
+  return getPositionZone(pos)?.zone_code || null;
+}
+
+export function parseZoneRowCount(zone) {
+  const declared = Number(zone?.row_count);
+  if (Number.isFinite(declared) && declared > 0) return declared;
+
+  const description = String(zone?.description || '');
+  const range = description.match(/R0?(\d+)\s*(?:[–-]|to)\s*R0?(\d+)/i);
+  if (range) {
+    const from = Number(range[1]);
+    const to = Number(range[2]);
+    if (from > 0 && to >= from) return to - from + 1;
+  }
+  const words = description.match(/(\d+)\s*rows?\b/i);
+  if (words) {
+    const n = Number(words[1]);
+    if (n > 0) return n;
+  }
+  return null;
+}
+
+function uniqueZonesFromPositions(positions) {
+  const map = new Map();
+  positions.forEach((pos) => {
+    const zone = getPositionZone(pos);
+    if (zone?.id && !map.has(zone.id)) map.set(zone.id, zone);
+  });
+  return [...map.values()];
+}
+
+function minRowForZone(positions, zoneId) {
+  const rows = positions
+    .filter((pos) => getPositionZone(pos)?.id === zoneId)
+    .map(getPositionRowNumber)
+    .filter((n) => n > 0);
+  return rows.length ? Math.min(...rows) : Number.POSITIVE_INFINITY;
+}
+
+function maxRowForZone(positions, zoneId) {
+  const rows = positions
+    .filter((pos) => getPositionZone(pos)?.id === zoneId)
+    .map(getPositionRowNumber)
+    .filter((n) => n > 0);
+  return rows.length ? Math.max(...rows) : 0;
+}
+
+function rowRangeHint(positions, startRow, endRow) {
+  if (startRow && endRow && Number.isFinite(endRow)) {
+    return startRow === endRow
+      ? `Row ${formatRowCode(startRow)}`
+      : `Rows ${formatRowCode(startRow)}–${formatRowCode(endRow)}`;
+  }
+  if (startRow && !Number.isFinite(endRow)) {
+    return `Rows ${formatRowCode(startRow)}+`;
+  }
+  const rows = [...new Set(positions.map(getPositionRowNumber).filter((n) => n > 0))].sort((a, b) => a - b);
+  if (!rows.length) return 'Rows not set';
+  if (rows.length === 1) return `Row ${formatRowCode(rows[0])}`;
+  return `Rows ${formatRowCode(rows[0])}–${formatRowCode(rows[rows.length - 1])}`;
+}
+
+function sortZonesBottomFirst(zones, positions) {
+  return zones.slice().sort((a, b) => {
+    const minA = minRowForZone(positions, a.id);
+    const minB = minRowForZone(positions, b.id);
+    if (minA !== minB) return minA - minB;
+    return String(a.zone_code || '').localeCompare(String(b.zone_code || ''), undefined, { numeric: true });
+  });
+}
+
+function positionsInRowRange(positions, startRow, endRow) {
+  const cap = Number.isFinite(endRow) ? endRow : Number.POSITIVE_INFINITY;
+  return positions
+    .filter((pos) => {
+      const row = getPositionRowNumber(pos);
+      return row >= startRow && row <= cap;
+    })
+    .sort((a, b) => a.position_code.localeCompare(b.position_code));
+}
+
+/** Zone cards for one block: split by each zone's row count, higher rows on top. */
+export function buildBlockZoneBands(blockPositions) {
+  const positions = blockPositions
+    .slice()
+    .sort((a, b) => a.position_code.localeCompare(b.position_code));
+  const zones = sortZonesBottomFirst(uniqueZonesFromPositions(positions), positions);
+
+  if (!zones.length) {
+    return [{
+      key: 'unassigned',
+      fallbackLabel: 'No irrigation zone',
+      rowHint: rowRangeHint(positions),
+      positions,
+    }];
+  }
+
+  const counts = zones.map((zone) => parseZoneRowCount(zone));
+  const useRowCounts = counts.some(Boolean);
+
+  if (useRowCounts) {
+    let start = 1;
+    const bands = zones.map((zone, index) => {
+      const count = counts[index];
+      const isLast = index === zones.length - 1;
+      const end = isLast
+        ? (count ? start + count - 1 : Number.POSITIVE_INFINITY)
+        : start + (count || Math.max(1, maxRowForZone(positions, zone.id) - start + 1)) - 1;
+      const bandPositions = positionsInRowRange(positions, start, end);
+      const band = {
+        key: String(zone.id),
+        fallbackLabel: zone.zone_code || 'Zone',
+        rowHint: count
+          ? `${count} row${count === 1 ? '' : 's'} · ${rowRangeHint(bandPositions, start, end)}`
+          : rowRangeHint(bandPositions, start, end),
+        positions: bandPositions,
+      };
+      start = Number.isFinite(end) ? end + 1 : start;
+      return band;
+    });
+    return bands.reverse();
+  }
+
+  const assigned = zones.map((zone) => {
+    const bandPositions = positions.filter((pos) => getPositionZone(pos)?.id === zone.id)
+      .sort((a, b) => a.position_code.localeCompare(b.position_code));
+    return {
+      key: String(zone.id),
+      fallbackLabel: zone.zone_code || 'Zone',
+      rowHint: rowRangeHint(bandPositions),
+      maxRow: maxRowForZone(positions, zone.id),
+      positions: bandPositions,
+    };
+  }).sort((a, b) => b.maxRow - a.maxRow);
+
+  const unassigned = positions.filter((pos) => !getPositionZone(pos)?.id);
+  if (unassigned.length) {
+    assigned.push({
+      key: 'unassigned',
+      fallbackLabel: 'No irrigation zone',
+      rowHint: rowRangeHint(unassigned),
+      positions: unassigned,
+    });
+  }
+  return assigned;
+}
+
+export function getPositionBandKey(pos, blockPositions) {
+  const bands = buildBlockZoneBands(blockPositions);
+  const band = bands.find((item) => item.positions.some((tree) => tree.id === pos.id));
+  return band?.key || 'unassigned';
+}
+
+export function positionsInBlock(positions, section) {
+  return positions
+    .filter((pos) => getPositionBlock(pos) === section)
+    .sort((a, b) => a.position_code.localeCompare(b.position_code));
 }
 
 export function zoneTitleForPositions(positions, fallbackLabel) {
@@ -73,12 +228,6 @@ export function zoneTitleForPositions(positions, fallbackLabel) {
   if (codes.length === 1) return codes[0];
   if (codes.length > 1) return codes.join(' · ');
   return fallbackLabel;
-}
-
-export function positionsInSectionBand(positions, section, band) {
-  return positions
-    .filter((pos) => getPositionBlock(pos) === section && getPositionRowBand(pos) === band)
-    .sort((a, b) => a.position_code.localeCompare(b.position_code));
 }
 
 export function groupPositionsByRow(positions) {
