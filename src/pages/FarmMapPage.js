@@ -9,9 +9,9 @@ import SearchIcon from '@mui/icons-material/Search';
 import ClearIcon from '@mui/icons-material/Clear';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import { supabase } from '../supabaseClient';
-import { parsePositionCode, formatLocationLabel, normalizeRow, VALID_LOT_CODES } from '../utils/positionCode';
+import { parsePositionCode, formatLocationLabel, normalizeRow } from '../utils/positionCode';
 import { deriveHealthStatus } from '../utils/healthStatus';
-import { getActiveTreeInstance } from '../utils/schema';
+import { getActiveIrrigationLink, getActiveTreeInstance } from '../utils/schema';
 import {
   EMPTY_TREE_FILTERS,
   applyFilterPatch,
@@ -30,6 +30,12 @@ const HEALTH_COLORS = {
 };
 
 const QUICK_RESULT_LIMIT = 12;
+const SECOND_SECTION_START_ROW = 9;
+
+const ROW_BANDS = [
+  { key: 'upper', fallbackLabel: `Zone · rows ${SECOND_SECTION_START_ROW}+` },
+  { key: 'lower', fallbackLabel: `Zone · rows 1–${SECOND_SECTION_START_ROW - 1}` },
+];
 
 function collectRowPositions(row) {
   const rowCode = normalizeRow(row.name);
@@ -46,18 +52,34 @@ function collectRowPositions(row) {
   );
 }
 
-function getPositionLot(pos) {
-  return parsePositionCode(pos?.position_code)?.lot || '';
+function rowNumberFromCode(rowCode) {
+  const n = Number(String(rowCode || '').replace(/^R/i, ''));
+  return Number.isFinite(n) ? n : 0;
 }
 
-function collectLotCodes(positions) {
-  const fromData = [...new Set(positions.map(getPositionLot).filter(Boolean))].sort();
-  return fromData.length ? fromData : [...VALID_LOT_CODES];
+function getPositionRowNumber(pos) {
+  const parsed = parsePositionCode(pos?.position_code);
+  return rowNumberFromCode(parsed?.row || pos?.rowCode);
 }
 
-function positionsInSectionLot(positions, section, lot) {
+function getPositionRowBand(pos) {
+  return getPositionRowNumber(pos) >= SECOND_SECTION_START_ROW ? 'upper' : 'lower';
+}
+
+function getPositionZoneCode(pos) {
+  return getActiveIrrigationLink(pos?.activeTree)?.irrigation_zones?.zone_code || null;
+}
+
+function zoneTitleForPositions(positions, fallbackLabel) {
+  const codes = [...new Set(positions.map(getPositionZoneCode).filter(Boolean))].sort();
+  if (codes.length === 1) return codes[0];
+  if (codes.length > 1) return codes.join(' · ');
+  return fallbackLabel;
+}
+
+function positionsInSectionBand(positions, section, band) {
   return positions
-    .filter((pos) => getPositionBlock(pos) === section && getPositionLot(pos) === lot)
+    .filter((pos) => getPositionBlock(pos) === section && getPositionRowBand(pos) === band)
     .sort((a, b) => a.position_code.localeCompare(b.position_code));
 }
 
@@ -68,7 +90,9 @@ function groupPositionsByRow(positions) {
     if (!map.has(row)) map.set(row, []);
     map.get(row).push(pos);
   });
-  return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  return [...map.entries()].sort(
+    (a, b) => rowNumberFromCode(b[0]) - rowNumberFromCode(a[0]),
+  );
 }
 
 function TreeStatusDot({ pos, highlight }) {
@@ -111,19 +135,20 @@ function TreeStatusDot({ pos, highlight }) {
   );
 }
 
-function SectionLotCard({ section, lot, positions, highlight, cardRef }) {
+function ZoneCard({ section, band, positions, highlight, cardRef }) {
   const rows = groupPositionsByRow(positions);
+  const zoneTitle = zoneTitleForPositions(positions, band.fallbackLabel);
 
   return (
-    <Paper ref={cardRef} sx={{ p: 2, mb: 2, '&:last-of-type': { mb: 0 } }} variant="outlined">
+    <Paper ref={cardRef} sx={{ p: 2, flex: 1 }} variant="outlined">
       <Typography variant="subtitle1" sx={{ fontWeight: 700 }} gutterBottom>
-        {section} · {lot}
+        {section} · {zoneTitle}
         <Typography component="span" variant="body2" color="text.secondary" sx={{ ml: 1 }}>
           ({positions.length} tree{positions.length === 1 ? '' : 's'})
         </Typography>
       </Typography>
       {positions.length === 0 ? (
-        <Typography variant="body2" color="text.secondary">No trees in this section.</Typography>
+        <Typography variant="body2" color="text.secondary">No trees in this zone.</Typography>
       ) : (
         rows.map(([rowCode, rowPositions]) => (
           <Box key={rowCode} sx={{ mb: 1.5, '&:last-of-type': { mb: 0 } }}>
@@ -140,25 +165,27 @@ function SectionLotCard({ section, lot, positions, highlight, cardRef }) {
   );
 }
 
-function BlockColumn({ block, lotCodes, positions, filtersActive, firstMatchKey, firstMatchRef }) {
+function BlockColumn({ block, positions, filtersActive, firstMatchKey, firstMatchRef }) {
   return (
-    <Paper sx={{ p: 2, height: '100%' }}>
+    <Paper sx={{ p: 2, height: '100%', display: 'flex', flexDirection: 'column' }}>
       <Typography variant="h5" sx={{ fontWeight: 700, mb: 2 }}>
         {block}
       </Typography>
-      {lotCodes.map((lot) => {
-        const key = `${block}-${lot}`;
-        return (
-          <SectionLotCard
-            key={key}
-            section={block}
-            lot={lot}
-            positions={positionsInSectionLot(positions, block, lot)}
-            highlight={filtersActive}
-            cardRef={firstMatchKey === key ? firstMatchRef : null}
-          />
-        );
-      })}
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1 }}>
+        {ROW_BANDS.map((band) => {
+          const key = `${block}-${band.key}`;
+          return (
+            <ZoneCard
+              key={key}
+              section={block}
+              band={band}
+              positions={positionsInSectionBand(positions, block, band.key)}
+              highlight={filtersActive}
+              cardRef={firstMatchKey === key ? firstMatchRef : null}
+            />
+          );
+        })}
+      </Box>
     </Paper>
   );
 }
@@ -202,7 +229,14 @@ function FarmMapPage() {
                 id, name,
                 tree_positions (
                   id, position_code,
-                  trees ( id, status, variety, planting_date )
+                  trees (
+                    id, status, variety, planting_date,
+                    tree_irrigation_zones (
+                      zone_id,
+                      end_date,
+                      irrigation_zones ( id, zone_code )
+                    )
+                  )
                 )
               )
             )
@@ -238,10 +272,9 @@ function FarmMapPage() {
 
   const filtersActive = hasActiveTreeFilters(searchQuery, filters);
   const previewResults = filtersActive ? filteredPositions.slice(0, QUICK_RESULT_LIMIT) : [];
-  const lotCodes = useMemo(() => collectLotCodes(allPositions), [allPositions]);
   const mapPositions = filtersActive ? filteredPositions : allPositions;
   const firstMatchKey = filtersActive && filteredPositions[0]
-    ? `${getPositionBlock(filteredPositions[0])}-${getPositionLot(filteredPositions[0])}`
+    ? `${getPositionBlock(filteredPositions[0])}-${getPositionRowBand(filteredPositions[0])}`
     : null;
   const singleMatch = filteredPositions.length === 1 ? filteredPositions[0] : null;
 
@@ -281,7 +314,7 @@ function FarmMapPage() {
       <PageHeader
         section="Orchard"
         title="Tree Dashboard"
-        subtitle="Block B on the left, Block A on the right. Each lot shows its trees."
+        subtitle="Four irrigation zones: two in B (left) and two in A (right). Rows start at the bottom; the second zone in each block starts at row 9."
       />
 
       <Paper sx={{ p: 2, mb: 3 }}>
@@ -435,7 +468,6 @@ function FarmMapPage() {
           <Grid item xs={12} md={6}>
             <BlockColumn
               block="B"
-              lotCodes={lotCodes}
               positions={mapPositions}
               filtersActive={filtersActive}
               firstMatchKey={firstMatchKey}
@@ -445,7 +477,6 @@ function FarmMapPage() {
           <Grid item xs={12} md={6}>
             <BlockColumn
               block="A"
-              lotCodes={lotCodes}
               positions={mapPositions}
               filtersActive={filtersActive}
               firstMatchKey={firstMatchKey}
