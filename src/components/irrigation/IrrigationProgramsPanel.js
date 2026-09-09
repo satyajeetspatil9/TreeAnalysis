@@ -51,22 +51,6 @@ import {
   updateIrrigationJob,
 } from '../../utils/irrigationSchedule';
 import { emptyFertigationLineItem, formatFertilizerProductLines } from '../../utils/fertilizerEventMaintenance';
-  createAdHocVolumeJob,
-  deleteIrrigationJob,
-  pauseIrrigationJob,
-  resumeIrrigationJob,
-  estimateMinutesFromLiters,
-  estimateProgramMinutes,
-  formatEstimatedDuration,
-  isMissingScheduleTable,
-  jobProgressLabel,
-  jobStatusLabel,
-  programDaysLabel,
-  programTimesLabel,
-  scheduleTableHint,
-  timeToInputValue,
-  updateIrrigationJob,
-} from '../../utils/irrigationSchedule';
 
 function IrrigationProgramsPanel({
   farmId,
