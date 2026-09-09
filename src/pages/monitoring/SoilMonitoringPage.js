@@ -13,10 +13,14 @@ import { supabase } from '../../supabaseClient';
 import { formatDate, formatNumber, getTreeDisplayId } from '../../utils/formatters';
 import { useFarm } from '../../hooks/useFarm';
 import PageHeader from '../../components/common/PageHeader';
-import { GpsTreeDotMap } from '../../components/common/GpsTreeDotMap';
+import OrchardZoneLayout, { TreeCircleLink } from '../../components/orchard/OrchardZoneLayout';
 import { LabReportFieldRow } from '../../components/soil/LabReportFieldRow';
-import { getTreeGps } from '../../utils/schema';
 import { treeDashboardUrl } from '../../utils/treeDashboard';
+import {
+  ORCHARD_ROWS_SELECT,
+  collectRowPositions,
+} from '../../utils/orchardLayout';
+import { formatLocationLabel, parsePositionCode } from '../../utils/positionCode';
 import {
   SENSOR_READING_FIELDS,
   LAB_NUTRIENT_FIELDS,
@@ -59,10 +63,6 @@ function formatNutrientValue(field, value) {
   if (value == null || value === '') return null;
   const text = formatNumber(value, field.decimals ?? 2);
   return field.unit ? `${text} ${field.unit}` : text;
-}
-
-function observationHasMapField(observation, fields) {
-  return fields.some(({ key }) => observation?.[key] != null && observation[key] !== '');
 }
 
 function soilMapDotColor(theme, status) {
@@ -140,6 +140,7 @@ function SoilMonitoringPage() {
   const [sensorObservations, setSensorObservations] = useState([]);
   const [labReports, setLabReports] = useState([]);
   const [trees, setTrees] = useState([]);
+  const [orchardRows, setOrchardRows] = useState([]);
   const [sensorLayer, setSensorLayer] = useState('ph');
   const [labLayer, setLabLayer] = useState('ph');
   const [message, setMessage] = useState(null);
@@ -154,13 +155,20 @@ function SoilMonitoringPage() {
   const [deleting, setDeleting] = useState(false);
 
   const load = useCallback(async () => {
-    const { data } = await supabase
-      .from('soil_observations')
-      .select('*, trees(tree_positions(position_code, latitude, longitude))')
-      .order('observed_at', { ascending: false })
-      .limit(500);
+    const [{ data }, { data: rowsData }] = await Promise.all([
+      supabase
+        .from('soil_observations')
+        .select('*, trees(tree_positions(position_code, latitude, longitude))')
+        .order('observed_at', { ascending: false })
+        .limit(500),
+      supabase
+        .from('rows')
+        .select(ORCHARD_ROWS_SELECT)
+        .order('name'),
+    ]);
     setSensorObservations(data || []);
     setObservations((data || []).slice(0, 50));
+    setOrchardRows(rowsData || []);
 
     await refreshSoilNutrientAlerts(supabase);
 
@@ -234,47 +242,25 @@ function SoilMonitoringPage() {
     (nutrient) => nutrient.key === labLayerField.key,
   ) || [];
 
-  const sensorMapItems = useMemo(
-    () => Object.values(getLatestObservationByTree(sensorObservations))
-      .filter((observation) => observationHasMapField(observation, SENSOR_MAP_FIELDS))
-      .map((observation) => {
-        const code = getTreeDisplayId(observation.trees || {});
-        const value = observation[sensorLayerField.key];
-        const evaluation = evaluateSoilStandard(getSoilStandard(sensorLayerField.standardKey), value);
-        return {
-          id: observation.tree_id,
-          label: code,
-          to: treeDashboardUrl(code, 'soil'),
-          color: soilMapDotColor(theme, evaluation.status),
-          gps: getTreeGps(observation.trees || {}),
-          tooltip: [evaluation.label || 'No data', formatNutrientValue(sensorLayerField, value)]
-            .filter(Boolean)
-            .join(' · '),
-        };
-      }),
-    [sensorObservations, sensorLayerField, theme],
+  const latestByTreeId = useMemo(
+    () => getLatestObservationByTree(sensorObservations),
+    [sensorObservations],
   );
 
-  const labMapItems = useMemo(() => {
-    const value = mergedLabNutrients?.values?.[labLayerField.key];
-    const evaluation = evaluateSoilStandard(getSoilStandard(labLayerField.standardKey), value);
-    const valueText = formatNutrientValue(labLayerField, value);
-    return trees.map((tree) => {
-      const code = getTreeDisplayId(tree);
-      return {
-        id: tree.id,
-        label: code,
-        to: treeDashboardUrl(code, 'soil'),
-        color: soilMapDotColor(theme, evaluation.status),
-        gps: getTreeGps(tree),
-        tooltip: [
-          evaluation.label || 'No data',
-          valueText,
-          mergedLabNutrients?.labName,
-        ].filter(Boolean).join(' · '),
-      };
-    });
-  }, [trees, mergedLabNutrients, labLayerField, theme]);
+  const positions = useMemo(
+    () => orchardRows.flatMap((row) => collectRowPositions(row)),
+    [orchardRows],
+  );
+
+  const sensorTreesWithLayer = useMemo(
+    () => Object.values(latestByTreeId).filter((observation) => {
+      const value = observation?.[sensorLayerField.key];
+      return value != null && value !== '';
+    }).length,
+    [latestByTreeId, sensorLayerField.key],
+  );
+
+  const labLayerValueText = formatNutrientValue(labLayerField, labLayerValue);
 
   const validateSensorForm = (form, treeId) => {
     if (!treeId) return 'Select a tree for this sensor reading.';
@@ -434,22 +420,46 @@ function SoilMonitoringPage() {
                 </Typography>
               </Box>
               <Typography variant="caption" color="text.secondary">
-                {sensorMapItems.length} tree{sensorMapItems.length === 1 ? '' : 's'}
+                {sensorTreesWithLayer} tree{sensorTreesWithLayer === 1 ? '' : 's'} with this reading
               </Typography>
             </Box>
             <NutrientLayerChips fields={SENSOR_MAP_FIELDS} value={sensorLayerField.key} onChange={setSensorLayer} />
             <SoilStatusLegend />
-            {sensorMapItems.length === 0 ? (
+            {positions.length === 0 ? (
               <Typography color="text.secondary">
-                No 7-in-1 nutrient readings yet. Add them under Farm Setting → Add Soil Report.
+                No tree positions found. Add trees in Farm Setup and Trees first.
               </Typography>
             ) : (
-              <GpsTreeDotMap
-                items={sensorMapItems}
-                emptyGpsText="Trees with 7-in-1 readings need GPS on their position to appear on this layout."
+              <OrchardZoneLayout
+                positions={positions}
+                renderTree={(pos) => {
+                  const observation = latestByTreeId[pos.activeTree?.id];
+                  const parsed = parsePositionCode(pos.position_code);
+                  const value = observation?.[sensorLayerField.key];
+                  const evaluation = evaluateSoilStandard(getSoilStandard(sensorLayerField.standardKey), value);
+                  const tooltip = value != null && value !== ''
+                    ? [
+                      pos.position_code,
+                      evaluation.label,
+                      formatNutrientValue(sensorLayerField, value),
+                    ].filter(Boolean).join(' · ')
+                    : [
+                      pos.position_code,
+                      parsed ? formatLocationLabel(parsed) : null,
+                      `No ${fieldLabelWithUnit(sensorLayerField)} reading`,
+                    ].filter(Boolean).join(' · ');
+                  return (
+                    <TreeCircleLink
+                      pos={pos}
+                      to={treeDashboardUrl(pos.position_code, 'soil')}
+                      color={soilMapDotColor(theme, evaluation.status)}
+                      tooltip={tooltip}
+                    />
+                  );
+                }}
               />
             )}
-            {sensorMapItems.length > 0 && (
+            {sensorTreesWithLayer > 0 && (
               sensorLayerDeficiencies.length === 0 ? (
                 <Alert severity="success" sx={{ mt: 2 }}>
                   No trees are below required {fieldLabelWithUnit(sensorLayerField)}.
@@ -496,11 +506,11 @@ function SoilMonitoringPage() {
               <Box>
                 <Typography variant="h6">Nutrients Below Required for Lab Reports</Typography>
                 <Typography variant="body2" color="text.secondary">
-                  {fieldLabelWithUnit(labLayerField)} from the farm&apos;s latest lab values. Same GPS layout; switch nutrients below.
+                  {fieldLabelWithUnit(labLayerField)} from the farm&apos;s latest lab values. Same orchard layout as Moisture; switch nutrients below.
                 </Typography>
               </Box>
               <Typography variant="caption" color="text.secondary">
-                {labMapItems.length} tree{labMapItems.length === 1 ? '' : 's'}
+                {positions.length} tree{positions.length === 1 ? '' : 's'}
               </Typography>
             </Box>
             <NutrientLayerChips fields={LAB_NUTRIENT_FIELDS} value={labLayerField.key} onChange={setLabLayer} />
@@ -509,14 +519,31 @@ function SoilMonitoringPage() {
               <Typography color="text.secondary">
                 No lab reports yet. Add them under Farm Setting → Add Soil Report.
               </Typography>
-            ) : labMapItems.length === 0 ? (
+            ) : positions.length === 0 ? (
               <Typography color="text.secondary">
-                Trees need GPS on their position to appear on this layout.
+                No tree positions found. Add trees in Farm Setup and Trees first.
               </Typography>
             ) : (
-              <GpsTreeDotMap
-                items={labMapItems}
-                emptyGpsText="Trees need GPS on their position to appear on this layout."
+              <OrchardZoneLayout
+                positions={positions}
+                renderTree={(pos) => {
+                  const parsed = parsePositionCode(pos.position_code);
+                  const tooltip = [
+                    pos.position_code,
+                    parsed ? formatLocationLabel(parsed) : null,
+                    labLayerEvaluation.label || 'No data',
+                    labLayerValueText,
+                    mergedLabNutrients?.labName,
+                  ].filter(Boolean).join(' · ');
+                  return (
+                    <TreeCircleLink
+                      pos={pos}
+                      to={treeDashboardUrl(pos.position_code, 'soil')}
+                      color={soilMapDotColor(theme, labLayerEvaluation.status)}
+                      tooltip={tooltip}
+                    />
+                  );
+                }}
               />
             )}
             {labReports.length > 0 && (
