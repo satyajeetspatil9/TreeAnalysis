@@ -133,34 +133,27 @@ function TreeNameLink({ pos }) {
         aria-label={title}
         sx={{
           display: 'flex',
-          flexDirection: 'column',
           alignItems: 'center',
           justifyContent: 'center',
-          gap: 0.25,
+          width: 40,
+          height: 40,
+          borderRadius: '50%',
           textDecoration: 'none',
-          minHeight: 28,
-          px: 0.25,
-          py: 0.25,
-          borderRadius: 0.75,
-          '&:hover': { bgcolor: alpha(theme.palette.success.main, 0.16) },
+          bgcolor: 'success.main',
+          color: 'success.contrastText',
+          flexShrink: 0,
+          '&:hover': { bgcolor: theme.palette.success.dark },
         }}
       >
-        <Box
-          sx={{
-            width: 8,
-            height: 8,
-            borderRadius: '50%',
-            bgcolor: 'success.main',
-            flexShrink: 0,
-          }}
-        />
         <Typography
-          variant="caption"
+          component="span"
           sx={{
-            fontWeight: 700,
-            color: 'text.primary',
+            fontWeight: 800,
+            fontSize: '0.7rem',
             lineHeight: 1,
+            letterSpacing: '-0.02em',
             fontVariantNumeric: 'tabular-nums',
+            color: 'inherit',
           }}
         >
           {treeName}
@@ -241,9 +234,9 @@ function ZoneCard({ section, band, positions, cardRef }) {
                     <Box
                       sx={{
                         display: 'grid',
-                        gridTemplateColumns: 'repeat(auto-fill, 42px)',
+                        gridTemplateColumns: 'repeat(auto-fill, 40px)',
                         justifyContent: 'start',
-                        gap: 0.25,
+                        gap: 0.5,
                       }}
                     >
                       {trees.map((pos) => (
