@@ -39,6 +39,7 @@ import {
 } from '../../utils/soil';
 import { refreshSoilNutrientAlerts } from '../../utils/soilAlerts';
 import { SoilStandardsReference } from '../../components/soil/SoilNutrientDisplay';
+import { CommonBelowNutrientsSummary } from '../../components/soil/CommonBelowNutrientsSummary';
 
 const SENSOR_TABLE_FIELDS = SENSOR_READING_FIELDS.filter(({ key }) =>
   ['moisture_percent', 'ph', 'ec', 'nitrogen', 'phosphorus', 'potassium'].includes(key),
@@ -416,6 +417,11 @@ function SoilMonitoringPage() {
           Farm Setting → Add Soil Report
         </Button>
       </Alert>
+
+      <CommonBelowNutrientsSummary
+        observations={sensorObservations}
+        sourceText="Each tree's latest 7-in-1 reading (not moisture)."
+      />
 
       <Grid container spacing={2} sx={{ mb: 3 }}>
         <Grid item xs={12}>

@@ -447,3 +447,18 @@ export function buildTreeNutrientDeficiencyReport(observations) {
     })
     .filter(Boolean);
 }
+
+export function countCommonLowNutrients(observations) {
+  const counts = {};
+  buildTreeNutrientDeficiencyReport(observations).forEach((row) => {
+    row.lowNutrients.forEach((nutrient) => {
+      if (!counts[nutrient.key]) {
+        counts[nutrient.key] = { key: nutrient.key, label: nutrient.label, treeCount: 0 };
+      }
+      counts[nutrient.key].treeCount += 1;
+    });
+  });
+  return Object.values(counts).sort(
+    (a, b) => b.treeCount - a.treeCount || a.label.localeCompare(b.label),
+  );
+}

@@ -21,10 +21,8 @@ import {
   matchesTreeFilters,
   normalizeFilterValue,
 } from '../utils/treeSearch';
-import {
-  buildTreeNutrientDeficiencyReport,
-} from '../utils/soil';
 import { StatusDot } from '../components/common/GpsTreeDotMap';
+import { CommonBelowNutrientsSummary } from '../components/soil/CommonBelowNutrientsSummary';
 import PageHeader from '../components/common/PageHeader';
 
 const QUICK_RESULT_LIMIT = 12;
@@ -34,19 +32,6 @@ const ROW_BANDS = [
   { key: 'upper', fallbackLabel: `Zone · rows ${SECOND_SECTION_START_ROW}+` },
   { key: 'lower', fallbackLabel: `Zone · rows 1–${SECOND_SECTION_START_ROW - 1}` },
 ];
-
-function commonLowNutrients(observations) {
-  const counts = {};
-  buildTreeNutrientDeficiencyReport(observations).forEach((row) => {
-    row.lowNutrients.forEach((nutrient) => {
-      if (!counts[nutrient.key]) {
-        counts[nutrient.key] = { key: nutrient.key, label: nutrient.label, treeCount: 0 };
-      }
-      counts[nutrient.key].treeCount += 1;
-    });
-  });
-  return Object.values(counts).sort((a, b) => b.treeCount - a.treeCount || a.label.localeCompare(b.label));
-}
 
 function collectRowPositions(row) {
   const rowCode = normalizeRow(row.name);
@@ -294,11 +279,6 @@ function FarmMapPage() {
     [rows],
   );
 
-  const commonBelowNutrients = useMemo(
-    () => commonLowNutrients(sensorObservations),
-    [sensorObservations],
-  );
-
   const filterOptions = useMemo(
     () => buildTreeFilterOptions(allPositions, filters),
     [allPositions, filters],
@@ -356,40 +336,12 @@ function FarmMapPage() {
         subtitle="Four irrigation zones: two in B (left) and two in A (right). Rows start at the bottom; the second zone in each block starts at row 9."
       />
 
-      <Paper sx={{ p: 2, mb: 3 }} variant="outlined">
-        <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 1 }}>
-          Common nutrients below required
-        </Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-          From Monitoring → Soil, using each tree&apos;s latest 7-in-1 reading (not moisture).
-          {' '}
-          <Typography
-            component={RouterLink}
-            to="/monitoring/soil"
-            variant="body2"
-            sx={{ color: 'primary.main', fontWeight: 600, textDecoration: 'none' }}
-          >
-            Open Soil monitoring
-          </Typography>
-        </Typography>
-        {commonBelowNutrients.length === 0 ? (
-          <Typography variant="body2" color="text.secondary">
-            {sensorObservations.length === 0
-              ? 'No 7-in-1 readings yet.'
-              : 'No nutrients are below required on the latest 7-in-1 readings.'}
-          </Typography>
-        ) : (
-          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-            {commonBelowNutrients.map((nutrient) => (
-              <Chip
-                key={nutrient.key}
-                color="warning"
-                label={`${nutrient.label} · ${nutrient.treeCount} tree${nutrient.treeCount === 1 ? '' : 's'}`}
-              />
-            ))}
-          </Box>
-        )}
-      </Paper>
+      <CommonBelowNutrientsSummary
+        observations={sensorObservations}
+        sourceText="From Monitoring → Soil, using each tree's latest 7-in-1 reading (not moisture)."
+        linkTo="/monitoring/soil"
+        linkLabel="Open Soil monitoring"
+      />
 
       <Paper sx={{ p: 2, mb: 3 }}>
         <TextField
