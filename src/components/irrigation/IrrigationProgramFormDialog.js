@@ -69,6 +69,7 @@ export default function IrrigationProgramFormDialog({
   zones,
   motors,
   injectors,
+  fertilizerProducts = [],
   programType,
   saving,
   onSave,
@@ -179,7 +180,7 @@ export default function IrrigationProgramFormDialog({
     : `New ${isFertigation ? 'fertigation' : 'water'} program`;
 
   return (
-    <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm" scroll="paper">
+    <Dialog open={open} onClose={onClose} fullWidth maxWidth={isFertigation ? 'md' : 'sm'} scroll="paper">
       <DialogTitle sx={{ pb: 0.5 }}>{title}</DialogTitle>
       <DialogContent dividers>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
@@ -480,6 +481,89 @@ export default function IrrigationProgramFormDialog({
               </Button>
             </FormControl>
           </Grid>
+
+          {isFertigation && (
+          <Grid item xs={12}>
+            <FormControl component="fieldset" variant="standard" fullWidth sx={fieldsetSx}>
+              <FormLabel component="legend" sx={legendSx}>Products</FormLabel>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+                Mix recorded on Monitoring when this program finishes. Stock is deducted then, not when you save the program.
+              </Typography>
+              {(form.products || []).map((line, idx) => (
+                <Grid container spacing={1.5} alignItems="flex-start" key={idx} sx={{ mb: 1.5 }}>
+                  <Grid item xs={12} sm={7}>
+                    <FormControl fullWidth>
+                      <InputLabel>Product</InputLabel>
+                      <Select
+                        label="Product"
+                        value={line.product_id}
+                        onChange={(e) => {
+                          const product_id = e.target.value;
+                          const product = fertilizerProducts.find((p) => String(p.id) === String(product_id));
+                          setForm((f) => {
+                            const products = [...(f.products || [])];
+                            products[idx] = {
+                              ...products[idx],
+                              product_id,
+                              unit: product?.unit || products[idx].unit || 'kg',
+                            };
+                            return { ...f, products };
+                          });
+                        }}
+                      >
+                        <MenuItem value="">None</MenuItem>
+                        {fertilizerProducts.map((p) => (
+                          <MenuItem key={p.id} value={String(p.id)}>
+                            {p.name}{p.unit ? ` (${p.unit})` : ''}
+                          </MenuItem>
+                        ))}
+                      </Select>
+                    </FormControl>
+                  </Grid>
+                  <Grid item xs={8} sm={4}>
+                    <TextField
+                      fullWidth
+                      label="Quantity"
+                      type="number"
+                      value={line.quantity}
+                      inputProps={{ min: 0, step: 'any' }}
+                      onChange={(e) => {
+                        setForm((f) => {
+                          const products = [...(f.products || [])];
+                          products[idx] = { ...products[idx], quantity: e.target.value };
+                          return { ...f, products };
+                        });
+                      }}
+                    />
+                  </Grid>
+                  <Grid item xs={4} sm={1} sx={{ pt: { sm: 1 } }}>
+                    <IconButton
+                      size="small"
+                      aria-label="Remove product"
+                      disabled={(form.products || []).length <= 1}
+                      onClick={() => setForm((f) => ({
+                        ...f,
+                        products: (f.products || []).filter((_, i) => i !== idx),
+                      }))}
+                    >
+                      <DeleteIcon fontSize="small" />
+                    </IconButton>
+                  </Grid>
+                </Grid>
+              ))}
+              <Button
+                size="small"
+                startIcon={<AddIcon />}
+                onClick={() => setForm((f) => ({
+                  ...f,
+                  products: [...(f.products || []), { product_id: '', quantity: '', unit: 'kg' }],
+                }))}
+              >
+                Add product
+              </Button>
+            </FormControl>
+          </Grid>
+          )}
         </Grid>
       </DialogContent>
       <DialogActions sx={{ px: 3, py: 2 }}>

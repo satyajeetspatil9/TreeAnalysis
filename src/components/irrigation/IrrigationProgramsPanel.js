@@ -50,6 +50,23 @@ import {
   timeToInputValue,
   updateIrrigationJob,
 } from '../../utils/irrigationSchedule';
+import { emptyFertigationLineItem, formatFertilizerProductLines } from '../../utils/fertilizerEventMaintenance';
+  createAdHocVolumeJob,
+  deleteIrrigationJob,
+  pauseIrrigationJob,
+  resumeIrrigationJob,
+  estimateMinutesFromLiters,
+  estimateProgramMinutes,
+  formatEstimatedDuration,
+  isMissingScheduleTable,
+  jobProgressLabel,
+  jobStatusLabel,
+  programDaysLabel,
+  programTimesLabel,
+  scheduleTableHint,
+  timeToInputValue,
+  updateIrrigationJob,
+} from '../../utils/irrigationSchedule';
 
 function IrrigationProgramsPanel({
   farmId,
@@ -75,6 +92,7 @@ function IrrigationProgramsPanel({
     steps: [emptyStep(0)],
     injector_ids: [],
     skip_if_rain: programType !== 'fertigation',
+    products: [emptyFertigationLineItem()],
   });
   const [jobForm, setJobForm] = useState({
     zone_id: '',
@@ -91,6 +109,7 @@ function IrrigationProgramsPanel({
     duration_minutes: '',
   });
   const [jobBusy, setJobBusy] = useState(false);
+  const [fertilizerProducts, setFertilizerProducts] = useState([]);
 
   const drivable = (devices || []).filter((d) => d.io_type !== 'input');
   const motors = drivable.filter((d) => d.kind === 'irrigation_motor');
@@ -106,28 +125,56 @@ function IrrigationProgramsPanel({
   const load = useCallback(async () => {
     if (!farmId) return;
     setLoading(true);
-    const [
-      { data: progData, error: progError },
-      { data: jobData, error: jobError },
-    ] = await Promise.all([
-      supabase
+    const programSelect = '*, irrigation_program_steps(*), irrigation_program_devices(*), irrigation_program_products(id, product_id, quantity, unit, products(name))';
+    const programSelectBase = '*, irrigation_program_steps(*), irrigation_program_devices(*)';
+    let progData = null;
+    let progError = null;
+    let productsHint = null;
+    if (programType === 'fertigation') {
+      const first = await supabase
         .from('irrigation_programs')
-        .select('*, irrigation_program_steps(*), irrigation_program_devices(*)')
+        .select(programSelect)
         .eq('farm_id', farmId)
         .eq('program_type', programType)
         .order('run_order')
-        .order('id'),
-      supabase
-        .from('irrigation_jobs')
-        .select('*')
+        .order('id');
+      if (first.error && /irrigation_program_products/.test(first.error.message || '')) {
+        productsHint = 'Run migration 056_irrigation_program_products.sql in Supabase SQL Editor so fertigation products can be saved.';
+        const retry = await supabase
+          .from('irrigation_programs')
+          .select(programSelectBase)
+          .eq('farm_id', farmId)
+          .eq('program_type', programType)
+          .order('run_order')
+          .order('id');
+        progData = retry.data;
+        progError = retry.error;
+      } else {
+        progData = first.data;
+        progError = first.error;
+      }
+    } else {
+      const result = await supabase
+        .from('irrigation_programs')
+        .select(programSelectBase)
         .eq('farm_id', farmId)
-        .in(
-          'job_type',
-          programType === 'fertigation' ? ['fertigation'] : ['water', 'manual'],
-        )
-        .in('status', OPEN_JOB_STATUSES)
-        .order('created_at', { ascending: false }),
-    ]);
+        .eq('program_type', programType)
+        .order('run_order')
+        .order('id');
+      progData = result.data;
+      progError = result.error;
+    }
+
+    const { data: jobData, error: jobError } = await supabase
+      .from('irrigation_jobs')
+      .select('*')
+      .eq('farm_id', farmId)
+      .in(
+        'job_type',
+        programType === 'fertigation' ? ['fertigation'] : ['water', 'manual'],
+      )
+      .in('status', OPEN_JOB_STATUSES)
+      .order('created_at', { ascending: false });
 
     if (progError || jobError) {
       const err = progError || jobError;
@@ -142,7 +189,7 @@ function IrrigationProgramsPanel({
     } else {
       setPrograms(progData || []);
       setJobs(jobData || []);
-      setMessage(null);
+      setMessage(productsHint ? { type: 'warning', text: productsHint } : null);
     }
     setLoading(false);
   }, [farmId, programType]);
@@ -150,6 +197,24 @@ function IrrigationProgramsPanel({
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    if (programType !== 'fertigation') {
+      setFertilizerProducts([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase
+        .from('products')
+        .select('id, name, unit, category')
+        .eq('active', true)
+        .eq('category', 'Fertilizer')
+        .order('name');
+      if (!cancelled) setFertilizerProducts(data || []);
+    })();
+    return () => { cancelled = true; };
+  }, [programType]);
 
   useEffect(() => {
     setJobForm((f) => ({
@@ -179,6 +244,7 @@ function IrrigationProgramsPanel({
       steps: [emptyStep(0)],
       injector_ids: programType === 'fertigation' ? defaultInjectorIds() : [],
       skip_if_rain: programType !== 'fertigation',
+      products: [emptyFertigationLineItem()],
     });
     setDialogOpen(true);
   };
@@ -208,6 +274,13 @@ function IrrigationProgramsPanel({
       skip_if_rain: program.skip_if_rain != null
         ? Boolean(program.skip_if_rain)
         : programType !== 'fertigation',
+      products: (program.irrigation_program_products || []).length
+        ? program.irrigation_program_products.map((row) => ({
+          product_id: String(row.product_id),
+          quantity: String(row.quantity),
+          unit: row.unit || '',
+        }))
+        : [emptyFertigationLineItem()],
     });
     setDialogOpen(true);
   };
@@ -344,6 +417,36 @@ function IrrigationProgramsPanel({
           .insert(deviceRows);
         if (deviceError) {
           setMessage({ type: 'error', text: scheduleTableHint(deviceError.message) });
+          setSaving(false);
+          return;
+        }
+      }
+    }
+
+    if (programType === 'fertigation' && programId) {
+      await supabase.from('irrigation_program_products').delete().eq('program_id', programId);
+      const productRows = (form.products || [])
+        .filter((row) => row.product_id && Number(row.quantity) > 0)
+        .map((row) => {
+          const product = fertilizerProducts.find((p) => String(p.id) === String(row.product_id));
+          return {
+            program_id: programId,
+            product_id: Number(row.product_id),
+            quantity: Number(row.quantity),
+            unit: row.unit || product?.unit || null,
+          };
+        });
+      if (productRows.length) {
+        const { error: productError } = await supabase
+          .from('irrigation_program_products')
+          .insert(productRows);
+        if (productError) {
+          setMessage({
+            type: /irrigation_program_products/.test(productError.message || '') ? 'warning' : 'error',
+            text: /irrigation_program_products/.test(productError.message || '')
+              ? 'Run migration 056_irrigation_program_products.sql in Supabase SQL Editor, then save the products again.'
+              : scheduleTableHint(productError.message),
+          });
           setSaving(false);
           return;
         }
@@ -759,6 +862,7 @@ function IrrigationProgramsPanel({
               <TableCell>Start</TableCell>
               <TableCell>Motor</TableCell>
               {programType === 'fertigation' && <TableCell>Injector</TableCell>}
+              {programType === 'fertigation' && <TableCell>Products</TableCell>}
               <TableCell>{programType === 'fertigation' ? 'Zones & minutes' : 'Zones & liters'}</TableCell>
               <TableCell>Time</TableCell>
               <TableCell>On</TableCell>
@@ -769,7 +873,7 @@ function IrrigationProgramsPanel({
           <TableBody>
             {programs.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={programType === 'fertigation' ? 10 : 10}>
+                <TableCell colSpan={programType === 'fertigation' ? 11 : 10}>
                   <Typography color="text.secondary">
                     {programType === 'fertigation'
                       ? 'No fertigation programs yet.'
@@ -803,6 +907,11 @@ function IrrigationProgramsPanel({
                   <TableCell>{motor?.name || '—'}</TableCell>
                   {programType === 'fertigation' && (
                     <TableCell>{injector?.name || '—'}</TableCell>
+                  )}
+                  {programType === 'fertigation' && (
+                    <TableCell>
+                      {formatFertilizerProductLines(program.irrigation_program_products)}
+                    </TableCell>
                   )}
                   <TableCell>{formatSteps(steps)}</TableCell>
                   <TableCell>{totalMins > 0 ? formatEstimatedDuration(totalMins) : '—'}</TableCell>
@@ -841,6 +950,7 @@ function IrrigationProgramsPanel({
         zones={zones}
         motors={motors}
         injectors={injectors}
+        fertilizerProducts={fertilizerProducts}
         programType={programType}
         saving={saving}
         onSave={saveProgram}

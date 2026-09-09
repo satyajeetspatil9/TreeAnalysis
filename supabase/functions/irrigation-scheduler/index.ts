@@ -966,25 +966,75 @@ async function recordFertigationEvent(
     .select('id')
     .eq('notes', notes)
     .maybeSingle();
-  if (!existingError && existing) return;
 
-  const payload: Record<string, unknown> = {
-    zone_id: job.zone_id,
-    event_date: local.dateKey,
-    duration_minutes: Math.max(1, Math.round(duration)),
-    water_liters: waterLiters != null && waterLiters > 0 ? waterLiters : null,
-    notes,
-  };
+  let eventId = !existingError && existing?.id ? Number(existing.id) : null;
 
-  const { error } = await supabase.from('fertigation_events').insert(payload);
-  if (error && /notes/.test(error.message || '')) {
-    delete payload.notes;
-    const retry = await supabase.from('fertigation_events').insert(payload);
-    if (retry.error) {
-      console.error('fertigation_events insert failed', retry.error.message);
+  if (!eventId) {
+    const payload: Record<string, unknown> = {
+      zone_id: job.zone_id,
+      event_date: local.dateKey,
+      duration_minutes: Math.max(1, Math.round(duration)),
+      water_liters: waterLiters != null && waterLiters > 0 ? waterLiters : null,
+      notes,
+    };
+
+    const { data: inserted, error } = await supabase
+      .from('fertigation_events')
+      .insert(payload)
+      .select('id')
+      .single();
+    if (error && /notes/.test(error.message || '')) {
+      delete payload.notes;
+      const retry = await supabase.from('fertigation_events').insert(payload).select('id').single();
+      if (retry.error) {
+        console.error('fertigation_events insert failed', retry.error.message);
+        return;
+      }
+      eventId = retry.data?.id != null ? Number(retry.data.id) : null;
+    } else if (error) {
+      console.error('fertigation_events insert failed', error.message);
+      return;
+    } else {
+      eventId = inserted?.id != null ? Number(inserted.id) : null;
     }
-  } else if (error) {
-    console.error('fertigation_events insert failed', error.message);
+  }
+
+  if (eventId) {
+    await copyProgramProductsOntoFertigationEvent(supabase, eventId, job);
+  }
+}
+
+async function copyProgramProductsOntoFertigationEvent(
+  supabase: Supabase,
+  eventId: number,
+  job: Job,
+) {
+  const programId = job.program_id != null ? Number(job.program_id) : null;
+  if (!programId) return;
+
+  const { data: siblingEvents } = await supabase
+    .from('fertigation_events')
+    .select('id, fertigation_products(id)')
+    .like('notes', `irrigation_job:${job.id}:%`);
+  const already = (siblingEvents || []).some((row) => (row.fertigation_products || []).length);
+  if (already) return;
+
+  const { data: mix, error } = await supabase
+    .from('irrigation_program_products')
+    .select('product_id, quantity, unit')
+    .eq('program_id', programId);
+  if (error || !mix?.length) return;
+
+  const { error: insertError } = await supabase.from('fertigation_products').insert(
+    mix.map((row) => ({
+      fertigation_event_id: eventId,
+      product_id: row.product_id,
+      quantity: row.quantity,
+      unit: row.unit,
+    })),
+  );
+  if (insertError) {
+    console.error('fertigation_products insert failed', insertError.message);
   }
 }
 

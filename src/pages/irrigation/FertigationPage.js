@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Box, Typography, Paper, Grid, FormControl, InputLabel, Select, MenuItem,
   Alert, IconButton, Table, TableBody, TableCell, TableHead, TableRow,
+  Button, Dialog, DialogActions, DialogContent, DialogTitle, TextField,
 } from '@mui/material';
 import { useTheme } from '@mui/material/styles';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -12,6 +13,7 @@ import { supabase } from '../../supabaseClient';
 import { useFarm } from '../../hooks/useFarm';
 import PageHeader from '../../components/common/PageHeader';
 import { formatDate, formatNumber } from '../../utils/formatters';
+import { getProductStock, productStockLabel, validateFertilizerStock } from '../../utils/products';
 import {
   formatWaterLiters,
   resolveEventWaterLiters,
@@ -21,7 +23,9 @@ import {
   IRRIGATION_GROUP_OPTIONS,
 } from '../../utils/irrigation';
 import {
+  addProductsToFertigationEvent,
   deleteFertigationEvent,
+  emptyFertigationLineItem,
   formatFertilizerProductLines,
   syncCompletedFertigationJobs,
 } from '../../utils/fertilizerEventMaintenance';
@@ -29,6 +33,9 @@ import {
 function rlsHint(message) {
   if (!message) return message;
   if (message.includes('Insufficient stock')) return message;
+  if (message?.includes('irrigation_program_products')) {
+    return `${message} Run supabase/migrations/056_irrigation_program_products.sql in Supabase SQL Editor.`;
+  }
   if (message?.includes('row-level security')) {
     return `${message} Re-run supabase/migrations/008_fix_irrigation_rls.sql and 019_fertilizer_event_delete.sql in Supabase SQL Editor.`;
   }
@@ -44,6 +51,9 @@ function FertigationPage() {
   const [saving, setSaving] = useState(false);
   const [period, setPeriod] = useState('180d');
   const [grouping, setGrouping] = useState('week');
+  const [products, setProducts] = useState([]);
+  const [productEvent, setProductEvent] = useState(null);
+  const [lineItems, setLineItems] = useState([emptyFertigationLineItem()]);
 
   const zoneIds = useMemo(() => zones.map((z) => z.id), [zones]);
 
@@ -53,11 +63,14 @@ function FertigationPage() {
       return;
     }
     try {
-      const { events: nextEvents } = await syncCompletedFertigationJobs(supabase, {
+      const { events: nextEvents, productError } = await syncCompletedFertigationJobs(supabase, {
         farmId: farm.id,
         zoneIds,
       });
       setEvents(nextEvents);
+      if (productError) {
+        setMessage({ type: 'warning', text: rlsHint(productError.message) });
+      }
     } catch (err) {
       setMessage({ type: 'error', text: rlsHint(err.message) });
     }
@@ -76,6 +89,13 @@ function FertigationPage() {
         .eq('farm_id', farm.id)
         .order('zone_code');
       setZones(zonesData || []);
+      const { data: productsData } = await supabase
+        .from('products')
+        .select('*, inventory(current_stock)')
+        .eq('active', true)
+        .eq('category', 'Fertilizer')
+        .order('name');
+      setProducts(productsData || []);
     }
     load();
   }, [farm]);
@@ -112,12 +132,45 @@ function FertigationPage() {
     setSaving(false);
   };
 
+  const handleSaveProducts = async () => {
+    if (!productEvent) return;
+    const items = lineItems.filter((li) => li.product_id && li.quantity);
+    const stockCheck = validateFertilizerStock(products, items);
+    if (!stockCheck.ok) {
+      setMessage({ type: 'error', text: stockCheck.message });
+      return;
+    }
+    setSaving(true);
+    setMessage(null);
+    const { error } = await addProductsToFertigationEvent(
+      supabase,
+      productEvent.id,
+      items.map((li) => {
+        const product = products.find((p) => String(p.id) === String(li.product_id));
+        return {
+          product_id: li.product_id,
+          quantity: li.quantity,
+          unit: product?.unit || 'kg',
+        };
+      }),
+    );
+    if (error) {
+      setMessage({ type: 'error', text: rlsHint(error.message) });
+      setSaving(false);
+      return;
+    }
+    setProductEvent(null);
+    await reloadEvents();
+    setMessage({ type: 'success', text: 'Products added. Inventory updated.' });
+    setSaving(false);
+  };
+
   return (
     <Box>
       <PageHeader
         section="Monitoring"
         title="Fertigation"
-        subtitle="Fertilizer applied through drip. Completed fertigation programs appear here automatically."
+        subtitle="Fertilizer applied through drip. Completed fertigation programs appear here. Add products on the fertigation program so they show in this list."
       />
 
       {message && <Alert severity={message.type} sx={{ mb: 2 }} onClose={() => setMessage(null)}>{message.text}</Alert>}
@@ -222,6 +275,18 @@ function FertigationPage() {
                 <TableCell>{formatFertilizerProductLines(event.fertigation_products)}</TableCell>
                 <TableCell>{formatWaterLiters(resolveEventWaterLiters(event))}</TableCell>
                 <TableCell align="right">
+                  {!(event.fertigation_products || []).length && (
+                    <Button
+                      size="small"
+                      onClick={() => {
+                        setProductEvent(event);
+                        setLineItems([emptyFertigationLineItem()]);
+                      }}
+                      disabled={saving}
+                    >
+                      Add products
+                    </Button>
+                  )}
                   <IconButton size="small" aria-label="Delete" onClick={() => handleDelete(event)} disabled={saving}>
                     <DeleteIcon fontSize="small" />
                   </IconButton>
@@ -234,6 +299,82 @@ function FertigationPage() {
           </TableBody>
         </Table>
       </Paper>
+
+      <Dialog open={Boolean(productEvent)} onClose={() => setProductEvent(null)} fullWidth maxWidth="sm">
+        <DialogTitle>Add products</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            {productEvent
+              ? `${formatDate(productEvent.event_date)} · ${productEvent.irrigation_zones?.zone_code || 'Zone'}`
+              : ''}
+          </Typography>
+          {products.length === 0 && (
+            <Alert severity="warning" sx={{ mb: 2 }}>
+              No fertilizer products found. Add them under Inputs, then record a purchase in Inventory.
+            </Alert>
+          )}
+          {lineItems.map((li, idx) => (
+            <Grid container spacing={2} key={idx} sx={{ mb: 1 }} alignItems="center">
+              <Grid item xs={12} sm={7}>
+                <FormControl fullWidth size="small">
+                  <InputLabel>Product</InputLabel>
+                  <Select
+                    label="Product"
+                    value={li.product_id}
+                    onChange={(e) => {
+                      const next = [...lineItems];
+                      next[idx] = { ...next[idx], product_id: e.target.value };
+                      setLineItems(next);
+                    }}
+                  >
+                    <MenuItem value="">Select product</MenuItem>
+                    {products.map((p) => (
+                      <MenuItem key={p.id} value={String(p.id)}>{productStockLabel(p)}</MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+              </Grid>
+              <Grid item xs={8} sm={4}>
+                <TextField
+                  size="small"
+                  fullWidth
+                  label="Quantity"
+                  type="number"
+                  value={li.quantity}
+                  onChange={(e) => {
+                    const next = [...lineItems];
+                    next[idx] = { ...next[idx], quantity: e.target.value };
+                    setLineItems(next);
+                  }}
+                  helperText={
+                    li.product_id
+                      ? `${getProductStock(products.find((p) => String(p.id) === String(li.product_id)))} available`
+                      : ' '
+                  }
+                />
+              </Grid>
+              <Grid item xs={4} sm={1}>
+                <IconButton
+                  aria-label="Remove product"
+                  disabled={lineItems.length <= 1}
+                  onClick={() => setLineItems(lineItems.filter((_, i) => i !== idx))}
+                >
+                  <DeleteIcon />
+                </IconButton>
+              </Grid>
+            </Grid>
+          ))}
+          <Button size="small" onClick={() => setLineItems([...lineItems, emptyFertigationLineItem()])}>
+            Add product
+          </Button>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setProductEvent(null)} disabled={saving}>Cancel</Button>
+          <Button variant="contained" onClick={handleSaveProducts} disabled={saving || !products.length}>
+            {saving ? 'Saving…' : 'Save'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

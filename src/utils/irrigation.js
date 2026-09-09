@@ -153,10 +153,12 @@ export function buildFarmFertigationChartData(events, grouping = 'week') {
 
   const toPoint = (e) => {
     const water = resolveEventWaterLiters(e) || Number(e.water_liters) || 0;
-    const productQty = (e.fertigation_products || []).reduce(
-      (sum, row) => sum + (Number(row.quantity) || 0),
-      0,
-    );
+    const productQty = e.productsInherited
+      ? 0
+      : (e.fertigation_products || []).reduce(
+        (sum, row) => sum + (Number(row.quantity) || 0),
+        0,
+      );
     return {
       water,
       productQty,

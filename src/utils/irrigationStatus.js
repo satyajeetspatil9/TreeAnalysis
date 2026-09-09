@@ -56,14 +56,46 @@ export function formatAmperage(value) {
   return `${formatNumber(value, 2)} A`;
 }
 
+export const FARM_TIME_ZONE = 'Asia/Kolkata';
+
+export function timestampMs(value) {
+  if (!value) return null;
+  const ms = new Date(value).getTime();
+  return Number.isFinite(ms) ? ms : null;
+}
+
+/** Latest of several ISO timestamps. */
+export function latestTimestamp(...values) {
+  let best = null;
+  let bestMs = null;
+  values.forEach((value) => {
+    const ms = timestampMs(value);
+    if (ms == null) return;
+    if (bestMs == null || ms > bestMs) {
+      best = value;
+      bestMs = ms;
+    }
+  });
+  return best;
+}
+
+export function zoneTelemetryAt(status) {
+  if (!status) return null;
+  return latestTimestamp(status.reported_at, status.updated_at, status.pending_command_at);
+}
+
 export function formatDateTime(value) {
   if (!value) return '—';
-  return new Date(value).toLocaleString('en-IN', {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+  return date.toLocaleString('en-IN', {
+    timeZone: FARM_TIME_ZONE,
     day: '2-digit',
     month: 'short',
     year: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
+    hour12: true,
   });
 }
 
@@ -76,7 +108,7 @@ export function mergeZoneStatusRows(zones, statusRows) {
       zone,
       status,
       isIrrigating: Boolean(status?.is_irrigating),
-      hasTelemetry: Boolean(status?.reported_at),
+      hasTelemetry: Boolean(zoneTelemetryAt(status)),
     };
   }).sort((a, b) => {
     if (a.isIrrigating !== b.isIrrigating) return a.isIrrigating ? -1 : 1;
@@ -130,7 +162,7 @@ export function formatRelativeTime(value, nowMs = Date.now()) {
   if (diffMin < 60) return `${diffMin} min ago`;
   const diffHr = Math.floor(diffMin / 60);
   if (diffHr < 24) return `${diffHr}h ago`;
-  return formatLastUpdated(value);
+  return formatDateTime(value);
 }
 
 export function sendIrrigationCommandPayload(farmId, row, command) {
@@ -150,7 +182,7 @@ export function sendIrrigationCommandPayload(farmId, row, command) {
     current_discharge_lpm: isStart ? existing.current_discharge_lpm ?? null : existing.current_discharge_lpm ?? null,
     total_discharge_liters: isStart ? existing.total_discharge_liters ?? 0 : existing.total_discharge_liters ?? null,
     device_code: existing.device_code ?? null,
-    reported_at: existing.reported_at || now,
+    reported_at: now,
     updated_at: now,
     pending_command: command,
     pending_command_at: now,

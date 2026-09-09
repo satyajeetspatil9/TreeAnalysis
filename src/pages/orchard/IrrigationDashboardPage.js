@@ -51,8 +51,10 @@ import {
   formatTotalDischarge,
   formatVoltage,
   isMissingStatusTable,
+  latestTimestamp,
   mergeZoneStatusRows,
   statusTableHint,
+  zoneTelemetryAt,
 } from '../../utils/irrigationStatus';
 import {
   OPEN_JOB_STATUSES,
@@ -354,6 +356,14 @@ function IrrigationDashboardPage() {
     () => rows.find((row) => String(row.zone.id) === String(controlZoneId)) || rows[0] || null,
     [rows, controlZoneId],
   );
+  const liveRow = runningJobZone || activeZone || controlRow;
+  const liveReportedAt = latestTimestamp(
+    zoneTelemetryAt(liveRow?.status),
+    zoneTelemetryAt(activeZone?.status),
+    zoneTelemetryAt(controlRow?.status),
+    power?.reported_at,
+    runningJob?.started_at,
+  );
 
   useEffect(() => {
     if (!rows.length) return;
@@ -581,31 +591,33 @@ function IrrigationDashboardPage() {
                     label="Running for"
                     value={activeZone
                       ? formatIrrigationDurationLong(activeZone.status?.started_at, nowMs)
-                      : '—'}
-                    emphasize={Boolean(activeZone)}
+                      : (runningJob?.started_at
+                        ? formatIrrigationDurationLong(runningJob.started_at, nowMs)
+                        : '—')}
+                    emphasize={Boolean(activeZone || runningJob)}
                   />
                 </Grid>
                 <Grid item xs={6} sm={4} md={3}>
                   <MetricTile
                     label="Started"
-                    value={activeZone ? formatDateTime(activeZone.status?.started_at) : '—'}
+                    value={activeZone
+                      ? formatDateTime(activeZone.status?.started_at)
+                      : formatDateTime(runningJob?.started_at)}
                   />
                 </Grid>
                 <Grid item xs={6} sm={4} md={3}>
                   <MetricTile
                     label="Last update"
-                    value={activeZone?.status?.reported_at
-                      ? formatRelativeTime(activeZone.status.reported_at, nowMs)
-                      : (controlRow?.status?.reported_at
-                        ? formatRelativeTime(controlRow.status.reported_at, nowMs)
-                        : 'Never')}
+                    value={liveReportedAt
+                      ? formatRelativeTime(liveReportedAt, nowMs)
+                      : 'Never'}
                   />
                 </Grid>
                 <Grid item xs={6} sm={4} md={3}>
                   <MetricTile
                     label="Voltage"
                     value={formatVoltage(
-                      activeZone?.status?.voltage_v ?? controlRow?.status?.voltage_v,
+                      liveRow?.status?.voltage_v ?? controlRow?.status?.voltage_v,
                     )}
                     icon={<ElectricBoltIcon fontSize="small" color="action" />}
                   />
@@ -614,7 +626,7 @@ function IrrigationDashboardPage() {
                   <MetricTile
                     label="Current"
                     value={formatAmperage(
-                      activeZone?.status?.current_amp ?? controlRow?.status?.current_amp,
+                      liveRow?.status?.current_amp ?? controlRow?.status?.current_amp,
                     )}
                   />
                 </Grid>
@@ -622,7 +634,7 @@ function IrrigationDashboardPage() {
                   <MetricTile
                     label="Flow now"
                     value={formatDischargeRate(
-                      activeZone?.status?.current_discharge_lpm
+                      liveRow?.status?.current_discharge_lpm
                         ?? controlRow?.status?.current_discharge_lpm,
                     )}
                     icon={<SpeedIcon fontSize="small" color="action" />}
@@ -632,7 +644,7 @@ function IrrigationDashboardPage() {
                   <MetricTile
                     label="Water used"
                     value={formatTotalDischarge(
-                      activeZone?.status?.total_discharge_liters
+                      liveRow?.status?.total_discharge_liters
                         ?? controlRow?.status?.total_discharge_liters,
                     )}
                   />
@@ -651,7 +663,7 @@ function IrrigationDashboardPage() {
                   <MetricTile
                     label="Device"
                     value={
-                      activeZone?.status?.device_code
+                      liveRow?.status?.device_code
                         || controlRow?.status?.device_code
                         || '—'
                     }
@@ -670,9 +682,7 @@ function IrrigationDashboardPage() {
                 <Grid item xs={6} sm={4} md={3}>
                   <MetricTile
                     label="Reported at"
-                    value={formatDateTime(
-                      activeZone?.status?.reported_at ?? controlRow?.status?.reported_at,
-                    )}
+                    value={formatDateTime(liveReportedAt)}
                   />
                 </Grid>
               </Grid>
