@@ -9,13 +9,14 @@ import SearchIcon from '@mui/icons-material/Search';
 import ClearIcon from '@mui/icons-material/Clear';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import { supabase } from '../supabaseClient';
-import { parsePositionCode, formatLocationLabel, normalizeRow } from '../utils/positionCode';
+import { parsePositionCode, formatLocationLabel, normalizeRow, VALID_LOT_CODES } from '../utils/positionCode';
 import { deriveHealthStatus } from '../utils/healthStatus';
 import { getActiveTreeInstance } from '../utils/schema';
 import {
   EMPTY_TREE_FILTERS,
   applyFilterPatch,
   buildTreeFilterOptions,
+  getPositionBlock,
   hasActiveTreeFilters,
   matchesTreeFilters,
   normalizeFilterValue,
@@ -42,6 +43,123 @@ function collectRowPositions(row) {
           : null;
       })
       .filter(Boolean),
+  );
+}
+
+function getPositionLot(pos) {
+  return parsePositionCode(pos?.position_code)?.lot || '';
+}
+
+function collectLotCodes(positions) {
+  const fromData = [...new Set(positions.map(getPositionLot).filter(Boolean))].sort();
+  return fromData.length ? fromData : [...VALID_LOT_CODES];
+}
+
+function positionsInSectionLot(positions, section, lot) {
+  return positions
+    .filter((pos) => getPositionBlock(pos) === section && getPositionLot(pos) === lot)
+    .sort((a, b) => a.position_code.localeCompare(b.position_code));
+}
+
+function groupPositionsByRow(positions) {
+  const map = new Map();
+  positions.forEach((pos) => {
+    const row = parsePositionCode(pos.position_code)?.row || pos.rowCode || '—';
+    if (!map.has(row)) map.set(row, []);
+    map.get(row).push(pos);
+  });
+  return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+}
+
+function TreeStatusDot({ pos, highlight }) {
+  const parsed = parsePositionCode(pos.position_code);
+  const health = deriveHealthStatus(pos.activeTree);
+
+  return (
+    <Box
+      component={RouterLink}
+      to={`/tree/${pos.position_code}`}
+      sx={{
+        width: 36,
+        height: 36,
+        borderRadius: '50%',
+        bgcolor: HEALTH_COLORS[health],
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        color: 'white',
+        fontSize: 10,
+        fontWeight: 700,
+        textDecoration: 'none',
+        transition: 'transform 0.15s ease, box-shadow 0.15s ease',
+        '&:hover': {
+          transform: 'scale(1.08)',
+          boxShadow: 3,
+        },
+        ...(highlight && {
+          boxShadow: '0 0 0 2px rgba(139, 195, 74, 0.8)',
+        }),
+      }}
+      title={[
+        pos.position_code,
+        pos.activeTree?.variety,
+        parsed ? formatLocationLabel(parsed) : null,
+      ].filter(Boolean).join(' · ')}
+    >
+      {parsed?.tree?.replace('T', '') || pos.position_code.split('-').pop()?.replace('T', '')}
+    </Box>
+  );
+}
+
+function SectionLotCard({ section, lot, positions, highlight, cardRef }) {
+  const rows = groupPositionsByRow(positions);
+
+  return (
+    <Paper ref={cardRef} sx={{ p: 2, mb: 2, '&:last-of-type': { mb: 0 } }} variant="outlined">
+      <Typography variant="subtitle1" sx={{ fontWeight: 700 }} gutterBottom>
+        {section} · {lot}
+        <Typography component="span" variant="body2" color="text.secondary" sx={{ ml: 1 }}>
+          ({positions.length} tree{positions.length === 1 ? '' : 's'})
+        </Typography>
+      </Typography>
+      {positions.length === 0 ? (
+        <Typography variant="body2" color="text.secondary">No trees in this section.</Typography>
+      ) : (
+        rows.map(([rowCode, rowPositions]) => (
+          <Box key={rowCode} sx={{ mb: 1.5, '&:last-of-type': { mb: 0 } }}>
+            <Typography variant="caption" color="text.secondary">{rowCode}</Typography>
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1.5, mt: 0.5 }}>
+              {rowPositions.map((pos) => (
+                <TreeStatusDot key={pos.id} pos={pos} highlight={highlight} />
+              ))}
+            </Box>
+          </Box>
+        ))
+      )}
+    </Paper>
+  );
+}
+
+function BlockColumn({ block, lotCodes, positions, filtersActive, firstMatchKey, firstMatchRef }) {
+  return (
+    <Paper sx={{ p: 2, height: '100%' }}>
+      <Typography variant="h5" sx={{ fontWeight: 700, mb: 2 }}>
+        {block}
+      </Typography>
+      {lotCodes.map((lot) => {
+        const key = `${block}-${lot}`;
+        return (
+          <SectionLotCard
+            key={key}
+            section={block}
+            lot={lot}
+            positions={positionsInSectionLot(positions, block, lot)}
+            highlight={filtersActive}
+            cardRef={firstMatchKey === key ? firstMatchRef : null}
+          />
+        );
+      })}
+    </Paper>
   );
 }
 
@@ -118,18 +236,13 @@ function FarmMapPage() {
     [allPositions, searchQuery, filters],
   );
 
-  const filteredByRow = useMemo(() => {
-    const map = new Map();
-    filteredPositions.forEach((pos) => {
-      if (!map.has(pos.rowId)) map.set(pos.rowId, []);
-      map.get(pos.rowId).push(pos);
-    });
-    return map;
-  }, [filteredPositions]);
-
   const filtersActive = hasActiveTreeFilters(searchQuery, filters);
   const previewResults = filtersActive ? filteredPositions.slice(0, QUICK_RESULT_LIMIT) : [];
-  const firstMatchRowId = filtersActive ? filteredPositions[0]?.rowId : null;
+  const lotCodes = useMemo(() => collectLotCodes(allPositions), [allPositions]);
+  const mapPositions = filtersActive ? filteredPositions : allPositions;
+  const firstMatchKey = filtersActive && filteredPositions[0]
+    ? `${getPositionBlock(filteredPositions[0])}-${getPositionLot(filteredPositions[0])}`
+    : null;
   const singleMatch = filteredPositions.length === 1 ? filteredPositions[0] : null;
 
   const updateFilter = (key, value) => {
@@ -163,19 +276,12 @@ function FarmMapPage() {
 
   if (error) return <Alert severity="error">{error}</Alert>;
 
-  const visibleRows = rows.filter((row) => {
-    const positions = collectRowPositions(row);
-    if (positions.length === 0) return false;
-    if (!filtersActive) return true;
-    return filteredByRow.has(row.id);
-  });
-
   return (
     <Box>
       <PageHeader
         section="Orchard"
         title="Tree Dashboard"
-        subtitle="Find any tree quickly with block, row, lot, and variety filters — then open it from the map or quick results."
+        subtitle="Block B on the left, Block A on the right. Each lot shows its trees."
       />
 
       <Paper sx={{ p: 2, mb: 3 }}>
@@ -320,73 +426,34 @@ function FarmMapPage() {
         )}
       </Paper>
 
-      {visibleRows.length === 0 && !filtersActive && (
+      {allPositions.length === 0 && !filtersActive && (
         <Alert severity="info">No tree positions found. Add trees in Farm Setup and Trees first.</Alert>
       )}
 
-      {visibleRows.map((row) => {
-        const rowCode = normalizeRow(row.name);
-        const positions = (filtersActive ? filteredByRow.get(row.id) : collectRowPositions(row)) || [];
-
-        positions.sort((a, b) => a.position_code.localeCompare(b.position_code));
-
-        return (
-          <Paper
-            key={row.id}
-            ref={filtersActive && row.id === firstMatchRowId ? firstMatchRef : null}
-            sx={{ p: 3, mb: 3 }}
-          >
-            <Typography variant="h6" gutterBottom>
-              {row.sections?.name} / {rowCode}
-              <Typography component="span" variant="body2" color="text.secondary" sx={{ ml: 1 }}>
-                ({positions.length} tree{positions.length === 1 ? '' : 's'})
-              </Typography>
-            </Typography>
-            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1.5 }}>
-              {positions.map((pos) => {
-                const parsed = parsePositionCode(pos.position_code);
-                const health = deriveHealthStatus(pos.activeTree);
-
-                return (
-                  <Box
-                    key={pos.id}
-                    component={RouterLink}
-                    to={`/tree/${pos.position_code}`}
-                    sx={{
-                      width: 36,
-                      height: 36,
-                      borderRadius: '50%',
-                      bgcolor: HEALTH_COLORS[health],
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      color: 'white',
-                      fontSize: 10,
-                      fontWeight: 700,
-                      textDecoration: 'none',
-                      transition: 'transform 0.15s ease, box-shadow 0.15s ease',
-                      '&:hover': {
-                        transform: 'scale(1.08)',
-                        boxShadow: 3,
-                      },
-                      ...(filtersActive && {
-                        boxShadow: '0 0 0 2px rgba(139, 195, 74, 0.8)',
-                      }),
-                    }}
-                    title={[
-                      pos.position_code,
-                      pos.activeTree?.variety,
-                      parsed ? formatLocationLabel(parsed) : null,
-                    ].filter(Boolean).join(' · ')}
-                  >
-                    {parsed?.tree?.replace('T', '') || pos.position_code.split('-').pop()?.replace('T', '')}
-                  </Box>
-                );
-              })}
-            </Box>
-          </Paper>
-        );
-      })}
+      {allPositions.length > 0 && (
+        <Grid container spacing={2}>
+          <Grid item xs={12} md={6}>
+            <BlockColumn
+              block="B"
+              lotCodes={lotCodes}
+              positions={mapPositions}
+              filtersActive={filtersActive}
+              firstMatchKey={firstMatchKey}
+              firstMatchRef={firstMatchRef}
+            />
+          </Grid>
+          <Grid item xs={12} md={6}>
+            <BlockColumn
+              block="A"
+              lotCodes={lotCodes}
+              positions={mapPositions}
+              filtersActive={filtersActive}
+              firstMatchKey={firstMatchKey}
+              firstMatchRef={firstMatchRef}
+            />
+          </Grid>
+        </Grid>
+      )}
     </Box>
   );
 }
