@@ -47,6 +47,8 @@ function commonLowNutrients(observations) {
   });
   return Object.values(counts).sort((a, b) => b.treeCount - a.treeCount || a.label.localeCompare(b.label));
 }
+
+function collectRowPositions(row) {
   const rowCode = normalizeRow(row.name);
   return (row.lot_rows || []).flatMap((lr) =>
     (lr.lots?.tree_positions || [])
