@@ -22,7 +22,6 @@ import {
   matchesTreeFilters,
   normalizeFilterValue,
 } from '../utils/treeSearch';
-import { StatusDot } from '../components/common/GpsTreeDotMap';
 import { CommonBelowNutrientsSummary } from '../components/soil/CommonBelowNutrientsSummary';
 import PageHeader from '../components/common/PageHeader';
 
@@ -97,6 +96,25 @@ function groupPositionsByRow(positions) {
   );
 }
 
+function treeCodeSortValue(pos) {
+  return parsePositionCode(pos.position_code)?.tree || pos.position_code;
+}
+
+function groupRowLots(rowPositions) {
+  const byLot = new Map();
+  rowPositions.forEach((pos) => {
+    const lot = parsePositionCode(pos.position_code)?.lot || '—';
+    if (!byLot.has(lot)) byLot.set(lot, []);
+    byLot.get(lot).push(pos);
+  });
+  return [...byLot.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([lot, trees]) => [
+      lot,
+      trees.slice().sort((a, b) => treeCodeSortValue(a).localeCompare(treeCodeSortValue(b), undefined, { numeric: true })),
+    ]);
+}
+
 function TreeNameLink({ pos }) {
   const theme = useTheme();
   const parsed = parsePositionCode(pos.position_code);
@@ -114,34 +132,39 @@ function TreeNameLink({ pos }) {
         to={`/tree/${pos.position_code}`}
         aria-label={title}
         sx={{
-          display: 'inline-flex',
+          display: 'flex',
+          flexDirection: 'column',
           alignItems: 'center',
-          gap: 0.75,
+          justifyContent: 'center',
+          gap: 0.25,
           textDecoration: 'none',
-          minHeight: 40,
-          px: 1,
-          py: 0.5,
-          borderRadius: 2,
-          border: '1px solid',
-          borderColor: alpha(theme.palette.success.main, 0.35),
-          bgcolor: alpha(theme.palette.success.main, 0.08),
-          '&:hover': {
-            bgcolor: alpha(theme.palette.success.main, 0.18),
-            borderColor: theme.palette.success.main,
-          },
+          minHeight: 28,
+          px: 0.25,
+          py: 0.25,
+          borderRadius: 0.75,
+          '&:hover': { bgcolor: alpha(theme.palette.success.main, 0.16) },
         }}
       >
-        <StatusDot color={theme.palette.success.main} />
-        <Box sx={{ minWidth: 0 }}>
-          <Typography variant="body2" sx={{ fontWeight: 700, color: 'text.primary', lineHeight: 1.2 }}>
-            {treeName}
-          </Typography>
-          {pos.activeTree?.variety ? (
-            <Typography variant="caption" color="text.secondary" noWrap sx={{ display: 'block', maxWidth: 88 }}>
-              {pos.activeTree.variety}
-            </Typography>
-          ) : null}
-        </Box>
+        <Box
+          sx={{
+            width: 8,
+            height: 8,
+            borderRadius: '50%',
+            bgcolor: 'success.main',
+            flexShrink: 0,
+          }}
+        />
+        <Typography
+          variant="caption"
+          sx={{
+            fontWeight: 700,
+            color: 'text.primary',
+            lineHeight: 1,
+            fontVariantNumeric: 'tabular-nums',
+          }}
+        >
+          {treeName}
+        </Typography>
       </Box>
     </Tooltip>
   );
@@ -162,7 +185,7 @@ function ZoneCard({ section, band, positions, cardRef }) {
       }}
       variant="outlined"
     >
-      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, mb: 1.5, flexWrap: 'wrap' }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, mb: 1, flexWrap: 'wrap' }}>
         <Box>
           <Typography variant="subtitle1" sx={{ fontWeight: 800, lineHeight: 1.2 }}>
             {zoneTitle}
@@ -176,33 +199,63 @@ function ZoneCard({ section, band, positions, cardRef }) {
       {positions.length === 0 ? (
         <Typography variant="body2" color="text.secondary">No trees in this zone.</Typography>
       ) : (
-        rows.map(([rowCode, rowPositions]) => (
-          <Box
-            key={rowCode}
-            sx={{
-              display: 'flex',
-              alignItems: 'flex-start',
-              gap: 1,
-              py: 0.75,
-              px: 0.75,
-              mb: 0.5,
-              borderRadius: 1,
-              '&:last-of-type': { mb: 0 },
-              '&:hover': { bgcolor: 'action.hover' },
-            }}
-          >
-            <Chip
-              size="small"
-              label={rowCode}
-              sx={{ fontWeight: 700, mt: 0.5, minWidth: 56 }}
-            />
-            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75, flex: 1 }}>
-              {rowPositions.map((pos) => (
-                <TreeNameLink key={pos.id} pos={pos} />
-              ))}
+        rows.map(([rowCode, rowPositions]) => {
+          const lots = groupRowLots(rowPositions);
+          const showLot = lots.length > 1;
+          return (
+            <Box
+              key={rowCode}
+              sx={{
+                display: 'grid',
+                gridTemplateColumns: '40px minmax(0, 1fr)',
+                columnGap: 0.75,
+                alignItems: 'start',
+                py: 0.75,
+                borderBottom: '1px solid',
+                borderColor: 'divider',
+                '&:last-of-type': { borderBottom: 0 },
+              }}
+            >
+              <Typography
+                variant="caption"
+                sx={{ fontWeight: 700, color: 'text.secondary', pt: 0.5, lineHeight: 1.2 }}
+              >
+                {rowCode}
+              </Typography>
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, minWidth: 0 }}>
+                {lots.map(([lot, trees]) => (
+                  <Box
+                    key={lot}
+                    sx={{
+                      display: 'grid',
+                      gridTemplateColumns: showLot ? '36px minmax(0, 1fr)' : 'minmax(0, 1fr)',
+                      columnGap: 0.5,
+                      alignItems: 'start',
+                    }}
+                  >
+                    {showLot && (
+                      <Typography variant="caption" sx={{ fontWeight: 600, color: 'text.secondary', pt: 0.5 }}>
+                        {lot}
+                      </Typography>
+                    )}
+                    <Box
+                      sx={{
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(auto-fill, 42px)',
+                        justifyContent: 'start',
+                        gap: 0.25,
+                      }}
+                    >
+                      {trees.map((pos) => (
+                        <TreeNameLink key={pos.id} pos={pos} />
+                      ))}
+                    </Box>
+                  </Box>
+                ))}
+              </Box>
             </Box>
-          </Box>
-        ))
+          );
+        })
       )}
     </Paper>
   );
