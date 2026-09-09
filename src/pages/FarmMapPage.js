@@ -3,14 +3,14 @@ import { Link as RouterLink, useNavigate } from 'react-router-dom';
 import {
   Box, Typography, Paper, CircularProgress, Alert, TextField, InputAdornment,
   IconButton, Chip, List, ListItemButton, ListItemText, Divider, Grid,
-  FormControl, InputLabel, Select, MenuItem, Button,
+  FormControl, InputLabel, Select, MenuItem, Button, Tooltip,
 } from '@mui/material';
+import { useTheme } from '@mui/material/styles';
 import SearchIcon from '@mui/icons-material/Search';
 import ClearIcon from '@mui/icons-material/Clear';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import { supabase } from '../supabaseClient';
 import { parsePositionCode, formatLocationLabel, normalizeRow } from '../utils/positionCode';
-import { deriveHealthStatus } from '../utils/healthStatus';
 import { getActiveIrrigationLink, getActiveTreeInstance } from '../utils/schema';
 import {
   EMPTY_TREE_FILTERS,
@@ -21,13 +21,14 @@ import {
   matchesTreeFilters,
   normalizeFilterValue,
 } from '../utils/treeSearch';
+import {
+  SENSOR_READING_FIELDS,
+  evaluateSoilStandard,
+  getLatestObservationByTree,
+  getSoilStandard,
+} from '../utils/soil';
+import { StatusDot } from '../components/common/GpsTreeDotMap';
 import PageHeader from '../components/common/PageHeader';
-
-const HEALTH_COLORS = {
-  healthy: '#4caf50',
-  watch: '#ff9800',
-  attention: '#f44336',
-};
 
 const QUICK_RESULT_LIMIT = 12;
 const SECOND_SECTION_START_ROW = 9;
@@ -36,6 +37,25 @@ const ROW_BANDS = [
   { key: 'upper', fallbackLabel: `Zone · rows ${SECOND_SECTION_START_ROW}+` },
   { key: 'lower', fallbackLabel: `Zone · rows 1–${SECOND_SECTION_START_ROW - 1}` },
 ];
+
+function soilMapDotColor(theme, status) {
+  if (status === 'good' || status === 'ok') return theme.palette.success.main;
+  if (status === 'low') return theme.palette.warning.main;
+  if (status === 'high') return theme.palette.error.main;
+  return theme.palette.grey[400];
+}
+
+function combinedSoilStatus(observation) {
+  if (!observation) return 'unknown';
+  const rank = { unknown: 0, good: 1, ok: 1, high: 2, low: 3 };
+  let worst = 'unknown';
+  SENSOR_READING_FIELDS.forEach(({ key, standardKey }) => {
+    if (!standardKey || key === 'moisture_percent') return;
+    const status = evaluateSoilStandard(getSoilStandard(standardKey), observation[key]).status;
+    if ((rank[status] || 0) > (rank[worst] || 0)) worst = status;
+  });
+  return worst;
+}
 
 function collectRowPositions(row) {
   const rowCode = normalizeRow(row.name);
@@ -95,42 +115,54 @@ function groupPositionsByRow(positions) {
   );
 }
 
-function TreeStatusDot({ pos, highlight }) {
+function TreeNameLink({ pos, highlight, soilStatus }) {
+  const theme = useTheme();
   const parsed = parsePositionCode(pos.position_code);
-  const health = deriveHealthStatus(pos.activeTree);
+  const treeName = parsed?.tree || pos.position_code.split('-').pop() || pos.position_code;
+  const title = [
+    pos.position_code,
+    pos.activeTree?.variety,
+    soilStatus === 'unknown' ? 'No soil data' : soilStatus,
+    parsed ? formatLocationLabel(parsed) : null,
+  ].filter(Boolean).join(' · ');
 
   return (
-    <Box
-      component={RouterLink}
-      to={`/tree/${pos.position_code}`}
-      sx={{
-        width: 36,
-        height: 36,
-        borderRadius: '50%',
-        bgcolor: HEALTH_COLORS[health],
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        color: 'white',
-        fontSize: 10,
-        fontWeight: 700,
-        textDecoration: 'none',
-        transition: 'transform 0.15s ease, box-shadow 0.15s ease',
-        '&:hover': {
-          transform: 'scale(1.08)',
-          boxShadow: 3,
-        },
-        ...(highlight && {
-          boxShadow: '0 0 0 2px rgba(139, 195, 74, 0.8)',
-        }),
-      }}
-      title={[
-        pos.position_code,
-        pos.activeTree?.variety,
-        parsed ? formatLocationLabel(parsed) : null,
-      ].filter(Boolean).join(' · ')}
-    >
-      {parsed?.tree?.replace('T', '') || pos.position_code.split('-').pop()?.replace('T', '')}
+    <Tooltip title={title} arrow>
+      <Box
+        component={RouterLink}
+        to={`/tree/${pos.position_code}`}
+        aria-label={title}
+        sx={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 0.5,
+          textDecoration: 'none',
+          px: 0.5,
+          py: 0.25,
+          borderRadius: 1,
+          '&:hover': { bgcolor: 'action.hover' },
+          ...(highlight && {
+            boxShadow: '0 0 0 2px rgba(139, 195, 74, 0.8)',
+            borderRadius: 1,
+          }),
+        }}
+      >
+        <StatusDot color={soilMapDotColor(theme, soilStatus)} />
+        <Typography variant="body2" sx={{ fontWeight: 600, color: 'text.primary' }}>
+          {treeName}
+        </Typography>
+      </Box>
+    </Tooltip>
+  );
+}
+
+function SoilStatusLegend() {
+  return (
+    <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 2 }}>
+      <Chip size="small" color="warning" label="Low" />
+      <Chip size="small" color="success" label="OK" />
+      <Chip size="small" color="error" label="High" />
+      <Chip size="small" label="No data" />
     </Box>
   );
 }
@@ -151,13 +183,28 @@ function ZoneCard({ section, band, positions, highlight, cardRef }) {
         <Typography variant="body2" color="text.secondary">No trees in this zone.</Typography>
       ) : (
         rows.map(([rowCode, rowPositions]) => (
-          <Box key={rowCode} sx={{ mb: 1.5, '&:last-of-type': { mb: 0 } }}>
-            <Typography variant="caption" color="text.secondary">{rowCode}</Typography>
-            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1.5, mt: 0.5 }}>
-              {rowPositions.map((pos) => (
-                <TreeStatusDot key={pos.id} pos={pos} highlight={highlight} />
-              ))}
-            </Box>
+          <Box
+            key={rowCode}
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              flexWrap: 'wrap',
+              gap: 0.75,
+              mb: 1,
+              '&:last-of-type': { mb: 0 },
+            }}
+          >
+            <Typography variant="body2" sx={{ fontWeight: 700, minWidth: 48, mr: 0.5 }}>
+              {rowCode}
+            </Typography>
+            {rowPositions.map((pos) => (
+              <TreeNameLink
+                key={pos.id}
+                pos={pos}
+                highlight={highlight}
+                soilStatus={pos.soilStatus}
+              />
+            ))}
           </Box>
         ))
       )}
@@ -209,6 +256,7 @@ function FilterSelect({
 function FarmMapPage() {
   const navigate = useNavigate();
   const [rows, setRows] = useState([]);
+  const [soilByTreeId, setSoilByTreeId] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -219,9 +267,10 @@ function FarmMapPage() {
     async function loadMap() {
       setLoading(true);
       try {
-        const { data, error: rowsError } = await supabase
-          .from('rows')
-          .select(`
+        const [{ data, error: rowsError }, { data: soilData }] = await Promise.all([
+          supabase
+            .from('rows')
+            .select(`
             id, name,
             sections ( name ),
             lot_rows (
@@ -241,10 +290,17 @@ function FarmMapPage() {
               )
             )
           `)
-          .order('name');
+            .order('name'),
+          supabase
+            .from('soil_observations')
+            .select('*')
+            .order('observed_at', { ascending: false })
+            .limit(2000),
+        ]);
 
         if (rowsError) throw rowsError;
         setRows(data || []);
+        setSoilByTreeId(getLatestObservationByTree(soilData || []));
       } catch (err) {
         setError(err.message);
       } finally {
@@ -256,8 +312,11 @@ function FarmMapPage() {
   }, []);
 
   const allPositions = useMemo(
-    () => rows.flatMap((row) => collectRowPositions(row)),
-    [rows],
+    () => rows.flatMap((row) => collectRowPositions(row)).map((pos) => ({
+      ...pos,
+      soilStatus: combinedSoilStatus(soilByTreeId[pos.activeTree?.id]),
+    })),
+    [rows, soilByTreeId],
   );
 
   const filterOptions = useMemo(
@@ -464,7 +523,9 @@ function FarmMapPage() {
       )}
 
       {allPositions.length > 0 && (
-        <Grid container spacing={2}>
+        <>
+          <SoilStatusLegend />
+          <Grid container spacing={2}>
           <Grid item xs={12} md={6}>
             <BlockColumn
               block="B"
@@ -484,6 +545,7 @@ function FarmMapPage() {
             />
           </Grid>
         </Grid>
+        </>
       )}
     </Box>
   );
