@@ -947,11 +947,12 @@ async function recordFertigationEvent(
   const liters = Number(job.liters_delivered) || 0;
   const flow = zone?.flow_rate_lph != null ? Number(zone.flow_rate_lph) : null;
   let duration = elapsed;
-  if (!(duration > 0) && liters > 0 && flow && flow > 0) duration = (liters / flow) * 60;
+  if (!(duration > 0) && liters > 0 && flow && flow > 0) duration = (flow > 0 ? (liters / flow) * 60 : duration);
   if (!(duration > 0) && job.on_duration_minutes != null) {
     duration = Number(job.on_duration_minutes) || duration;
   }
-  if (!(duration > 0)) return;
+  if (!(duration > 0) && liters > 0) duration = 1;
+  if (!(duration > 0)) duration = 1;
 
   const waterLiters = liters > 0
     ? liters
@@ -978,7 +979,12 @@ async function recordFertigationEvent(
   const { error } = await supabase.from('fertigation_events').insert(payload);
   if (error && /notes/.test(error.message || '')) {
     delete payload.notes;
-    await supabase.from('fertigation_events').insert(payload);
+    const retry = await supabase.from('fertigation_events').insert(payload);
+    if (retry.error) {
+      console.error('fertigation_events insert failed', retry.error.message);
+    }
+  } else if (error) {
+    console.error('fertigation_events insert failed', error.message);
   }
 }
 

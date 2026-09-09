@@ -23,7 +23,7 @@ import {
 import {
   deleteFertigationEvent,
   formatFertilizerProductLines,
-  loadFarmFertigationEvents,
+  syncCompletedFertigationJobs,
 } from '../../utils/fertilizerEventMaintenance';
 
 function rlsHint(message) {
@@ -48,16 +48,20 @@ function FertigationPage() {
   const zoneIds = useMemo(() => zones.map((z) => z.id), [zones]);
 
   const reloadEvents = useCallback(async () => {
-    if (!zoneIds.length) {
+    if (!farm?.id || !zoneIds.length) {
       setEvents([]);
       return;
     }
     try {
-      setEvents(await loadFarmFertigationEvents(supabase, zoneIds));
+      const { events: nextEvents } = await syncCompletedFertigationJobs(supabase, {
+        farmId: farm.id,
+        zoneIds,
+      });
+      setEvents(nextEvents);
     } catch (err) {
       setMessage({ type: 'error', text: rlsHint(err.message) });
     }
-  }, [zoneIds]);
+  }, [farm?.id, zoneIds]);
 
   useEffect(() => {
     async function load() {
