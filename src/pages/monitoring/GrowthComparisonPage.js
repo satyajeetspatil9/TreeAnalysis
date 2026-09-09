@@ -27,9 +27,13 @@ import { Link as RouterLink } from 'react-router-dom';
 import { useTheme } from '@mui/material/styles';
 import { supabase } from '../../supabaseClient';
 import PageHeader from '../../components/common/PageHeader';
-import { GpsTreeDotMap } from '../../components/common/GpsTreeDotMap';
+import OrchardZoneLayout, { TreeCircleLink } from '../../components/orchard/OrchardZoneLayout';
 import { formatDate, formatNumberSmart, getTreeDisplayId } from '../../utils/formatters';
-import { getTreeGps } from '../../utils/schema';
+import { formatLocationLabel, parsePositionCode } from '../../utils/positionCode';
+import {
+  ORCHARD_ROWS_SELECT,
+  collectRowPositions,
+} from '../../utils/orchardLayout';
 import {
   GROWTH_MEASUREMENT_FIELDS,
   buildGrowthUpdatePayload,
@@ -165,6 +169,7 @@ function sortAllRecords(records) {
 function GrowthComparisonPage() {
   const theme = useTheme();
   const [allRecords, setAllRecords] = useState([]);
+  const [orchardRows, setOrchardRows] = useState([]);
   const [mapLayer, setMapLayer] = useState('height');
   const [message, setMessage] = useState(null);
   const [editingRecord, setEditingRecord] = useState(null);
@@ -174,18 +179,26 @@ function GrowthComparisonPage() {
   const [deleting, setDeleting] = useState(false);
 
   const loadRecords = useCallback(async () => {
-    const { data, error } = await supabase
-      .from('tree_growth')
-      .select('*, trees(tree_positions(position_code, latitude, longitude), variety)')
-      .order('measurement_date', { ascending: false });
+    const [{ data, error }, { data: rowsData, error: rowsError }] = await Promise.all([
+      supabase
+        .from('tree_growth')
+        .select('*, trees(tree_positions(position_code, latitude, longitude), variety)')
+        .order('measurement_date', { ascending: false }),
+      supabase
+        .from('rows')
+        .select(ORCHARD_ROWS_SELECT)
+        .order('name'),
+    ]);
 
-    if (error) {
-      setMessage({ type: 'error', text: growthRlsHint(error.message) });
+    if (error || rowsError) {
+      setMessage({ type: 'error', text: growthRlsHint((error || rowsError).message) });
       setAllRecords([]);
+      setOrchardRows([]);
       return;
     }
 
     setAllRecords(data || []);
+    setOrchardRows(rowsData || []);
   }, []);
 
   useEffect(() => {
@@ -194,30 +207,22 @@ function GrowthComparisonPage() {
 
   const latestRecords = useMemo(() => pickLatestGrowthByTree(allRecords), [allRecords]);
   const averages = useMemo(() => computeGrowthAverages(latestRecords), [latestRecords]);
+  const mapLayerMeta = GROWTH_MAP_LAYERS.find((layer) => layer.key === mapLayer) || GROWTH_MAP_LAYERS[0];
 
   const belowAverageRows = useMemo(
     () => buildBelowAverageRows(latestRecords, averages),
     [latestRecords, averages]
   );
 
-  const mapLayerMeta = GROWTH_MAP_LAYERS.find((layer) => layer.key === mapLayer) || GROWTH_MAP_LAYERS[0];
-  const mapItems = useMemo(
-    () => latestRecords
-      .map((record) => {
-        const { comparison, detail } = growthLayerComparison(record, mapLayer, averages);
-        if (comparison.status === 'unknown') return null;
-        const code = getTreeDisplayId(record.trees || {});
-        return {
-          id: record.tree_id,
-          label: code,
-          to: treeDashboardUrl(code, 'growth'),
-          color: growthDotColor(theme, comparison.status),
-          gps: getTreeGps(record.trees || {}),
-          tooltip: [comparison.label, detail].filter(Boolean).join(' · '),
-        };
-      })
-      .filter(Boolean),
-    [latestRecords, mapLayer, averages, theme]
+  const readingByTreeId = useMemo(() => {
+    const map = new Map();
+    latestRecords.forEach((record) => map.set(record.tree_id, record));
+    return map;
+  }, [latestRecords]);
+
+  const positions = useMemo(
+    () => orchardRows.flatMap((row) => collectRowPositions(row)),
+    [orchardRows],
   );
 
   const openEditRecord = (record) => {
@@ -285,7 +290,7 @@ function GrowthComparisonPage() {
     <Box>
       <PageHeader
         title="Growth Comparison"
-        subtitle="Latest measurement per tree vs farm average. Switch Height, Trunk, or Canopy on the map. Edit or delete any recorded measurement below."
+        subtitle="Latest measurement per tree vs farm average. Switch Height, Trunk, or Canopy on the orchard layout. Edit or delete any recorded measurement below."
       />
 
       {message && (
@@ -330,47 +335,71 @@ function GrowthComparisonPage() {
         </Grid>
       </Paper>
 
-      {latestRecords.length > 0 && (
-        <Paper sx={{ p: 2, mb: 3 }} variant="outlined">
-          <Box sx={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 2, flexWrap: 'wrap', mb: 1 }}>
-            <Box>
-              <Typography variant="h6">{mapLayerMeta.label} by tree</Typography>
-              <Typography variant="body2" color="text.secondary">
-                Same GPS layout as Moisture. Yellow is below farm average; green is at or above.
-              </Typography>
-            </Box>
-            <Typography variant="caption" color="text.secondary">
-              {mapItems.length} tree{mapItems.length === 1 ? '' : 's'}
+      <Paper sx={{ p: 2, mb: 3 }} variant="outlined">
+        <Box sx={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 2, flexWrap: 'wrap', mb: 1 }}>
+          <Box>
+            <Typography variant="h6">{mapLayerMeta.label} by tree</Typography>
+            <Typography variant="body2" color="text.secondary">
+              Same orchard layout as Moisture. Yellow is below farm average; green is at or above.
             </Typography>
           </Box>
-          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 1.5 }}>
-            {GROWTH_MAP_LAYERS.map((layer) => (
-              <Chip
-                key={layer.key}
-                clickable
-                label={layer.label}
-                variant={mapLayer === layer.key ? 'filled' : 'outlined'}
-                color={mapLayer === layer.key ? 'primary' : 'default'}
-                onClick={() => setMapLayer(layer.key)}
-              />
-            ))}
-          </Box>
-          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 2 }}>
-            <Chip size="small" color="warning" label="Below avg" />
-            <Chip size="small" color="success" label="At or above avg" />
-          </Box>
-          {mapItems.length > 0 ? (
-            <GpsTreeDotMap
-              items={mapItems}
-              emptyGpsText="Trees with this measurement need GPS on their position to appear on this layout."
+          <Typography variant="caption" color="text.secondary">
+            {latestRecords.length} tree{latestRecords.length === 1 ? '' : 's'} with a measurement
+          </Typography>
+        </Box>
+        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 1.5 }}>
+          {GROWTH_MAP_LAYERS.map((layer) => (
+            <Chip
+              key={layer.key}
+              clickable
+              label={layer.label}
+              variant={mapLayer === layer.key ? 'filled' : 'outlined'}
+              color={mapLayer === layer.key ? 'primary' : 'default'}
+              onClick={() => setMapLayer(layer.key)}
             />
-          ) : (
-            <Typography color="text.secondary">
-              No {mapLayerMeta.label.toLowerCase()} measurements yet.
-            </Typography>
-          )}
-        </Paper>
-      )}
+          ))}
+        </Box>
+        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 2 }}>
+          <Chip size="small" color="warning" label="Below avg" />
+          <Chip size="small" color="success" label="At or above avg" />
+          <Chip size="small" label="No reading" />
+        </Box>
+        {positions.length > 0 ? (
+          <OrchardZoneLayout
+            positions={positions}
+            renderTree={(pos) => {
+              const record = readingByTreeId.get(pos.activeTree?.id);
+              const parsed = parsePositionCode(pos.position_code);
+              const { comparison, detail } = record
+                ? growthLayerComparison(record, mapLayer, averages)
+                : { comparison: { status: 'unknown', label: '' }, detail: null };
+              const tooltip = record && comparison.status !== 'unknown'
+                ? [
+                  pos.position_code,
+                  comparison.label,
+                  detail,
+                ].filter(Boolean).join(' · ')
+                : [
+                  pos.position_code,
+                  parsed ? formatLocationLabel(parsed) : null,
+                  `No ${mapLayerMeta.label.toLowerCase()} reading`,
+                ].filter(Boolean).join(' · ');
+              return (
+                <TreeCircleLink
+                  pos={pos}
+                  to={treeDashboardUrl(pos.position_code, 'growth')}
+                  color={growthDotColor(theme, comparison.status)}
+                  tooltip={tooltip}
+                />
+              );
+            }}
+          />
+        ) : (
+          <Typography color="text.secondary">
+            No tree positions found. Add trees in Farm Setup and Trees first.
+          </Typography>
+        )}
+      </Paper>
 
       {latestRecords.length > 0 && (
         <Paper sx={{ mb: 3 }} variant="outlined">

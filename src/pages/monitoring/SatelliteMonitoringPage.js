@@ -33,10 +33,14 @@ import { alpha, useTheme } from '@mui/material/styles';
 import { supabase } from '../../supabaseClient';
 import { useFarm } from '../../hooks/useFarm';
 import PageHeader from '../../components/common/PageHeader';
-import { GpsTreeDotMap } from '../../components/common/GpsTreeDotMap';
+import OrchardZoneLayout, { TreeCircleLink } from '../../components/orchard/OrchardZoneLayout';
 import { formatDate, formatNumber, getTreeDisplayId } from '../../utils/formatters';
 import { TREE_LIST_SELECT } from '../../utils/schema';
-import { parsePositionCode } from '../../utils/positionCode';
+import { formatLocationLabel, parsePositionCode } from '../../utils/positionCode';
+import {
+  ORCHARD_ROWS_SELECT,
+  collectRowPositions,
+} from '../../utils/orchardLayout';
 import {
   EMPTY_TREE_FILTERS,
   applyFilterPatch,
@@ -148,6 +152,7 @@ function SatelliteMonitoringPage() {
   const theme = useTheme();
   const { farm, loading: farmLoading } = useFarm();
   const [activeTrees, setActiveTrees] = useState([]);
+  const [orchardRows, setOrchardRows] = useState([]);
   const [cacheByPositionId, setCacheByPositionId] = useState(new Map());
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -162,6 +167,7 @@ function SatelliteMonitoringPage() {
   const load = useCallback(async () => {
     if (!farm?.id) {
       setActiveTrees([]);
+      setOrchardRows([]);
       setCacheByPositionId(new Map());
       setStats(null);
       setLoading(false);
@@ -172,15 +178,20 @@ function SatelliteMonitoringPage() {
     setMessage(null);
 
     try {
-      const [treesResult, statsResult] = await Promise.all([
+      const [treesResult, statsResult, rowsResult] = await Promise.all([
         supabase
           .from('trees')
           .select(TREE_LIST_SELECT)
           .eq('status', 'Active'),
         fetchGpsSatelliteStats(supabase, farm.id).catch(() => null),
+        supabase
+          .from('rows')
+          .select(ORCHARD_ROWS_SELECT)
+          .order('name'),
       ]);
 
       if (treesResult.error) throw treesResult.error;
+      if (rowsResult.error) throw rowsResult.error;
 
       let cacheResult = await supabase
         .from('tree_gps_satellite_cache')
@@ -213,6 +224,7 @@ function SatelliteMonitoringPage() {
         getTreeDisplayId(a).localeCompare(getTreeDisplayId(b), undefined, { numeric: true }),
       );
       setActiveTrees(sortedTrees);
+      setOrchardRows(rowsResult.data || []);
       setCacheByPositionId(new Map((cacheResult.data || []).map((entry) => [
         entry.position_id,
         {
@@ -225,6 +237,7 @@ function SatelliteMonitoringPage() {
     } catch (err) {
       setMessage({ type: 'error', text: err.message });
       setActiveTrees([]);
+      setOrchardRows([]);
       setCacheByPositionId(new Map());
       setStats(null);
     } finally {
@@ -313,30 +326,16 @@ function SatelliteMonitoringPage() {
   const mapLayerColumn = SATELLITE_MONITOR_COLUMNS.find((column) => column.key === mapLayer)
     || SATELLITE_MONITOR_COLUMNS[0];
 
-  const mapItems = useMemo(
-    () => filteredRows.map((row) => {
-      const friendly = row.indicators?.[mapLayer];
-      const chipColor = mapLayerChipColor(mapLayer, friendly);
-      return {
-        id: row.positionId,
-        label: row.positionCode,
-        to: treeDashboardUrl(row.positionCode, 'satellite'),
-        color: chipToDotColor(theme, chipColor),
-        gps: row.gps,
-        tooltip: [
-          friendly?.label
-            || (row.indicators?.opticalHidden && mapLayer !== 'radar' ? 'Hidden when cloudy' : null)
-            || (row.hasGps ? 'No satellite data' : 'No GPS'),
-          mapLayer === 'radar'
-          && row.indicators?.radarFromPriorWeek
-          && (row.indicators.radarAsOf || row.cache?.last_good_radar_week)
-            ? `from ${formatDate(row.indicators.radarAsOf || row.cache.last_good_radar_week)}`
-            : null,
-        ].filter(Boolean).join(' · '),
-      };
-    }),
-    [filteredRows, mapLayer, theme],
+  const positions = useMemo(
+    () => orchardRows.flatMap((row) => collectRowPositions(row)),
+    [orchardRows],
   );
+
+  const rowByPositionId = useMemo(() => {
+    const map = new Map();
+    tableRows.forEach((row) => map.set(row.positionId, row));
+    return map;
+  }, [tableRows]);
 
   if (farmLoading || loading) {
     return (
@@ -521,11 +520,11 @@ function SatelliteMonitoringPage() {
           <Box>
             <Typography variant="h6">{mapLayerColumn.label} by tree</Typography>
             <Typography variant="body2" color="text.secondary">
-              {mapLayerColumn.short}. Switch signal below — same GPS layout, one color per tree.
+              {mapLayerColumn.short}. Switch signal below — same orchard layout as Moisture.
             </Typography>
           </Box>
           <Typography variant="caption" color="text.secondary">
-            {filteredRows.length} tree{filteredRows.length === 1 ? '' : 's'}
+            {positions.length} tree{positions.length === 1 ? '' : 's'}
           </Typography>
         </Box>
         <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 1.5 }}>
@@ -562,13 +561,38 @@ function SatelliteMonitoringPage() {
             </>
           )}
         </Box>
-        {filteredRows.length > 0 ? (
-          <GpsTreeDotMap
-            items={mapItems}
-            emptyGpsText="Trees need GPS on their position to appear on this layout."
+        {positions.length > 0 ? (
+          <OrchardZoneLayout
+            positions={positions}
+            renderTree={(pos) => {
+              const row = rowByPositionId.get(pos.id);
+              const parsed = parsePositionCode(pos.position_code);
+              const friendly = row?.indicators?.[mapLayer];
+              const chipColor = mapLayerChipColor(mapLayer, friendly);
+              const tooltip = [
+                pos.position_code,
+                parsed ? formatLocationLabel(parsed) : null,
+                friendly?.label
+                  || (row?.indicators?.opticalHidden && mapLayer !== 'radar' ? 'Hidden when cloudy' : null)
+                  || (row?.hasGps ? 'No satellite data' : 'No reading'),
+                mapLayer === 'radar'
+                && row?.indicators?.radarFromPriorWeek
+                && (row.indicators.radarAsOf || row.cache?.last_good_radar_week)
+                  ? `from ${formatDate(row.indicators.radarAsOf || row.cache.last_good_radar_week)}`
+                  : null,
+              ].filter(Boolean).join(' · ');
+              return (
+                <TreeCircleLink
+                  pos={pos}
+                  to={treeDashboardUrl(pos.position_code, 'satellite')}
+                  color={chipToDotColor(theme, chipColor)}
+                  tooltip={tooltip}
+                />
+              );
+            }}
           />
         ) : (
-          <Typography color="text.secondary">No trees match the current filters.</Typography>
+          <Typography color="text.secondary">No tree positions found. Add trees in Farm Setup and Trees first.</Typography>
         )}
       </Paper>
 
