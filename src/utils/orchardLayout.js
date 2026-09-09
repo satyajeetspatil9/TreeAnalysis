@@ -86,6 +86,33 @@ export function parseZoneRowCount(zone) {
   return null;
 }
 
+export function parseBlockToken(text) {
+  const s = String(text || '').toUpperCase();
+  const named = s.match(/BLOCK\s*([AB])\b/);
+  if (named) return named[1];
+  const token = s.match(/(?:^|[-_\s/])([AB])(?:[-_\s]|$|\d)/);
+  if (token) return token[1];
+  return null;
+}
+
+export function inferZoneBlock(zone, allPositions = []) {
+  const saved = String(zone?.block || '').toUpperCase();
+  if (saved === 'A' || saved === 'B') return saved;
+
+  const fromLabel = parseBlockToken(zone?.zone_code) || parseBlockToken(zone?.description);
+  if (fromLabel) return fromLabel;
+
+  const counts = { A: 0, B: 0 };
+  allPositions.forEach((pos) => {
+    if (getPositionZone(pos)?.id !== zone?.id) return;
+    const block = getPositionBlock(pos);
+    if (block === 'A' || block === 'B') counts[block] += 1;
+  });
+  if (counts.A > counts.B) return 'A';
+  if (counts.B > counts.A) return 'B';
+  return null;
+}
+
 function uniqueZonesFromPositions(positions) {
   const map = new Map();
   positions.forEach((pos) => {
@@ -93,6 +120,19 @@ function uniqueZonesFromPositions(positions) {
     if (zone?.id && !map.has(zone.id)) map.set(zone.id, zone);
   });
   return [...map.values()];
+}
+
+function zonesForBlock(block, allZones, allPositions, blockPositions) {
+  const byId = new Map();
+  (allZones || []).forEach((zone) => {
+    if (inferZoneBlock(zone, allPositions) === block) byId.set(zone.id, zone);
+  });
+  uniqueZonesFromPositions(blockPositions).forEach((zone) => {
+    if (inferZoneBlock(zone, allPositions) === block) {
+      byId.set(zone.id, { ...zone, ...(byId.get(zone.id) || {}) });
+    }
+  });
+  return [...byId.values()];
 }
 
 function minRowForZone(positions, zoneId) {
@@ -145,12 +185,18 @@ function positionsInRowRange(positions, startRow, endRow) {
     .sort((a, b) => a.position_code.localeCompare(b.position_code));
 }
 
-/** Zone cards for one block: split by each zone's row count, higher rows on top. */
-export function buildBlockZoneBands(blockPositions) {
+/** Zone cards for one block: every zone for that block, split by row count, higher rows on top. */
+export function buildBlockZoneBands(blockPositions, options = {}) {
+  const { block, allZones = [], allPositions = blockPositions } = options;
   const positions = blockPositions
     .slice()
     .sort((a, b) => a.position_code.localeCompare(b.position_code));
-  const zones = sortZonesBottomFirst(uniqueZonesFromPositions(positions), positions);
+  const zones = sortZonesBottomFirst(
+    block
+      ? zonesForBlock(block, allZones, allPositions, positions)
+      : uniqueZonesFromPositions(positions),
+    positions,
+  );
 
   if (!zones.length) {
     return [{
@@ -199,7 +245,8 @@ export function buildBlockZoneBands(blockPositions) {
     };
   }).sort((a, b) => b.maxRow - a.maxRow);
 
-  const unassigned = positions.filter((pos) => !getPositionZone(pos)?.id);
+  const claimed = new Set(assigned.flatMap((band) => band.positions.map((pos) => pos.id)));
+  const unassigned = positions.filter((pos) => !claimed.has(pos.id) && !getPositionZone(pos)?.id);
   if (unassigned.length) {
     assigned.push({
       key: 'unassigned',
@@ -211,8 +258,8 @@ export function buildBlockZoneBands(blockPositions) {
   return assigned;
 }
 
-export function getPositionBandKey(pos, blockPositions) {
-  const bands = buildBlockZoneBands(blockPositions);
+export function getPositionBandKey(pos, blockPositions, options = {}) {
+  const bands = buildBlockZoneBands(blockPositions, options);
   const band = bands.find((item) => item.positions.some((tree) => tree.id === pos.id));
   return band?.key || 'unassigned';
 }

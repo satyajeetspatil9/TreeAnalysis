@@ -19,7 +19,7 @@ function rlsHint(message) {
   return `${message} Open Settings → Save Farm to link the farm to your account, then run migration 008_fix_irrigation_rls.sql in Supabase SQL Editor.`;
 }
 
-const emptyForm = { zone_code: '', description: '', row_count: '', flow_rate_lph: '' };
+const emptyForm = { zone_code: '', description: '', block: '', row_count: '', flow_rate_lph: '' };
 const today = () => new Date().toISOString().slice(0, 10);
 
 async function getZoneUsage(zoneId) {
@@ -139,6 +139,7 @@ function IrrigationZonesPage() {
     setEditForm({
       zone_code: zone.zone_code || '',
       description: zone.description || '',
+      block: zone.block || '',
       row_count: zone.row_count ?? '',
       flow_rate_lph: zone.flow_rate_lph ?? '',
     });
@@ -230,6 +231,7 @@ function IrrigationZonesPage() {
       farm_id: farm.id,
       zone_code: form.zone_code.trim().toUpperCase(),
       description: form.description.trim() || null,
+      block: form.block || null,
       row_count: form.row_count ? Number(form.row_count) : null,
       flow_rate_lph: form.flow_rate_lph ? Number(form.flow_rate_lph) : null,
     }]);
@@ -255,6 +257,7 @@ function IrrigationZonesPage() {
       .update({
         zone_code: editForm.zone_code.trim().toUpperCase(),
         description: editForm.description.trim() || null,
+        block: editForm.block || null,
         row_count: editForm.row_count !== '' ? Number(editForm.row_count) : null,
         flow_rate_lph: editForm.flow_rate_lph !== '' ? Number(editForm.flow_rate_lph) : null,
       })
@@ -378,7 +381,7 @@ function IrrigationZonesPage() {
       <Paper sx={{ p: 3, mb: 3 }}>
         <Typography variant="h6" gutterBottom>Add irrigation zone</Typography>
         <Grid container spacing={2}>
-          <Grid item xs={12} md={3}>
+          <Grid item xs={12} md={2}>
             <TextField
               label="Zone code"
               fullWidth
@@ -388,6 +391,20 @@ function IrrigationZonesPage() {
               placeholder="IZ-A-01"
               disabled={!farm}
             />
+          </Grid>
+          <Grid item xs={12} md={2}>
+            <FormControl fullWidth disabled={!farm}>
+              <InputLabel>Block</InputLabel>
+              <Select
+                value={form.block}
+                label="Block"
+                onChange={(e) => setForm({ ...form, block: e.target.value })}
+              >
+                <MenuItem value="">Not set</MenuItem>
+                <MenuItem value="A">A</MenuItem>
+                <MenuItem value="B">B</MenuItem>
+              </Select>
+            </FormControl>
           </Grid>
           <Grid item xs={12} md={3}>
             <TextField
@@ -399,7 +416,7 @@ function IrrigationZonesPage() {
               disabled={!farm}
             />
           </Grid>
-          <Grid item xs={12} md={3}>
+          <Grid item xs={12} md={2}>
             <TextField
               label="Number of rows"
               type="number"
@@ -453,6 +470,7 @@ function IrrigationZonesPage() {
                 <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
                   {zone.description || 'No description'}
                 </Typography>
+                <Typography variant="body2">Block {zone.block || '—'}</Typography>
                 <Typography variant="body2">{zone.treeCount} trees assigned</Typography>
                 <Typography variant="body2">
                   Rows: {zone.row_count ? zone.row_count : '—'}
@@ -573,6 +591,18 @@ function IrrigationZonesPage() {
             value={editForm.description}
             onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
           />
+          <FormControl fullWidth margin="normal">
+            <InputLabel>Block</InputLabel>
+            <Select
+              value={editForm.block}
+              label="Block"
+              onChange={(e) => setEditForm({ ...editForm, block: e.target.value })}
+            >
+              <MenuItem value="">Not set</MenuItem>
+              <MenuItem value="A">A</MenuItem>
+              <MenuItem value="B">B</MenuItem>
+            </Select>
+          </FormControl>
           <TextField
             label="Number of rows"
             type="number"

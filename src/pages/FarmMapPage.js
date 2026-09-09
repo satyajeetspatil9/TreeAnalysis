@@ -26,7 +26,7 @@ import {
   getPositionBandKey,
   positionsInBlock,
 } from '../utils/orchardLayout';
-import OrchardZoneLayout from '../components/orchard/OrchardZoneLayout';
+import OrchardZoneLayout, { useIrrigationZones } from '../components/orchard/OrchardZoneLayout';
 import { CommonBelowNutrientsSummary } from '../components/soil/CommonBelowNutrientsSummary';
 import PageHeader from '../components/common/PageHeader';
 
@@ -62,6 +62,7 @@ function FarmMapPage() {
   const firstMatchRef = useRef(null);
   const blockBRef = useRef(null);
   const blockARef = useRef(null);
+  const irrigationZones = useIrrigationZones();
 
   useEffect(() => {
     async function loadMap() {
@@ -115,6 +116,11 @@ function FarmMapPage() {
     ? `${getPositionBlock(filteredPositions[0])}-${getPositionBandKey(
       filteredPositions[0],
       positionsInBlock(mapPositions, getPositionBlock(filteredPositions[0])),
+      {
+        block: getPositionBlock(filteredPositions[0]),
+        allZones: irrigationZones,
+        allPositions: mapPositions,
+      },
     )}`
     : null;
   const singleMatch = filteredPositions.length === 1 ? filteredPositions[0] : null;

@@ -1,7 +1,8 @@
-import React, { useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Box, Button, Chip, Grid, Paper, Tooltip, Typography } from '@mui/material';
 import { alpha, useTheme } from '@mui/material/styles';
 import { Link as RouterLink } from 'react-router-dom';
+import { supabase } from '../../supabaseClient';
 import { formatLocationLabel, parsePositionCode } from '../../utils/positionCode';
 import {
   BLOCK_ACCENT,
@@ -10,8 +11,39 @@ import {
   groupRowLots,
   positionsInBlock,
   treeShortName,
-  zoneTitleForPositions,
 } from '../../utils/orchardLayout';
+
+const ZONE_SELECT = 'id, zone_code, description, row_count, block';
+
+export function useIrrigationZones() {
+  const [zones, setZones] = useState([]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function load() {
+      const primary = await supabase
+        .from('irrigation_zones')
+        .select(ZONE_SELECT)
+        .order('zone_code');
+      if (cancelled) return;
+      if (primary.error?.message?.includes('block')) {
+        const fallback = await supabase
+          .from('irrigation_zones')
+          .select('id, zone_code, description, row_count')
+          .order('zone_code');
+        if (!cancelled) setZones(fallback.data || []);
+        return;
+      }
+      setZones(primary.data || []);
+    }
+
+    load();
+    return () => { cancelled = true; };
+  }, []);
+
+  return zones;
+}
 
 export function TreeCircleLink({ pos, color, to, tooltip }) {
   const theme = useTheme();
@@ -66,7 +98,7 @@ export function TreeCircleLink({ pos, color, to, tooltip }) {
 function ZoneCard({ section, band, positions, cardRef, renderTree }) {
   const theme = useTheme();
   const rows = groupPositionsByRow(positions);
-  const zoneTitle = zoneTitleForPositions(positions, band.fallbackLabel);
+  const zoneTitle = band.fallbackLabel;
 
   return (
     <Paper
@@ -156,11 +188,17 @@ function ZoneCard({ section, band, positions, cardRef, renderTree }) {
   );
 }
 
-function BlockColumn({ block, positions, firstMatchKey, firstMatchRef, blockRef, renderTree }) {
+function BlockColumn({
+  block, positions, allPositions, irrigationZones, firstMatchKey, firstMatchRef, blockRef, renderTree,
+}) {
   const theme = useTheme();
   const accent = theme.palette[BLOCK_ACCENT[block]]?.main || theme.palette.primary.main;
   const blockPositions = positionsInBlock(positions, block);
-  const bands = buildBlockZoneBands(blockPositions);
+  const bands = buildBlockZoneBands(blockPositions, {
+    block,
+    allZones: irrigationZones,
+    allPositions,
+  });
 
   return (
     <Paper
@@ -226,6 +264,7 @@ export default function OrchardZoneLayout({
   const innerARef = useRef(null);
   const blockBRef = blockBRefProp || innerBRef;
   const blockARef = blockARefProp || innerARef;
+  const irrigationZones = useIrrigationZones();
   const treeRenderer = renderTree || ((pos) => <TreeCircleLink pos={pos} />);
 
   return (
@@ -245,6 +284,8 @@ export default function OrchardZoneLayout({
           <BlockColumn
             block="B"
             positions={positions}
+            allPositions={positions}
+            irrigationZones={irrigationZones}
             firstMatchKey={firstMatchKey}
             firstMatchRef={firstMatchRef}
             blockRef={blockBRef}
@@ -255,6 +296,8 @@ export default function OrchardZoneLayout({
           <BlockColumn
             block="A"
             positions={positions}
+            allPositions={positions}
+            irrigationZones={irrigationZones}
             firstMatchKey={firstMatchKey}
             firstMatchRef={firstMatchRef}
             blockRef={blockARef}
