@@ -22,10 +22,7 @@ import {
   normalizeFilterValue,
 } from '../utils/treeSearch';
 import {
-  SENSOR_READING_FIELDS,
-  evaluateSoilStandard,
-  getLatestObservationByTree,
-  getSoilStandard,
+  buildTreeNutrientDeficiencyReport,
 } from '../utils/soil';
 import { StatusDot } from '../components/common/GpsTreeDotMap';
 import PageHeader from '../components/common/PageHeader';
@@ -38,26 +35,18 @@ const ROW_BANDS = [
   { key: 'lower', fallbackLabel: `Zone · rows 1–${SECOND_SECTION_START_ROW - 1}` },
 ];
 
-function soilMapDotColor(theme, status) {
-  if (status === 'good' || status === 'ok') return theme.palette.success.main;
-  if (status === 'low') return theme.palette.warning.main;
-  if (status === 'high') return theme.palette.error.main;
-  return theme.palette.grey[400];
-}
-
-function combinedSoilStatus(observation) {
-  if (!observation) return 'unknown';
-  const rank = { unknown: 0, good: 1, ok: 1, high: 2, low: 3 };
-  let worst = 'unknown';
-  SENSOR_READING_FIELDS.forEach(({ key, standardKey }) => {
-    if (!standardKey || key === 'moisture_percent') return;
-    const status = evaluateSoilStandard(getSoilStandard(standardKey), observation[key]).status;
-    if ((rank[status] || 0) > (rank[worst] || 0)) worst = status;
+function commonLowNutrients(observations) {
+  const counts = {};
+  buildTreeNutrientDeficiencyReport(observations).forEach((row) => {
+    row.lowNutrients.forEach((nutrient) => {
+      if (!counts[nutrient.key]) {
+        counts[nutrient.key] = { key: nutrient.key, label: nutrient.label, treeCount: 0 };
+      }
+      counts[nutrient.key].treeCount += 1;
+    });
   });
-  return worst;
+  return Object.values(counts).sort((a, b) => b.treeCount - a.treeCount || a.label.localeCompare(b.label));
 }
-
-function collectRowPositions(row) {
   const rowCode = normalizeRow(row.name);
   return (row.lot_rows || []).flatMap((lr) =>
     (lr.lots?.tree_positions || [])
@@ -115,14 +104,13 @@ function groupPositionsByRow(positions) {
   );
 }
 
-function TreeNameLink({ pos, highlight, soilStatus }) {
+function TreeNameLink({ pos, highlight }) {
   const theme = useTheme();
   const parsed = parsePositionCode(pos.position_code);
   const treeName = parsed?.tree || pos.position_code.split('-').pop() || pos.position_code;
   const title = [
     pos.position_code,
     pos.activeTree?.variety,
-    soilStatus === 'unknown' ? 'No soil data' : soilStatus,
     parsed ? formatLocationLabel(parsed) : null,
   ].filter(Boolean).join(' · ');
 
@@ -147,23 +135,12 @@ function TreeNameLink({ pos, highlight, soilStatus }) {
           }),
         }}
       >
-        <StatusDot color={soilMapDotColor(theme, soilStatus)} />
+        <StatusDot color={theme.palette.success.main} />
         <Typography variant="body2" sx={{ fontWeight: 600, color: 'text.primary' }}>
           {treeName}
         </Typography>
       </Box>
     </Tooltip>
-  );
-}
-
-function SoilStatusLegend() {
-  return (
-    <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 2 }}>
-      <Chip size="small" color="warning" label="Low" />
-      <Chip size="small" color="success" label="OK" />
-      <Chip size="small" color="error" label="High" />
-      <Chip size="small" label="No data" />
-    </Box>
   );
 }
 
@@ -202,7 +179,6 @@ function ZoneCard({ section, band, positions, highlight, cardRef }) {
                 key={pos.id}
                 pos={pos}
                 highlight={highlight}
-                soilStatus={pos.soilStatus}
               />
             ))}
           </Box>
@@ -256,7 +232,7 @@ function FilterSelect({
 function FarmMapPage() {
   const navigate = useNavigate();
   const [rows, setRows] = useState([]);
-  const [soilByTreeId, setSoilByTreeId] = useState({});
+  const [sensorObservations, setSensorObservations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -300,7 +276,7 @@ function FarmMapPage() {
 
         if (rowsError) throw rowsError;
         setRows(data || []);
-        setSoilByTreeId(getLatestObservationByTree(soilData || []));
+        setSensorObservations(soilData || []);
       } catch (err) {
         setError(err.message);
       } finally {
@@ -312,11 +288,13 @@ function FarmMapPage() {
   }, []);
 
   const allPositions = useMemo(
-    () => rows.flatMap((row) => collectRowPositions(row)).map((pos) => ({
-      ...pos,
-      soilStatus: combinedSoilStatus(soilByTreeId[pos.activeTree?.id]),
-    })),
-    [rows, soilByTreeId],
+    () => rows.flatMap((row) => collectRowPositions(row)),
+    [rows],
+  );
+
+  const commonBelowNutrients = useMemo(
+    () => commonLowNutrients(sensorObservations),
+    [sensorObservations],
   );
 
   const filterOptions = useMemo(
@@ -375,6 +353,41 @@ function FarmMapPage() {
         title="Tree Dashboard"
         subtitle="Four irrigation zones: two in B (left) and two in A (right). Rows start at the bottom; the second zone in each block starts at row 9."
       />
+
+      <Paper sx={{ p: 2, mb: 3 }} variant="outlined">
+        <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 1 }}>
+          Common nutrients below required
+        </Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+          From Monitoring → Soil, using each tree&apos;s latest 7-in-1 reading (not moisture).
+          {' '}
+          <Typography
+            component={RouterLink}
+            to="/monitoring/soil"
+            variant="body2"
+            sx={{ color: 'primary.main', fontWeight: 600, textDecoration: 'none' }}
+          >
+            Open Soil monitoring
+          </Typography>
+        </Typography>
+        {commonBelowNutrients.length === 0 ? (
+          <Typography variant="body2" color="text.secondary">
+            {sensorObservations.length === 0
+              ? 'No 7-in-1 readings yet.'
+              : 'No nutrients are below required on the latest 7-in-1 readings.'}
+          </Typography>
+        ) : (
+          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+            {commonBelowNutrients.map((nutrient) => (
+              <Chip
+                key={nutrient.key}
+                color="warning"
+                label={`${nutrient.label} · ${nutrient.treeCount} tree${nutrient.treeCount === 1 ? '' : 's'}`}
+              />
+            ))}
+          </Box>
+        )}
+      </Paper>
 
       <Paper sx={{ p: 2, mb: 3 }}>
         <TextField
@@ -523,9 +536,7 @@ function FarmMapPage() {
       )}
 
       {allPositions.length > 0 && (
-        <>
-          <SoilStatusLegend />
-          <Grid container spacing={2}>
+        <Grid container spacing={2}>
           <Grid item xs={12} md={6}>
             <BlockColumn
               block="B"
@@ -545,7 +556,6 @@ function FarmMapPage() {
             />
           </Grid>
         </Grid>
-        </>
       )}
     </Box>
   );
