@@ -368,6 +368,19 @@ function SettingsPage() {
       </Typography>
       {message && <Alert severity={message.type} sx={{ mb: 2 }}>{message.text}</Alert>}
 
+      <Alert severity="info" sx={{ mb: 3 }}>
+        <Typography variant="subtitle2" fontWeight={600}>Free Supabase quotas</Typography>
+        <Typography variant="body2" sx={{ mt: 0.5 }}>
+          Postgres is 500 MB (then the project goes read-only). File storage is 1 GB.
+          A monthly 7-in-1 reading per tree and a lab report every 6 months will not fill
+          the database in a practical lifetime (tens to hundreds of years for soil and lab alone;
+          typically 1–3+ years for the whole app including irrigation and satellite).
+          Tree photos can fill the 1 GB bucket in days to a few months.
+          Check live size in the Supabase Dashboard under Project Settings → Usage.
+          Free projects also pause after 1 week of inactivity.
+        </Typography>
+      </Alert>
+
       <Paper sx={{ p: 3, mb: 3 }} variant="outlined">
         <Typography variant="h6" gutterBottom>Farm</Typography>
         {farmLoading ? (
