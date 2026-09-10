@@ -195,6 +195,12 @@ export function buildFarmFertigationChartData(events, grouping = 'week') {
     };
     const point = toPoint(e);
     bucket.water += point.water;
+    bucket.productQty += point.productQty;
+    bucket.duration += point.duration;
+    bucket.eventCount += 1;
+    buckets.set(key, bucket);
+  });
+
   return [...buckets.values()].sort((a, b) => a.key.localeCompare(b.key));
 }
 
