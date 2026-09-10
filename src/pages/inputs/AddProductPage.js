@@ -22,6 +22,7 @@ import {
   productsRlsHint,
   inventoryStockHint,
   getProductStock,
+  syncCatalogProducts,
 } from '../../utils/products';
 
 const nutrientFieldSx = {
@@ -110,6 +111,22 @@ function AddProductPage() {
     loadData();
   };
 
+  const handleSeedCatalog = async () => {
+    setSavingProduct(true);
+    setMessage(null);
+    const result = await syncCatalogProducts(supabase);
+    setSavingProduct(false);
+    if (result.error) {
+      setMessage({ type: 'error', text: productsRlsHint(result.error.message) });
+      return;
+    }
+    setMessage({
+      type: 'success',
+      text: `Added ${result.created} product${result.created === 1 ? '' : 's'} and updated ${result.updated} nutrient profile${result.updated === 1 ? '' : 's'}.`,
+    });
+    loadData();
+  };
+
   const handleDeleteProduct = async (product) => {
     const stock = getProductStock(product);
     const stockNote = stock > 0 ? ` It still has ${stock} ${product.unit} in stock and will be hidden from new entries.` : '';
@@ -130,8 +147,13 @@ function AddProductPage() {
     <Box>
       <PageHeader
         section="Farm Setting"
-        title="Add Product"
-        subtitle="Define products and nutrient composition. Record purchases in Inventory to track stock."
+        title="Products"
+        subtitle="Define products and nutrient composition. Fertilizer recommendation uses these records. Record purchases in Inventory to track stock."
+        action={(
+          <Button variant="outlined" onClick={handleSeedCatalog} disabled={savingProduct}>
+            {savingProduct ? 'Adding…' : 'Add catalog products'}
+          </Button>
+        )}
       />
 
       {message && <Alert severity={message.type} sx={{ mb: 2 }} onClose={() => setMessage(null)}>{message.text}</Alert>}

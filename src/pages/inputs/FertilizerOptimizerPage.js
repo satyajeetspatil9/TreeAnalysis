@@ -16,8 +16,9 @@ import { treeDashboardUrl } from '../../utils/treeDashboard';
 import {
   lowNutrientLabels,
   mergeTreeNutrientProfile,
-  suggestFertilizerInputs,
+  suggestProductsForProfile,
 } from '../../utils/farmInputCatalog';
+import { loadProductsWithInventory } from '../../utils/products';
 
 function sortPlans(plans) {
   return plans.slice().sort((a, b) => a.treeLabel.localeCompare(b.treeLabel, undefined, { numeric: true }));
@@ -48,6 +49,8 @@ function FertilizerOptimizerPage() {
     const latestLab = labRows?.[0] || null;
     setLab(latestLab);
 
+    const catalogProducts = await loadProductsWithInventory(supabase).catch(() => []);
+
     const trees = await loadFarmTrees(supabase, farm.id, { select: TREE_LIST_SELECT });
     const treeIds = (trees || []).map((t) => t.id);
     let observations = [];
@@ -76,7 +79,7 @@ function FertilizerOptimizerPage() {
           tree,
           treeLabel: getTreeDisplayId(tree),
           observation,
-          products: suggestFertilizerInputs(profile, nextStage),
+          products: suggestProductsForProfile(profile, catalogProducts, nextStage),
           lows: lowNutrientLabels(profile),
         };
       })
@@ -96,7 +99,7 @@ function FertilizerOptimizerPage() {
       <PageHeader
         section="Inputs"
         title="Fertilizer recommendation"
-        subtitle="Trees with a soil reading. Only inputs that close a low nutrient on that tree are listed."
+        subtitle="Trees with a soil reading. Recommendations use fertilizer products and their nutrient %."
       />
       <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
         <Typography variant="body2">
@@ -107,8 +110,8 @@ function FertilizerOptimizerPage() {
         <Button component={RouterLink} to="/orchard/soil-report" size="small" sx={{ mt: 1, mr: 1 }}>
           Add soil lab report
         </Button>
-        <Button component={RouterLink} to="/admin/farm-inputs" size="small" sx={{ mt: 1 }}>
-          Available inputs
+        <Button component={RouterLink} to="/inputs/add-product" size="small" sx={{ mt: 1 }}>
+          Products
         </Button>
       </Paper>
 
@@ -117,6 +120,7 @@ function FertilizerOptimizerPage() {
           <Typography variant="h6">Per-tree nutrient needs</Typography>
           <Typography variant="body2" color="text.secondary">
             Tree 7-in-1 N, P, K, and pH first. Farm lab fills OC, S, Zn, and B when the tree has no value.
+            Add fertilizer products with nutrient % under Products.
           </Typography>
         </Box>
         <Table size="small">

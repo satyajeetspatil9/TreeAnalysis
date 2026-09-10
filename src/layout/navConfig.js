@@ -87,7 +87,7 @@ export const navSections = [
       { label: 'Farm Setup', path: '/orchard/setup', icon: BuildIcon, description: 'Blocks, rows, and lots' },
       { label: 'Trees', path: '/orchard/trees', icon: ForestIcon, description: 'Add and manage trees' },
       { label: 'Zones', path: '/irrigation/zones', icon: OpacityIcon, description: 'Drip lines and valves' },
-      { label: 'Add Product', path: '/inputs/add-product', icon: PostAddIcon, description: 'Define products and nutrients' },
+      { label: 'Products', path: '/inputs/add-product', icon: PostAddIcon, description: 'Define products and nutrients' },
       { label: 'Add Soil Report', path: '/orchard/soil-report', icon: BiotechIcon, description: '7-in-1 sensor readings and lab reports' },
     ],
   },
@@ -96,7 +96,6 @@ export const navSections = [
     icon: SettingsIcon,
     items: [
       { label: 'Settings', path: '/admin/settings', icon: SettingsIcon, description: 'Farm, varieties, sensors' },
-      { label: 'Available inputs', path: '/admin/farm-inputs', icon: AgricultureIcon, description: 'Organic and mineral inputs for fertilizer rec.' },
     ],
   },
 ];

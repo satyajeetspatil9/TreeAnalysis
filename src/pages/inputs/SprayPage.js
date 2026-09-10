@@ -260,7 +260,7 @@ function SprayPage() {
           <Alert severity="warning" sx={{ mt: 1, mb: 1 }}>
             No plant protection products found. Add products under{' '}
             <Button component={RouterLink} to="/inputs/add-product" size="small" sx={{ ml: 0.5, mr: 0.5 }}>
-              Inputs → Add Product
+              Products
             </Button>
             with category <strong>Plant Protection</strong>, then record a purchase in Inventory.
           </Alert>

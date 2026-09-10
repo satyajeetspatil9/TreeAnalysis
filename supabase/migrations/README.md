@@ -65,4 +65,5 @@
 -- 054_irrigation_zone_row_count.sql — orchard map zone bands
 -- 055_irrigation_zone_block.sql — A/B block on irrigation zones
 -- 056_irrigation_program_products.sql — fertigation mix copied to Monitoring
+-- 057_seed_catalog_products.sql — analysed farm inputs (N-P2O5-K2O-Ca-Mg-S-Zn-B)
 -- =============================================================================

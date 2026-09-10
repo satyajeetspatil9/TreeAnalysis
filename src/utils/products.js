@@ -1,3 +1,5 @@
+import { catalogToProductRecord, FARM_INPUT_CATALOG } from './farmInputCatalog';
+
 export const PRODUCT_CATEGORIES = ['Fertilizer', 'Plant Protection', 'Other'];
 
 /** Categories treated as spray / plant protection products in the UI. */
@@ -63,8 +65,8 @@ export const PRODUCT_UNITS = ['kg', 'L', 'g', 'ml'];
 /** Nutrient keys stored in products.nutrient_composition (% by weight/volume). */
 export const PRODUCT_NUTRIENT_FIELDS = [
   { key: 'N', label: 'Nitrogen (N)', unit: '%' },
-  { key: 'P', label: 'Phosphorus (P)', unit: '%' },
-  { key: 'K', label: 'Potassium (K)', unit: '%' },
+  { key: 'P', label: 'Phosphorus (P₂O₅)', unit: '%' },
+  { key: 'K', label: 'Potassium (K₂O)', unit: '%' },
   { key: 'Ca', label: 'Calcium (Ca)', unit: '%' },
   { key: 'Mg', label: 'Magnesium (Mg)', unit: '%' },
   { key: 'S', label: 'Sulphur (S)', unit: '%' },
@@ -147,6 +149,60 @@ export function updateProductNutrient(form, key, value) {
 export function productsRlsHint(message) {
   if (!message?.includes('row-level security')) return message;
   return `${message} Re-run supabase/migrations/012_fix_products_rls.sql in Supabase SQL Editor.`;
+}
+
+function normalizeProductName(name) {
+  return String(name || '').trim().toLowerCase().replace(/[–—]/g, '-');
+}
+
+function findExistingProduct(byName, productName) {
+  const key = normalizeProductName(productName);
+  if (byName.has(key)) return byName.get(key);
+  for (const [name, row] of byName) {
+    if (name === key || name.startsWith(`${key}/`) || name.startsWith(`${key} `)) return row;
+  }
+  return null;
+}
+
+/** Insert analysed catalog materials into products, or refresh nutrient % on name match. */
+export async function syncCatalogProducts(supabase) {
+  const { data: existing, error } = await supabase.from('products').select('id, name');
+  if (error) return { error, created: 0, updated: 0 };
+
+  const byName = new Map(
+    (existing || []).map((row) => [normalizeProductName(row.name), row]),
+  );
+
+  let created = 0;
+  let updated = 0;
+  for (const item of FARM_INPUT_CATALOG) {
+    if (!item.composition) continue;
+    const payload = catalogToProductRecord(item);
+    const found = findExistingProduct(byName, payload.name);
+    if (found) {
+      const { error: updateError } = await supabase
+        .from('products')
+        .update({
+          nutrient_composition: payload.nutrient_composition,
+          active: true,
+        })
+        .eq('id', found.id);
+      if (updateError) return { error: updateError, created, updated };
+      updated += 1;
+      continue;
+    }
+
+    const { data: inserted, error: insertError } = await supabase
+      .from('products')
+      .insert([payload])
+      .select('id, name')
+      .single();
+    if (insertError) return { error: insertError, created, updated };
+    byName.set(normalizeProductName(inserted.name), inserted);
+    created += 1;
+  }
+
+  return { error: null, created, updated };
 }
 
 export function inventoryStockHint(message) {
