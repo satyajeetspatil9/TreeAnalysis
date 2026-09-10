@@ -8,9 +8,11 @@ import {
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import { supabase } from '../../supabaseClient';
+import { useFarm } from '../../hooks/useFarm';
 import { formatDate, getTreeDisplayId } from '../../utils/formatters';
 import { rlsHint } from '../../utils/soil';
 import PageHeader from '../../components/common/PageHeader';
+import { filterByTreeIds, loadFarmTreeIds } from '../../utils/farmScope';
 
 const PROBLEM_CATEGORIES = [
   { value: 'DISEASE', label: 'Disease' },
@@ -49,6 +51,7 @@ function observationToForm(observation) {
 }
 
 function DiseaseDashboardPage() {
+  const { farm } = useFarm();
   const [observations, setObservations] = useState([]);
   const [message, setMessage] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -58,13 +61,18 @@ function DiseaseDashboardPage() {
   const [deletingObservation, setDeletingObservation] = useState(null);
 
   const load = useCallback(async () => {
+    if (!farm?.id) {
+      setObservations([]);
+      return;
+    }
+    const treeIds = await loadFarmTreeIds(supabase, farm.id);
     const { data } = await supabase
       .from('disease_observations')
       .select('*, trees(tree_positions(position_code), variety)')
       .order('observed_at', { ascending: false })
       .limit(100);
-    setObservations(data || []);
-  }, []);
+    setObservations(filterByTreeIds(data || [], treeIds));
+  }, [farm?.id]);
 
   useEffect(() => { load(); }, [load]);
 

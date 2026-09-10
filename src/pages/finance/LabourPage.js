@@ -1,11 +1,15 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Box, Paper, Table, TableBody, TableCell, TableHead, TableRow,
-  Button, TextField, Grid, FormControl, InputLabel, Select, MenuItem, Alert, Typography,
-} from '@mui/material';import { supabase } from '../../supabaseClient';
+  Button, TextField, Grid, FormControl, InputLabel, Select, MenuItem, Alert, Typography, IconButton,
+} from '@mui/material';
+import EditIcon from '@mui/icons-material/Edit';
+import DeleteIcon from '@mui/icons-material/Delete';
+import { supabase } from '../../supabaseClient';
 import { useFarm } from '../../hooks/useFarm';
 import PageHeader from '../../components/common/PageHeader';
 import { formatCurrency, formatDate } from '../../utils/formatters';
+import { loadFarmLabourEvents, loadFarmTrees, loadFarmZoneIds } from '../../utils/farmScope';
 
 function rlsHint(message) {
   if (!message?.includes('row-level security')) return message;
@@ -39,14 +43,8 @@ function labourRecordAmount(record) {
   return calcLabourAmount(record);
 }
 
-function LabourPage() {
-  const { farm } = useFarm();
-  const [records, setRecords] = useState([]);
-  const [zones, setZones] = useState([]);
-  const [trees, setTrees] = useState([]);
-  const [message, setMessage] = useState(null);
-  const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({
+function emptyLabourForm() {
+  return {
     event_date: new Date().toISOString().slice(0, 10),
     work_type: 'Weeding',
     male_workers: '',
@@ -56,7 +54,32 @@ function LabourPage() {
     scope: 'zone',
     scope_id: '',
     notes: '',
-  });
+  };
+}
+
+function labourToForm(record) {
+  return {
+    event_date: record.event_date,
+    work_type: record.work_type || 'Weeding',
+    male_workers: record.male_workers != null ? String(record.male_workers) : '',
+    female_workers: record.female_workers != null ? String(record.female_workers) : '',
+    male_wage: record.male_wage != null ? String(record.male_wage) : '',
+    female_wage: record.female_wage != null ? String(record.female_wage) : '',
+    scope: record.tree_id ? 'tree' : 'zone',
+    scope_id: record.tree_id ? String(record.tree_id) : String(record.zone_id || ''),
+    notes: record.notes || '',
+  };
+}
+
+function LabourPage() {
+  const { farm } = useFarm();
+  const [records, setRecords] = useState([]);
+  const [zones, setZones] = useState([]);
+  const [trees, setTrees] = useState([]);
+  const [message, setMessage] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [form, setForm] = useState(emptyLabourForm());
 
   const load = useCallback(async () => {
     if (!farm) {
@@ -66,25 +89,18 @@ function LabourPage() {
       return;
     }
 
-    const { data } = await supabase
-      .from('labour_events')
-      .select('*')
-      .order('event_date', { ascending: false })
-      .limit(50);
+    const zoneIds = await loadFarmZoneIds(supabase, farm.id);
+    const farmTrees = await loadFarmTrees(supabase, farm.id, {
+      select: 'id, tree_positions(position_code)',
+    });
+    const treeIds = farmTrees.map((t) => t.id);
+    const [data, z] = await Promise.all([
+      loadFarmLabourEvents(supabase, { zoneIds, treeIds, limit: 50 }),
+      supabase.from('irrigation_zones').select('id, zone_code').eq('farm_id', farm.id).order('zone_code'),
+    ]);
     setRecords(data || []);
-
-    const { data: z } = await supabase
-      .from('irrigation_zones')
-      .select('id, zone_code')
-      .eq('farm_id', farm.id)
-      .order('zone_code');
-    setZones(z || []);
-
-    const { data: t } = await supabase
-      .from('trees')
-      .select('id, tree_positions(position_code)')
-      .eq('status', 'Active');
-    setTrees(t || []);
+    setZones(z.data || []);
+    setTrees(farmTrees);
   }, [farm]);
 
   useEffect(() => {
@@ -152,7 +168,10 @@ function LabourPage() {
     setSaving(true);
     setMessage(null);
 
-    const { error } = await supabase.from('labour_events').insert([payload]);
+    const query = editingId
+      ? supabase.from('labour_events').update(payload).eq('id', editingId)
+      : supabase.from('labour_events').insert([payload]);
+    const { error } = await query;
     setSaving(false);
 
     if (error) {
@@ -160,16 +179,24 @@ function LabourPage() {
       return;
     }
 
-    setMessage({ type: 'success', text: 'Labour recorded.' });
-    setForm({
-      ...form,
-      male_workers: '',
-      female_workers: '',
-      male_wage: '',
-      female_wage: '',
-      scope_id: '',
-      notes: '',
-    });
+    setMessage({ type: 'success', text: editingId ? 'Labour updated.' : 'Labour recorded.' });
+    setEditingId(null);
+    setForm(emptyLabourForm());
+    load();
+  };
+
+  const handleDelete = async (record) => {
+    if (!window.confirm(`Delete labour on ${formatDate(record.event_date)}?`)) return;
+    const { error } = await supabase.from('labour_events').delete().eq('id', record.id);
+    if (error) {
+      setMessage({ type: 'error', text: schemaHint(rlsHint(error.message)) });
+      return;
+    }
+    if (editingId === record.id) {
+      setEditingId(null);
+      setForm(emptyLabourForm());
+    }
+    setMessage({ type: 'success', text: 'Labour deleted.' });
     load();
   };
 
@@ -318,10 +345,23 @@ function LabourPage() {
               />
             </Paper>
           </Grid>
+          <Grid item xs={12}>
+            <TextField
+              label="Notes"
+              fullWidth
+              value={form.notes}
+              onChange={(e) => setForm({ ...form, notes: e.target.value })}
+            />
+          </Grid>
         </Grid>
-        <Button variant="contained" sx={{ mt: 2 }} onClick={handleSave} disabled={saving || !farm || formTotal <= 0}>
-          Save Labour
-        </Button>
+        <Box sx={{ mt: 2, display: 'flex', gap: 1 }}>
+          <Button variant="contained" onClick={handleSave} disabled={saving || !farm || formTotal <= 0}>
+            {saving ? 'Saving…' : (editingId ? 'Save changes' : 'Save Labour')}
+          </Button>
+          {editingId && (
+            <Button onClick={() => { setEditingId(null); setForm(emptyLabourForm()); }}>Cancel</Button>
+          )}
+        </Box>
       </Paper>
 
       <Paper sx={{ p: 2, mb: 2 }} variant="outlined">
@@ -338,10 +378,12 @@ function LabourPage() {
             <TableRow>
               <TableCell>Date</TableCell>
               <TableCell>Work</TableCell>
+              <TableCell>Applied to</TableCell>
               <TableCell>Workers</TableCell>
               <TableCell align="right">Male wage</TableCell>
               <TableCell align="right">Female wage</TableCell>
               <TableCell align="right">Amount</TableCell>
+              <TableCell align="right">Actions</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -349,18 +391,31 @@ function LabourPage() {
               <TableRow key={r.id}>
                 <TableCell>{formatDate(r.event_date)}</TableCell>
                 <TableCell>{r.work_type}</TableCell>
+                <TableCell>
+                  {r.tree_id
+                    ? (trees.find((t) => Number(t.id) === Number(r.tree_id))?.tree_positions?.position_code || 'Tree')
+                    : (zones.find((z) => Number(z.id) === Number(r.zone_id))?.zone_code || 'Zone')}
+                </TableCell>
                 <TableCell>{formatWorkerSummary(r)}</TableCell>
                 <TableCell align="right">{r.male_wage != null ? formatCurrency(r.male_wage) : '—'}</TableCell>
                 <TableCell align="right">{r.female_wage != null ? formatCurrency(r.female_wage) : '—'}</TableCell>
                 <TableCell align="right">{formatCurrency(labourRecordAmount(r))}</TableCell>
+                <TableCell align="right">
+                  <IconButton size="small" aria-label="Edit" onClick={() => { setEditingId(r.id); setForm(labourToForm(r)); }}>
+                    <EditIcon fontSize="small" />
+                  </IconButton>
+                  <IconButton size="small" aria-label="Delete" onClick={() => handleDelete(r)}>
+                    <DeleteIcon fontSize="small" />
+                  </IconButton>
+                </TableCell>
               </TableRow>
             ))}
             {records.length === 0 && (
-              <TableRow><TableCell colSpan={6}>No labour records yet.</TableCell></TableRow>
+              <TableRow><TableCell colSpan={8}>No labour records yet.</TableCell></TableRow>
             )}
             {records.length > 0 && (
               <TableRow>
-                <TableCell colSpan={5} align="right"><strong>Total wages</strong></TableCell>
+                <TableCell colSpan={6} align="right"><strong>Total wages</strong></TableCell>
                 <TableCell align="right"><strong>{formatCurrency(totalWages)}</strong></TableCell>
               </TableRow>
             )}

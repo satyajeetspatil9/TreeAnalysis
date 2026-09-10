@@ -13,6 +13,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useFarm } from '../../hooks/useFarm';
 import PageHeader from '../../components/common/PageHeader';
 import { formatDate, getTreeDisplayId } from '../../utils/formatters';
+import { loadFarmTrees } from '../../utils/farmScope';
 
 function rlsHint(message) {
   if (!message?.includes('row-level security')) return message;
@@ -82,16 +83,13 @@ function IrrigationZonesPage() {
     setLoading(true);
     setError(null);
 
-    const [{ data, error: fetchError }, { data: treesData }] = await Promise.all([
+    const [{ data, error: fetchError }, treesData] = await Promise.all([
       supabase
         .from('irrigation_zones')
         .select('*')
         .eq('farm_id', farm.id)
         .order('zone_code'),
-      supabase
-        .from('trees')
-        .select('id, tree_positions(position_code)')
-        .eq('status', 'Active'),
+      loadFarmTrees(supabase, farm.id, { select: 'id, tree_positions(position_code)' }),
     ]);
 
     if (fetchError) {

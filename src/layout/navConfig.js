@@ -34,7 +34,7 @@ export const navSections = [
     icon: ParkIcon,
     items: [
       { label: 'Dashboard', path: '/', icon: DashboardIcon, description: 'Overview and alerts' },
-      { label: 'Tree Dashboard', path: '/orchard/map', icon: MapIcon, description: 'Tree locations and status on map' },
+      { label: 'Orchard map', path: '/orchard/map', icon: MapIcon, description: 'Tree locations and status on map' },
       { label: 'Irrigation', path: '/orchard/irrigation', icon: WaterDropIcon, description: 'Live zone status from controller' },
       { label: 'Climate', path: '/orchard/climate', icon: CloudIcon, description: 'GDD, weather sensors, and crop advisories' },
     ],
@@ -105,7 +105,7 @@ export const navSections = [
 
 export function findNavItem(pathname) {
   if (pathname.startsWith('/tree/')) {
-    return { label: 'Tree Dashboard', path: pathname, section: 'Orchard', icon: ForestIcon };
+    return { label: 'Tree', path: pathname, section: 'Orchard', icon: ForestIcon };
   }
 
   let best = null;

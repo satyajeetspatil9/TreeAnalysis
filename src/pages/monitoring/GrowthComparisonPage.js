@@ -26,6 +26,7 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import { Link as RouterLink } from 'react-router-dom';
 import { useTheme } from '@mui/material/styles';
 import { supabase } from '../../supabaseClient';
+import { useFarm } from '../../hooks/useFarm';
 import PageHeader from '../../components/common/PageHeader';
 import OrchardZoneLayout, { TreeCircleLink } from '../../components/orchard/OrchardZoneLayout';
 import { formatDate, formatNumberSmart, getTreeDisplayId } from '../../utils/formatters';
@@ -47,6 +48,7 @@ import {
   trunkMmToCm,
 } from '../../utils/treeGrowth';
 import { treeDashboardUrl } from '../../utils/treeDashboard';
+import { filterByTreeIds, loadFarmRows, loadFarmTreeIds } from '../../utils/farmScope';
 
 const GROWTH_MAP_LAYERS = [
   { key: 'height', label: 'Height' },
@@ -168,6 +170,7 @@ function sortAllRecords(records) {
 
 function GrowthComparisonPage() {
   const theme = useTheme();
+  const { farm } = useFarm();
   const [allRecords, setAllRecords] = useState([]);
   const [orchardRows, setOrchardRows] = useState([]);
   const [mapLayer, setMapLayer] = useState('height');
@@ -179,27 +182,30 @@ function GrowthComparisonPage() {
   const [deleting, setDeleting] = useState(false);
 
   const loadRecords = useCallback(async () => {
-    const [{ data, error }, { data: rowsData, error: rowsError }] = await Promise.all([
+    if (!farm?.id) {
+      setAllRecords([]);
+      setOrchardRows([]);
+      return;
+    }
+    const treeIds = await loadFarmTreeIds(supabase, farm.id);
+    const [orchardRowsData, { data, error }] = await Promise.all([
+      loadFarmRows(supabase, farm.id, ORCHARD_ROWS_SELECT),
       supabase
         .from('tree_growth')
         .select('*, trees(tree_positions(position_code, latitude, longitude), variety)')
         .order('measurement_date', { ascending: false }),
-      supabase
-        .from('rows')
-        .select(ORCHARD_ROWS_SELECT)
-        .order('name'),
     ]);
 
-    if (error || rowsError) {
-      setMessage({ type: 'error', text: growthRlsHint((error || rowsError).message) });
+    if (error) {
+      setMessage({ type: 'error', text: growthRlsHint(error.message) });
       setAllRecords([]);
       setOrchardRows([]);
       return;
     }
 
-    setAllRecords(data || []);
-    setOrchardRows(rowsData || []);
-  }, []);
+    setAllRecords(filterByTreeIds(data || [], treeIds));
+    setOrchardRows(orchardRowsData || []);
+  }, [farm?.id]);
 
   useEffect(() => {
     loadRecords();

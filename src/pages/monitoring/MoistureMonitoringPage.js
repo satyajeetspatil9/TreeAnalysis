@@ -15,6 +15,7 @@ import {
 import { useTheme } from '@mui/material/styles';
 import { Link as RouterLink } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
+import { useFarm } from '../../hooks/useFarm';
 import PageHeader from '../../components/common/PageHeader';
 import OrchardZoneLayout, { TreeCircleLink } from '../../components/orchard/OrchardZoneLayout';
 import { formatDate, formatNumber, getTreeDisplayId } from '../../utils/formatters';
@@ -29,6 +30,7 @@ import {
   evaluateSoilStandard,
   getLatestObservationByTree,
 } from '../../utils/soil';
+import { filterByTreeIds, loadFarmRows, loadFarmTreeIds } from '../../utils/farmScope';
 
 const moistureStandard = SOIL_NUTRIENT_STANDARDS.moisture_percent;
 
@@ -48,6 +50,7 @@ function moistureDotColor(theme, status) {
 
 function MoistureMonitoringPage() {
   const theme = useTheme();
+  const { farm } = useFarm();
   const [observations, setObservations] = useState([]);
   const [orchardRows, setOrchardRows] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -55,31 +58,35 @@ function MoistureMonitoringPage() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [{ data: soilData, error: soilError }, { data: rowsData, error: rowsError }] = await Promise.all([
+    if (!farm?.id) {
+      setObservations([]);
+      setOrchardRows([]);
+      setLoading(false);
+      return;
+    }
+    const treeIds = await loadFarmTreeIds(supabase, farm.id);
+    const [orchardRowsData, { data: soilData, error: soilError }] = await Promise.all([
+      loadFarmRows(supabase, farm.id, ORCHARD_ROWS_SELECT),
       supabase
         .from('soil_observations')
         .select('id, tree_id, moisture_percent, observed_at, trees(tree_positions(position_code, latitude, longitude))')
         .not('moisture_percent', 'is', null)
         .order('observed_at', { ascending: false })
         .limit(2000),
-      supabase
-        .from('rows')
-        .select(ORCHARD_ROWS_SELECT)
-        .order('name'),
     ]);
 
-    if (soilError || rowsError) {
-      setMessage({ type: 'error', text: (soilError || rowsError).message });
+    if (soilError) {
+      setMessage({ type: 'error', text: soilError.message });
       setObservations([]);
       setOrchardRows([]);
       setLoading(false);
       return;
     }
 
-    setObservations(soilData || []);
-    setOrchardRows(rowsData || []);
+    setObservations(filterByTreeIds(soilData || [], treeIds));
+    setOrchardRows(orchardRowsData || []);
     setLoading(false);
-  }, []);
+  }, [farm?.id]);
 
   useEffect(() => {
     load();

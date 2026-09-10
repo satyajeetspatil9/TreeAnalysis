@@ -28,6 +28,7 @@ import RiskPanel from '../../components/farm-climate/RiskPanel';
 import { supabase } from '../../supabaseClient';
 import { useFarm } from '../../hooks/useFarm';
 import { TREE_LIST_SELECT, getIrrigationZoneId } from '../../utils/schema';
+import { loadFarmTrees } from '../../utils/farmScope';
 import { analyzeRisks, resolveStage } from '../../utils/farmClimateLogic';
 import { dailyGddFromSensors, loadFarmClimateSnapshot } from '../../utils/farmClimateData';
 import { createClimateWorkItem } from '../../utils/climateWork';
@@ -55,12 +56,7 @@ function FarmClimatePage() {
     setLoading(true);
     let orchardTrees = [];
     if (farm?.id) {
-      const { data } = await supabase
-        .from('trees')
-        .select(TREE_LIST_SELECT)
-        .eq('status', 'Active')
-        .limit(80);
-      orchardTrees = data || [];
+      orchardTrees = await loadFarmTrees(supabase, farm.id, { select: TREE_LIST_SELECT });
       setTrees(orchardTrees);
     }
     const result = await loadFarmClimateSnapshot(supabase, farm, orchardTrees, crop);

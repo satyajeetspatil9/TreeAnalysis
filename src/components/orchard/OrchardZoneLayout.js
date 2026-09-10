@@ -3,6 +3,7 @@ import { Box, Button, Chip, Grid, Paper, Tooltip, Typography } from '@mui/materi
 import { alpha, useTheme } from '@mui/material/styles';
 import { Link as RouterLink } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
+import { useFarm } from '../../hooks/useFarm';
 import { formatLocationLabel, parsePositionCode } from '../../utils/positionCode';
 import {
   BLOCK_ACCENT,
@@ -16,21 +17,28 @@ import {
 const ZONE_SELECT = 'id, zone_code, description, row_count, block';
 
 export function useIrrigationZones() {
+  const { farm } = useFarm();
   const [zones, setZones] = useState([]);
 
   useEffect(() => {
     let cancelled = false;
 
     async function load() {
+      if (!farm?.id) {
+        setZones([]);
+        return;
+      }
       const primary = await supabase
         .from('irrigation_zones')
         .select(ZONE_SELECT)
+        .eq('farm_id', farm.id)
         .order('zone_code');
       if (cancelled) return;
       if (primary.error?.message?.includes('block')) {
         const fallback = await supabase
           .from('irrigation_zones')
           .select('id, zone_code, description, row_count')
+          .eq('farm_id', farm.id)
           .order('zone_code');
         if (!cancelled) setZones(fallback.data || []);
         return;
@@ -40,7 +48,7 @@ export function useIrrigationZones() {
 
     load();
     return () => { cancelled = true; };
-  }, []);
+  }, [farm?.id]);
 
   return zones;
 }

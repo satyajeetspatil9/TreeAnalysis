@@ -8,6 +8,7 @@ import { supabase } from '../../supabaseClient';
 import { getTreeDisplayId } from '../../utils/formatters';
 import { useFarm } from '../../hooks/useFarm';
 import PageHeader from '../../components/common/PageHeader';
+import { loadFarmTrees } from '../../utils/farmScope';
 import { LabReportFieldRow } from '../../components/soil/LabReportFieldRow';
 import { SoilStandardsReference } from '../../components/soil/SoilNutrientDisplay';
 import {
@@ -47,16 +48,19 @@ function AddSoilReportPage() {
 
   useEffect(() => {
     async function loadTrees() {
-      const { data: treeData } = await supabase
-        .from('trees')
-        .select('id, tree_positions(position_code)')
-        .eq('status', 'Active');
+      if (!farm?.id) {
+        setTrees([]);
+        return;
+      }
+      const treeData = await loadFarmTrees(supabase, farm.id, {
+        select: 'id, tree_positions(position_code)',
+      });
       setTrees((treeData || []).sort((a, b) =>
         getTreeDisplayId(a).localeCompare(getTreeDisplayId(b)),
       ));
     }
     loadTrees();
-  }, []);
+  }, [farm?.id]);
 
   const validateSensorForm = (form, treeId) => {
     if (!treeId) return 'Select a tree for this sensor reading.';

@@ -5,6 +5,7 @@ import {
   Button, FormControl, InputLabel, Select, MenuItem, Alert, Chip,
 } from '@mui/material';
 import { supabase } from '../../supabaseClient';
+import { useFarm } from '../../hooks/useFarm';
 import { formatDate, getTreeDisplayId } from '../../utils/formatters';
 import PageHeader from '../../components/common/PageHeader';
 import {
@@ -13,13 +14,20 @@ import {
   isSoilNutrientAlert,
   refreshSoilNutrientAlerts,
 } from '../../utils/soilAlerts';
+import { filterByTreeIds, loadFarmTreeIds } from '../../utils/farmScope';
 
 function AlertsPage() {
+  const { farm } = useFarm();
   const [alerts, setAlerts] = useState([]);
   const [message, setMessage] = useState(null);
   const [statusFilter, setStatusFilter] = useState('Open');
 
   const load = useCallback(async () => {
+    if (!farm?.id) {
+      setAlerts([]);
+      return;
+    }
+    const treeIds = await loadFarmTreeIds(supabase, farm.id);
     const { data: soilObservations } = await supabase
       .from('soil_observations')
       .select('*, trees(tree_positions(position_code))')
@@ -39,14 +47,16 @@ function AlertsPage() {
     }
 
     const { data } = await query;
+    const farmSoil = filterByTreeIds(soilObservations || [], treeIds);
+    const farmAlerts = filterByTreeIds(data || [], treeIds);
 
     if (statusFilter === 'Open') {
-      setAlerts(buildOpenActionAlerts(data, soilObservations));
+      setAlerts(buildOpenActionAlerts(farmAlerts, farmSoil));
       return;
     }
 
-    setAlerts(data || []);
-  }, [statusFilter]);
+    setAlerts(farmAlerts);
+  }, [statusFilter, farm?.id]);
 
   useEffect(() => { load(); }, [load]);
 

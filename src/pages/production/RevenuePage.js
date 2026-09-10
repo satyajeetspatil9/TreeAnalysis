@@ -3,6 +3,8 @@ import { Box, Typography, Paper, Grid, Table, TableBody, TableCell, TableHead, T
 import { supabase } from '../../supabaseClient';
 import { formatCurrency, formatNumber } from '../../utils/formatters';
 import PageHeader from '../../components/common/PageHeader';
+import { useFarm } from '../../hooks/useFarm';
+import { loadFarmTreeIds } from '../../utils/farmScope';
 import {
   cropYearNoticeText,
   filterRecordsForCropYear,
@@ -10,18 +12,42 @@ import {
 } from '../../utils/cropYear';
 
 function RevenuePage() {
+  const { farm } = useFarm();
   const [records, setRecords] = useState([]);
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(true);
   const cropYear = useMemo(() => getCurrentCropYearRange(), []);
 
   useEffect(() => {
     async function load() {
-      const { data } = await supabase
-        .from('harvest_events')
-        .select('tree_id, harvest_date, quantity_kg, revenue, trees(tree_positions(position_code))');
-      setRecords(data || []);
+      setLoading(true);
+      setError(null);
+      if (!farm?.id) {
+        setRecords([]);
+        setLoading(false);
+        return;
+      }
+      try {
+        const treeIds = await loadFarmTreeIds(supabase, farm.id);
+        if (!treeIds.length) {
+          setRecords([]);
+          return;
+        }
+        const { data, error: loadError } = await supabase
+          .from('harvest_events')
+          .select('tree_id, harvest_date, quantity_kg, revenue, trees(tree_positions(position_code))')
+          .in('tree_id', treeIds);
+        if (loadError) throw loadError;
+        setRecords(data || []);
+      } catch (err) {
+        setError(err.message);
+        setRecords([]);
+      } finally {
+        setLoading(false);
+      }
     }
     load();
-  }, []);
+  }, [farm?.id]);
 
   const cropYearRecords = useMemo(
     () => filterRecordsForCropYear(records, 'harvest_date', cropYear),
@@ -51,9 +77,18 @@ function RevenuePage() {
   return (
     <Box>
       <PageHeader
+        section="Production"
         title="Revenue"
         subtitle={`Sales income by tree for crop year ${cropYear.label}.`}
       />
+
+      {!farm && (
+        <Alert severity="info" sx={{ mb: 2 }}>Create a farm in Settings before viewing revenue.</Alert>
+      )}
+      {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+      {loading && (
+        <Typography color="text.secondary" sx={{ mb: 2 }}>Loading…</Typography>
+      )}
 
       <Alert severity="info" sx={{ mb: 2 }}>
         {cropYearNoticeText(cropYear)}

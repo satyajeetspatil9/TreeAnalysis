@@ -29,6 +29,8 @@ import {
 import OrchardZoneLayout, { useIrrigationZones } from '../components/orchard/OrchardZoneLayout';
 import { CommonBelowNutrientsSummary } from '../components/soil/CommonBelowNutrientsSummary';
 import PageHeader from '../components/common/PageHeader';
+import { useFarm } from '../hooks/useFarm';
+import { loadFarmRows, loadFarmTreeIds, filterByTreeIds } from '../utils/farmScope';
 
 const QUICK_RESULT_LIMIT = 8;
 
@@ -52,6 +54,7 @@ function FarmMapPage() {
   const navigate = useNavigate();
   const theme = useTheme();
   const isDesktop = useMediaQuery(theme.breakpoints.up('md'));
+  const { farm } = useFarm();
   const [rows, setRows] = useState([]);
   const [sensorObservations, setSensorObservations] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -68,11 +71,14 @@ function FarmMapPage() {
     async function loadMap() {
       setLoading(true);
       try {
-        const [{ data, error: rowsError }, { data: soilData }] = await Promise.all([
-          supabase
-            .from('rows')
-            .select(ORCHARD_ROWS_SELECT)
-            .order('name'),
+        if (!farm?.id) {
+          setRows([]);
+          setSensorObservations([]);
+          return;
+        }
+        const treeIds = await loadFarmTreeIds(supabase, farm.id);
+        const [orchardRows, { data: soilData }] = await Promise.all([
+          loadFarmRows(supabase, farm.id, ORCHARD_ROWS_SELECT),
           supabase
             .from('soil_observations')
             .select('*')
@@ -80,9 +86,8 @@ function FarmMapPage() {
             .limit(2000),
         ]);
 
-        if (rowsError) throw rowsError;
-        setRows(data || []);
-        setSensorObservations(soilData || []);
+        setRows(orchardRows || []);
+        setSensorObservations(filterByTreeIds(soilData || [], treeIds));
       } catch (err) {
         setError(err.message);
       } finally {
@@ -91,7 +96,7 @@ function FarmMapPage() {
     }
 
     loadMap();
-  }, []);
+  }, [farm?.id]);
 
   const allPositions = useMemo(
     () => rows.flatMap((row) => collectRowPositions(row)),
@@ -161,7 +166,7 @@ function FarmMapPage() {
     <Box>
       <PageHeader
         section="Orchard"
-        title="Tree Dashboard"
+        title="Orchard map"
         subtitle="Search or filter, then tap a tree. Block B is on the left, Block A on the right."
       />
 

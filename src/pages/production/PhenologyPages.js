@@ -8,6 +8,7 @@ import { useFarm } from '../../hooks/useFarm';
 import PageHeader from '../../components/common/PageHeader';
 import { formatDate, formatNumber, getTreeDisplayId } from '../../utils/formatters';
 import { TREE_LIST_SELECT } from '../../utils/schema';
+import { loadFarmTrees } from '../../utils/farmScope';
 import { resolveStage } from '../../utils/farmClimateLogic';
 import { loadFarmClimateSnapshot } from '../../utils/farmClimateData';
 
@@ -35,19 +36,16 @@ function PhenologyPage({ kind }) {
       setTrees([]);
       return;
     }
-    const { data, error } = await supabase
-      .from('trees')
-      .select(TREE_LIST_SELECT)
-      .eq('status', 'Active')
-      .order('id');
-    if (error) {
-      setMessage({ type: 'error', text: error.message });
-      return;
+    try {
+      const data = await loadFarmTrees(supabase, farm.id, { select: TREE_LIST_SELECT });
+      setTrees(data || []);
+      const snapshot = await loadFarmClimateSnapshot(supabase, farm, data || [], 'Mango');
+      setGdd(snapshot.gdd);
+      setStage(resolveStage('Mango', snapshot.gdd));
+    } catch (err) {
+      setMessage({ type: 'error', text: err.message });
+      setTrees([]);
     }
-    setTrees(data || []);
-    const snapshot = await loadFarmClimateSnapshot(supabase, farm, data || [], 'Mango');
-    setGdd(snapshot.gdd);
-    setStage(resolveStage('Mango', snapshot.gdd));
   }, [farm]);
 
   const loadRecords = useCallback(async () => {

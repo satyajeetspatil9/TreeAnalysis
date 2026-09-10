@@ -16,6 +16,7 @@ import PageHeader from '../../components/common/PageHeader';
 import OrchardZoneLayout, { TreeCircleLink } from '../../components/orchard/OrchardZoneLayout';
 import { LabReportFieldRow } from '../../components/soil/LabReportFieldRow';
 import { treeDashboardUrl } from '../../utils/treeDashboard';
+import { filterByTreeIds, loadFarmRows, loadFarmTreeIds, loadFarmTrees } from '../../utils/farmScope';
 import {
   ORCHARD_ROWS_SELECT,
   collectRowPositions,
@@ -155,20 +156,27 @@ function SoilMonitoringPage() {
   const [deleting, setDeleting] = useState(false);
 
   const load = useCallback(async () => {
-    const [{ data }, { data: rowsData }] = await Promise.all([
+    if (!farm?.id) {
+      setSensorObservations([]);
+      setObservations([]);
+      setOrchardRows([]);
+      setLabReports([]);
+      setTrees([]);
+      return;
+    }
+    const treeIds = await loadFarmTreeIds(supabase, farm.id);
+    const [{ data }, orchardRowsData] = await Promise.all([
       supabase
         .from('soil_observations')
         .select('*, trees(tree_positions(position_code, latitude, longitude))')
         .order('observed_at', { ascending: false })
         .limit(500),
-      supabase
-        .from('rows')
-        .select(ORCHARD_ROWS_SELECT)
-        .order('name'),
+      loadFarmRows(supabase, farm.id, ORCHARD_ROWS_SELECT),
     ]);
-    setSensorObservations(data || []);
-    setObservations((data || []).slice(0, 50));
-    setOrchardRows(rowsData || []);
+    const farmSoil = filterByTreeIds(data || [], treeIds);
+    setSensorObservations(farmSoil);
+    setObservations(farmSoil.slice(0, 50));
+    setOrchardRows(orchardRowsData || []);
 
     await refreshSoilNutrientAlerts(supabase);
 
@@ -189,10 +197,9 @@ function SoilMonitoringPage() {
       setLabReports([]);
     }
 
-    const { data: treeData } = await supabase
-      .from('trees')
-      .select('id, tree_positions(position_code, latitude, longitude)')
-      .eq('status', 'Active');
+    const treeData = await loadFarmTrees(supabase, farm.id, {
+      select: 'id, tree_positions(position_code, latitude, longitude)',
+    });
     setTrees((treeData || []).sort((a, b) =>
       getTreeDisplayId(a).localeCompare(getTreeDisplayId(b)),
     ));

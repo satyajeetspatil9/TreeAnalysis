@@ -1,13 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Box, Paper, Table, TableBody, TableCell, TableHead, TableRow,
-  Button, TextField, Grid, FormControl, InputLabel, Select, MenuItem, Alert,
+  Button, TextField, Grid, FormControl, InputLabel, Select, MenuItem, Alert, IconButton,
 } from '@mui/material';
+import EditIcon from '@mui/icons-material/Edit';
+import DeleteIcon from '@mui/icons-material/Delete';
 import { supabase } from '../../supabaseClient';
 import { useFarm } from '../../hooks/useFarm';
 import PageHeader from '../../components/common/PageHeader';
 import { formatCurrency, formatDate, formatNumber } from '../../utils/formatters';
 import { TREE_LIST_SELECT } from '../../utils/schema';
+import { loadFarmTrees } from '../../utils/farmScope';
 import { resolveStage } from '../../utils/farmClimateLogic';
 import { loadFarmClimateSnapshot } from '../../utils/farmClimateData';
 
@@ -29,6 +32,7 @@ function HarvestPage() {
   const [flowerCount, setFlowerCount] = useState(0);
   const [fruitCount, setFruitCount] = useState(0);
   const [saving, setSaving] = useState(false);
+  const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState({
     tree_id: '',
     harvest_date: new Date().toISOString().slice(0, 10),
@@ -44,21 +48,17 @@ function HarvestPage() {
       setTrees([]);
       return;
     }
-    const { data: t, error } = await supabase
-      .from('trees')
-      .select(TREE_LIST_SELECT)
-      .eq('status', 'Active')
-      .order('id');
-    if (error) {
-      setMessage({ type: 'error', text: harvestRlsHint(error.message) });
+    try {
+      const t = await loadFarmTrees(supabase, farm.id, { select: TREE_LIST_SELECT });
+      setTrees(t || []);
+      if ((t || []).length) {
+        const snapshot = await loadFarmClimateSnapshot(supabase, farm, t, 'Mango');
+        setGdd(snapshot.gdd);
+        setStage(resolveStage('Mango', snapshot.gdd));
+      }
+    } catch (err) {
+      setMessage({ type: 'error', text: harvestRlsHint(err.message) });
       setTrees([]);
-      return;
-    }
-    setTrees(t || []);
-    if (farm && (t || []).length) {
-      const snapshot = await loadFarmClimateSnapshot(supabase, farm, t, 'Mango');
-      setGdd(snapshot.gdd);
-      setStage(resolveStage('Mango', snapshot.gdd));
     }
   }, [farm]);
 
@@ -108,18 +108,23 @@ function HarvestPage() {
     }
 
     const price = Number(form.price_per_kg) || 0;
+    const payload = {
+      tree_id: form.tree_id,
+      harvest_date: form.harvest_date,
+      quantity_kg: qty,
+      grade: form.grade,
+      price_per_kg: price || null,
+      revenue: price ? qty * price : null,
+    };
     setSaving(true);
     try {
-      const { error } = await supabase.from('harvest_events').insert([{
-        tree_id: form.tree_id,
-        harvest_date: form.harvest_date,
-        quantity_kg: qty,
-        grade: form.grade,
-        price_per_kg: price || null,
-        revenue: price ? qty * price : null,
-      }]);
+      const query = editingId
+        ? supabase.from('harvest_events').update(payload).eq('id', editingId)
+        : supabase.from('harvest_events').insert([payload]);
+      const { error } = await query;
       if (error) throw error;
 
+      const wasEdit = Boolean(editingId);
       setForm({
         tree_id: '',
         harvest_date: new Date().toISOString().slice(0, 10),
@@ -127,8 +132,9 @@ function HarvestPage() {
         grade: 'A',
         price_per_kg: '',
       });
+      setEditingId(null);
       await loadRecords();
-      setMessage({ type: 'success', text: 'Harvest recorded.' });
+      setMessage({ type: 'success', text: wasEdit ? 'Harvest updated.' : 'Harvest recorded.' });
     } catch (err) {
       setMessage({ type: 'error', text: harvestRlsHint(err.message) });
     } finally {
@@ -139,6 +145,7 @@ function HarvestPage() {
   return (
     <Box>
       <PageHeader
+        section="Production"
         title="Harvest"
         subtitle="Record yield and revenue per tree. Compare with this season’s GDD stage and flowering / fruit-set counts."
       />
@@ -203,9 +210,26 @@ function HarvestPage() {
             <TextField label="₹/kg" fullWidth value={form.price_per_kg} onChange={(e) => setForm({ ...form, price_per_kg: e.target.value })} />
           </Grid>
         </Grid>
-        <Button variant="contained" sx={{ mt: 2 }} onClick={handleSave} disabled={saving || !farm}>
-          {saving ? 'Saving…' : 'Save Harvest'}
-        </Button>
+        <Box sx={{ mt: 2, display: 'flex', gap: 1 }}>
+          <Button variant="contained" onClick={handleSave} disabled={saving || !farm}>
+            {saving ? 'Saving…' : (editingId ? 'Save changes' : 'Save Harvest')}
+          </Button>
+          {editingId && (
+            <Button onClick={() => {
+              setEditingId(null);
+              setForm({
+                tree_id: '',
+                harvest_date: new Date().toISOString().slice(0, 10),
+                quantity_kg: '',
+                grade: 'A',
+                price_per_kg: '',
+              });
+            }}
+            >
+              Cancel
+            </Button>
+          )}
+        </Box>
       </Paper>
 
       <Paper variant="outlined">
@@ -217,6 +241,7 @@ function HarvestPage() {
               <TableCell>Qty</TableCell>
               <TableCell>Grade</TableCell>
               <TableCell>Revenue</TableCell>
+              <TableCell align="right">Actions</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -227,6 +252,41 @@ function HarvestPage() {
                 <TableCell>{formatNumber(r.quantity_kg, 1)} kg</TableCell>
                 <TableCell>{r.grade}</TableCell>
                 <TableCell>{formatCurrency(r.revenue)}</TableCell>
+                <TableCell align="right">
+                  <IconButton
+                    size="small"
+                    aria-label="Edit"
+                    onClick={() => {
+                      setEditingId(r.id);
+                      setForm({
+                        tree_id: String(r.tree_id),
+                        harvest_date: r.harvest_date,
+                        quantity_kg: String(r.quantity_kg ?? ''),
+                        grade: r.grade || 'A',
+                        price_per_kg: r.price_per_kg != null ? String(r.price_per_kg) : '',
+                      });
+                    }}
+                  >
+                    <EditIcon fontSize="small" />
+                  </IconButton>
+                  <IconButton
+                    size="small"
+                    aria-label="Delete"
+                    onClick={async () => {
+                      if (!window.confirm(`Delete harvest for ${r.trees?.tree_positions?.position_code || 'tree'}?`)) return;
+                      const { error } = await supabase.from('harvest_events').delete().eq('id', r.id);
+                      if (error) {
+                        setMessage({ type: 'error', text: harvestRlsHint(error.message) });
+                        return;
+                      }
+                      if (editingId === r.id) setEditingId(null);
+                      await loadRecords();
+                      setMessage({ type: 'success', text: 'Harvest deleted.' });
+                    }}
+                  >
+                    <DeleteIcon fontSize="small" />
+                  </IconButton>
+                </TableCell>
               </TableRow>
             ))}
           </TableBody>

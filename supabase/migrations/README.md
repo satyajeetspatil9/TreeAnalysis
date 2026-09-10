@@ -1,5 +1,14 @@
 -- =============================================================================
--- README: Apply migrations in Supabase SQL Editor in this order:
+-- README: Apply migrations in Supabase SQL Editor in this order.
+-- Vercel deploys the web app only. After SQL, deploy edge functions with:
+--   supabase functions deploy irrigation-scheduler
+--   supabase functions deploy ingest-irrigation-status
+--   supabase functions deploy public-add-tree --no-verify-jwt
+--   supabase functions deploy ingest-sensor-reading
+--   supabase functions deploy ingest-tree-growth
+--   supabase functions deploy gps-satellite-analysis
+--   supabase functions deploy refresh-gps-satellite-batch
+-- =============================================================================
 -- 001_tree_positions.sql
 -- 002_sensors_weather_recommendations.sql
 -- 003_rls_policies.sql
@@ -13,11 +22,20 @@
 -- 011_soil_lab_nutrients_update.sql — remove Ca/Mg, add Cu to lab reports
 -- 012_fix_products_rls.sql — products + inventory RLS for Add Product / Purchase
 -- 013_fix_inventory_stock_trigger.sql — purchase → current stock sync trigger
+-- 014_soil_application.sql
+-- 015_enforce_fertilizer_stock.sql
+-- 016_fix_labour_rls.sql
+-- 017_labour_gender_workers.sql
+-- 018_soil_application_tree.sql
+-- 019_fertilizer_event_delete.sql
 -- 020_fix_tree_cost_rls.sql — read expense_allocations for Cost tab
 -- 021_fix_harvest_rls.sql — harvest_events RLS
 -- 022_spray_event_delete.sql — spray edit/delete + stock/expense reversal
 -- 023_fix_tree_growth_rls.sql — tree growth measurements RLS
--- 027_fix_disease_observations_rls.sql — disease observations RLS (Tree Dashboard → Disease)
+-- 024_tree_satellite_cache.sql
+-- 025_lot_boundary.sql
+-- 026_lot_satellite_cache.sql
+-- 027_fix_disease_observations_rls.sql — disease observations RLS
 -- 028_products_active_column.sql — products.active default for Spray / Inventory lists
 -- 029_fix_photos_rls.sql — photos RLS + tree-photos storage bucket
 -- 030_fix_photos_storage_rls.sql — run this if Add Photo still fails after 029
@@ -25,6 +43,26 @@
 -- 032_create_ingest_key_helper.sql — create ingest keys in SQL Editor without frontend
 -- 033_rename_sensor_method_7in1.sql — update legacy 8-in-1 method labels in soil_observations
 -- 034_lot_ids_for_farm.sql — public add-tree bootstrap helper
+-- 035_tree_gps_satellite_cache.sql
+-- 036_pg_cron_gps_satellite.sql
+-- 037_irrigation_zone_status.sql — live irrigation dashboard
+-- 038_irrigation_zone_commands.sql
+-- 039_irrigation_schedule_control.sql
+-- 040_irrigation_scheduler_cron.sql
+-- 041_irrigation_program_run_order.sql
 -- 042_irrigation_device_io.sql — device wired to controller input (X0–X8) or output (Y0–Y8)
 -- 043_irrigation_job_duration.sql — fertigation jobs stop after on_duration_minutes
+-- 044_irrigation_event_notes.sql
+-- 045_irrigation_power_and_per_pin.sql
+-- 046_irrigation_power_day_shift.sql
+-- 047_irrigation_controller_outage_times.sql
+-- 048_farm_soil_lab_ph_ec_npk.sql
+-- 049_farm_soil_lab_drop_temperature.sql
+-- 050_tree_gps_last_good_radar.sql
+-- 051_production_climate_phenology.sql — flowering / fruit set
+-- 052_irrigation_pause_and_skip_rain.sql
+-- 053_fertigation_program_events.sql
+-- 054_irrigation_zone_row_count.sql — orchard map zone bands
+-- 055_irrigation_zone_block.sql — A/B block on irrigation zones
+-- 056_irrigation_program_products.sql — fertigation mix copied to Monitoring
 -- =============================================================================

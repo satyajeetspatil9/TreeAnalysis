@@ -22,6 +22,7 @@ import {
   buildFarmIrrigationChartData,
   IRRIGATION_PERIOD_OPTIONS,
   IRRIGATION_GROUP_OPTIONS,
+  syncCompletedIrrigationJobs,
 } from '../../utils/irrigation';
 
 function rlsHint(message) {
@@ -86,13 +87,16 @@ function IrrigationEventsPage() {
       return;
     }
 
-    const { data: eventsData } = await supabase
-      .from('irrigation_events')
-      .select('*, irrigation_zones(zone_code, flow_rate_lph)')
-      .in('zone_id', zoneIds)
-      .order('event_date', { ascending: false })
-      .limit(200);
-    setEvents(eventsData || []);
+    try {
+      const { events: eventsData } = await syncCompletedIrrigationJobs(supabase, {
+        farmId: farm.id,
+        zoneIds,
+      });
+      setEvents(eventsData);
+    } catch (err) {
+      setMessage({ type: 'error', text: rlsHint(err.message) });
+      setEvents([]);
+    }
   }, [farm]);
 
   useEffect(() => {
@@ -184,7 +188,7 @@ function IrrigationEventsPage() {
       <PageHeader
         section="Monitoring"
         title="Irrigation"
-        subtitle="Water applied from programs and logged events. Edit or delete rows in the table."
+        subtitle="Water applied from programs and logged events. Completed water programs appear here automatically."
       />
 
       {message && <Alert severity={message.type} sx={{ mb: 2 }} onClose={() => setMessage(null)}>{message.text}</Alert>}

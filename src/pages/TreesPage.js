@@ -13,8 +13,11 @@ import RemoveTreeDialog from '../components/trees/RemoveTreeDialog';
 import HealthIndicator from '../components/common/HealthIndicator';
 import { formatDate, getTreeDisplayId } from '../utils/formatters';
 import { TREE_LIST_SELECT, getIrrigationZoneCode } from '../utils/schema';
+import { useFarm } from '../hooks/useFarm';
+import { loadFarmTrees } from '../utils/farmScope';
 
 function TreesPage() {
+  const { farm } = useFarm();
   const [trees, setTrees] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -25,13 +28,11 @@ function TreesPage() {
     setLoading(true);
     setError(null);
     try {
-      const { data, error: fetchError } = await supabase
-        .from('trees')
-        .select(TREE_LIST_SELECT)
-        .eq('status', 'Active');
-
-      if (fetchError) throw fetchError;
-
+      if (!farm?.id) {
+        setTrees([]);
+        return;
+      }
+      const data = await loadFarmTrees(supabase, farm.id, { select: TREE_LIST_SELECT });
       const sorted = (data || []).sort((a, b) =>
         getTreeDisplayId(a).localeCompare(getTreeDisplayId(b))
       );
@@ -41,7 +42,7 @@ function TreesPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [farm?.id]);
 
   useEffect(() => {
     fetchTrees();

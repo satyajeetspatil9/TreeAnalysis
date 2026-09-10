@@ -1,4 +1,5 @@
 import { getIrrigationZoneId } from './schema';
+import { loadFarmExpenses, loadFarmTreeIds } from './farmScope';
 import {
   mergeFertilizerEvents,
   buildTreeCostByEvent,
@@ -175,19 +176,23 @@ export async function loadFarmCostAnalysis(supabase, farmId) {
     .select('id')
     .eq('farm_id', farmId);
   const zoneIds = (zones || []).map((z) => z.id);
+  const treeIds = await loadFarmTreeIds(supabase, farmId);
 
   const [
-    { data: expenses },
     { data: allocs },
     { data: directLabour },
     { data: zoneLabour },
     { data: zoneTreeLinks },
   ] = await Promise.all([
-    supabase.from('expenses').select('category, amount, expense_type'),
-    supabase
-      .from('expense_allocations')
-      .select('tree_id, allocation_amount, expenses(expense_type), trees(tree_positions(position_code))'),
-    supabase.from('labour_events').select('tree_id, amount, trees(tree_positions(position_code))').not('tree_id', 'is', null),
+    treeIds.length
+      ? supabase
+        .from('expense_allocations')
+        .select('tree_id, allocation_amount, expenses(expense_type), trees(tree_positions(position_code))')
+        .in('tree_id', treeIds)
+      : Promise.resolve({ data: [] }),
+    treeIds.length
+      ? supabase.from('labour_events').select('tree_id, amount, trees(tree_positions(position_code))').in('tree_id', treeIds)
+      : Promise.resolve({ data: [] }),
     zoneIds.length
       ? supabase.from('labour_events').select('zone_id, amount').in('zone_id', zoneIds)
       : Promise.resolve({ data: [] }),
@@ -204,13 +209,24 @@ export async function loadFarmCostAnalysis(supabase, farmId) {
   let capex = 0;
   let opex = 0;
 
-  (expenses || []).forEach((e) => {
+  const farmExpenses = await loadFarmExpenses(supabase, farmId, {
+    zoneIds,
+    treeIds,
+    select: 'id, category, amount, expense_type, notes',
+    limit: 500,
+  });
+
+  farmExpenses.forEach((e) => {
     addToCategoryMap(catMap, e.category || 'Other', e.amount);
     if (e.expense_type === 'CAPEX') capex += Number(e.amount || 0);
     else opex += Number(e.amount || 0);
   });
 
-  const directLabourTotal = (directLabour || []).reduce(
+  const farmTreeIdSet = new Set(treeIds.map(Number));
+  const farmDirectLabour = (directLabour || []).filter((row) => farmTreeIdSet.has(Number(row.tree_id)));
+  const farmAllocs = (allocs || []).filter((row) => farmTreeIdSet.has(Number(row.tree_id)));
+
+  const directLabourTotal = farmDirectLabour.reduce(
     (sum, row) => sum + Number(row.amount || 0),
     0
   );
@@ -224,14 +240,14 @@ export async function loadFarmCostAnalysis(supabase, farmId) {
 
   const treeMap = {};
 
-  (allocs || []).forEach((row) => {
+  (farmAllocs || []).forEach((row) => {
     if (!row.tree_id) return;
     const code = row.trees?.tree_positions?.position_code;
     const expenseType = row.expenses?.expense_type === 'CAPEX' ? 'CAPEX' : 'OPEX';
     addTreeCost(treeMap, row.tree_id, code, row.allocation_amount, expenseType);
   });
 
-  (directLabour || []).forEach((row) => {
+  farmDirectLabour.forEach((row) => {
     if (!row.tree_id) return;
     const code = row.trees?.tree_positions?.position_code;
     addTreeCost(treeMap, row.tree_id, code, row.amount, 'OPEX');

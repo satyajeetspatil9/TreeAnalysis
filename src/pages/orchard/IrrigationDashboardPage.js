@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link as RouterLink } from 'react-router-dom';
+import { Link as RouterLink, useSearchParams } from 'react-router-dom';
 import {
   Accordion,
   AccordionDetails,
@@ -114,7 +114,9 @@ function TabPanel({ value, index, children }) {
 
 function IrrigationDashboardPage() {
   const { farm, loading: farmLoading } = useFarm();
-  const [tab, setTab] = useState(0);
+  const [searchParams] = useSearchParams();
+  const initialTab = searchParams.get('tab') === 'programs' ? 1 : 0;
+  const [tab, setTab] = useState(initialTab);
   const [rows, setRows] = useState([]);
   const [zones, setZones] = useState([]);
   const [devices, setDevices] = useState([]);
@@ -456,7 +458,7 @@ function IrrigationDashboardPage() {
         subtitle="Live control, programs, and device schedules. Status updates every 3 minutes."
       />
 
-      {message && tab === 0 && (
+      {message && (
         <Alert severity={message.type} sx={{ mb: 2 }} onClose={() => setMessage(null)}>
           {message.text}
         </Alert>

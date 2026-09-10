@@ -8,6 +8,7 @@ import { useFarm } from '../../hooks/useFarm';
 import PageHeader from '../../components/common/PageHeader';
 import { formatDate, formatNumber, getTreeDisplayId } from '../../utils/formatters';
 import { TREE_LIST_SELECT } from '../../utils/schema';
+import { loadFarmTrees } from '../../utils/farmScope';
 import { resolveStage } from '../../utils/farmClimateLogic';
 import { loadFarmClimateSnapshot } from '../../utils/farmClimateData';
 import { getLatestObservationByTree } from '../../utils/soil';
@@ -41,16 +42,18 @@ function FertilizerOptimizerPage() {
     const latestLab = labRows?.[0] || null;
     setLab(latestLab);
 
-    const { data: trees } = await supabase
-      .from('trees')
-      .select(TREE_LIST_SELECT)
-      .eq('status', 'Active');
-
-    const { data: observations } = await supabase
-      .from('soil_observations')
-      .select('tree_id, nitrogen, phosphorus, potassium, ph, observed_at')
-      .order('observed_at', { ascending: false })
-      .limit(2000);
+    const trees = await loadFarmTrees(supabase, farm.id, { select: TREE_LIST_SELECT });
+    const treeIds = (trees || []).map((t) => t.id);
+    let observations = [];
+    if (treeIds.length) {
+      const { data } = await supabase
+        .from('soil_observations')
+        .select('tree_id, nitrogen, phosphorus, potassium, ph, observed_at')
+        .in('tree_id', treeIds)
+        .order('observed_at', { ascending: false })
+        .limit(2000);
+      observations = data || [];
+    }
 
     const snapshot = await loadFarmClimateSnapshot(supabase, farm, trees || [], 'Mango');
     const nextStage = resolveStage('Mango', snapshot.gdd);

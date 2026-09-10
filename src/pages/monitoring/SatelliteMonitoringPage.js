@@ -36,6 +36,7 @@ import PageHeader from '../../components/common/PageHeader';
 import OrchardZoneLayout, { TreeCircleLink } from '../../components/orchard/OrchardZoneLayout';
 import { formatDate, formatNumber, getTreeDisplayId } from '../../utils/formatters';
 import { TREE_LIST_SELECT } from '../../utils/schema';
+import { loadFarmRows, loadFarmTrees } from '../../utils/farmScope';
 import { formatLocationLabel, parsePositionCode } from '../../utils/positionCode';
 import {
   ORCHARD_ROWS_SELECT,
@@ -178,17 +179,14 @@ function SatelliteMonitoringPage() {
     setMessage(null);
 
     try {
-      const [treesResult, statsResult, rowsResult] = await Promise.all([
-        supabase
-          .from('trees')
-          .select(TREE_LIST_SELECT)
-          .eq('status', 'Active'),
+      const [treesData, statsResult, orchardRows] = await Promise.all([
+        loadFarmTrees(supabase, farm.id, { select: TREE_LIST_SELECT }),
         fetchGpsSatelliteStats(supabase, farm.id).catch(() => null),
-        supabase
-          .from('rows')
-          .select(ORCHARD_ROWS_SELECT)
-          .order('name'),
+        loadFarmRows(supabase, farm.id, ORCHARD_ROWS_SELECT),
       ]);
+
+      const treesResult = { data: treesData, error: null };
+      const rowsResult = { data: orchardRows, error: null };
 
       if (treesResult.error) throw treesResult.error;
       if (rowsResult.error) throw rowsResult.error;

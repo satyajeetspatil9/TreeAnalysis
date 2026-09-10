@@ -1,4 +1,5 @@
 import { formatNumber } from './formatters';
+import { fertigationJobNotesKey, kolkataDateKey, parseFertigationJobIdFromNotes } from './fertilizerEventMaintenance';
 
 /** Water (L) = zone flow (L/hr) × duration (hours) */
 export function calcIrrigationWaterLiters(flowRateLph, durationMinutes) {
@@ -194,11 +195,74 @@ export function buildFarmFertigationChartData(events, grouping = 'week') {
     };
     const point = toPoint(e);
     bucket.water += point.water;
-    bucket.productQty += point.productQty;
-    bucket.duration += point.duration;
-    bucket.eventCount += 1;
-    buckets.set(key, bucket);
+  return [...buckets.values()].sort((a, b) => a.key.localeCompare(b.key));
+}
+
+export async function loadFarmIrrigationEvents(supabase, zoneIds) {
+  if (!zoneIds.length) return [];
+  let { data, error } = await supabase
+    .from('irrigation_events')
+    .select('*, irrigation_zones(zone_code, flow_rate_lph)')
+    .in('zone_id', zoneIds)
+    .order('event_date', { ascending: false })
+    .limit(200);
+  if (error && /notes/.test(error.message || '')) {
+    ({ data, error } = await supabase
+      .from('irrigation_events')
+      .select('id, zone_id, event_date, duration_minutes, water_liters, flow_rate_lph, irrigation_zones(zone_code, flow_rate_lph)')
+      .in('zone_id', zoneIds)
+      .order('event_date', { ascending: false })
+      .limit(200));
+  }
+  if (error) throw error;
+  return data || [];
+}
+
+/** Write missing irrigation_events for completed water jobs so Monitoring can list them. */
+export async function syncCompletedIrrigationJobs(supabase, { farmId, zoneIds }) {
+  let events = await loadFarmIrrigationEvents(supabase, zoneIds);
+  if (!farmId || !zoneIds.length) return { events, created: 0 };
+
+  const { data: jobs, error: jobsError } = await supabase
+    .from('irrigation_jobs')
+    .select('id, zone_id, status, completed_at, started_at, updated_at, duration_elapsed_minutes, on_duration_minutes, liters_delivered, current_step_seq')
+    .eq('farm_id', farmId)
+    .in('job_type', ['water', 'manual'])
+    .eq('status', 'completed')
+    .in('zone_id', zoneIds)
+    .order('completed_at', { ascending: false })
+    .limit(100);
+  if (jobsError) return { events, created: 0 };
+
+  const notedJobIds = new Set();
+  events.forEach((event) => {
+    const jobId = parseFertigationJobIdFromNotes(event.notes);
+    if (jobId != null) notedJobIds.add(jobId);
   });
 
-  return [...buckets.values()].sort((a, b) => a.key.localeCompare(b.key));
+  let created = 0;
+  for (const job of jobs || []) {
+    if (notedJobIds.has(Number(job.id))) continue;
+    const duration = Number(job.duration_elapsed_minutes) || Number(job.on_duration_minutes) || 0;
+    const liters = Number(job.liters_delivered) || 0;
+    const eventDate = kolkataDateKey(job.completed_at || job.started_at || job.updated_at);
+    if (!eventDate || !job.zone_id) continue;
+
+    const payload = {
+      zone_id: job.zone_id,
+      event_date: eventDate,
+      duration_minutes: Math.max(1, Math.round(duration || 1)),
+      water_liters: liters > 0 ? liters : null,
+      notes: fertigationJobNotesKey(job),
+    };
+    let { error: insertError } = await supabase.from('irrigation_events').insert(payload);
+    if (insertError && /notes/.test(insertError.message || '')) {
+      delete payload.notes;
+      ({ error: insertError } = await supabase.from('irrigation_events').insert(payload));
+    }
+    if (!insertError) created += 1;
+  }
+
+  if (!created) return { events, created: 0 };
+  return { events: await loadFarmIrrigationEvents(supabase, zoneIds), created };
 }

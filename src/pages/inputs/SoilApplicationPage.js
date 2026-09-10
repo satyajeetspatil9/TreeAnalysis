@@ -9,6 +9,7 @@ import { supabase } from '../../supabaseClient';
 import { useFarm } from '../../hooks/useFarm';
 import PageHeader from '../../components/common/PageHeader';
 import { getProductStock, productStockLabel, validateFertilizerStock } from '../../utils/products';
+import { loadFarmTrees } from '../../utils/farmScope';
 import { formatDate } from '../../utils/formatters';
 import {
   deleteSoilApplicationEvent,
@@ -83,16 +84,13 @@ function SoilApplicationPage() {
         setEvents([]);
         return;
       }
-      const [{ data: zonesData }, { data: treesData }] = await Promise.all([
+      const [{ data: zonesData }, treesData] = await Promise.all([
         supabase
           .from('irrigation_zones')
           .select('id, zone_code')
           .eq('farm_id', farm.id)
           .order('zone_code'),
-        supabase
-          .from('trees')
-          .select('id, tree_positions(position_code)')
-          .eq('status', 'Active'),
+        loadFarmTrees(supabase, farm.id, { select: 'id, tree_positions(position_code)' }),
       ]);
       setZones(zonesData || []);
       setTrees(treesData || []);

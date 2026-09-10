@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link as RouterLink } from 'react-router-dom';
 import {
   Box, Typography, Paper, Grid, FormControl, InputLabel, Select, MenuItem,
   Alert, IconButton, Table, TableBody, TableCell, TableHead, TableRow,
@@ -170,7 +171,15 @@ function FertigationPage() {
       <PageHeader
         section="Monitoring"
         title="Fertigation"
-        subtitle="Fertilizer applied through drip. Completed fertigation programs appear here. Add products on the fertigation program so they show in this list."
+        subtitle={(
+          <>
+            Fertilizer applied through drip. Add the mix on{' '}
+            <Button component={RouterLink} to="/orchard/irrigation?tab=programs" size="small" sx={{ minWidth: 0, px: 0.5 }}>
+              Irrigation → Programs
+            </Button>
+            {' '}so completed jobs show products here.
+          </>
+        )}
       />
 
       {message && <Alert severity={message.type} sx={{ mb: 2 }} onClose={() => setMessage(null)}>{message.text}</Alert>}
