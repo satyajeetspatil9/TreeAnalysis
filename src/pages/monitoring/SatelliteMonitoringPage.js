@@ -185,12 +185,6 @@ function SatelliteMonitoringPage() {
         loadFarmRows(supabase, farm.id, ORCHARD_ROWS_SELECT),
       ]);
 
-      const treesResult = { data: treesData, error: null };
-      const rowsResult = { data: orchardRows, error: null };
-
-      if (treesResult.error) throw treesResult.error;
-      if (rowsResult.error) throw rowsResult.error;
-
       let cacheResult = await supabase
         .from('tree_gps_satellite_cache')
         .select('position_id, week_start, fetched_at, analysis, error_message, last_good_radar, last_good_radar_week')
@@ -218,11 +212,11 @@ function SatelliteMonitoringPage() {
         }
       }
 
-      const sortedTrees = (treesResult.data || []).sort((a, b) =>
+      const sortedTrees = (treesData || []).sort((a, b) =>
         getTreeDisplayId(a).localeCompare(getTreeDisplayId(b), undefined, { numeric: true }),
       );
       setActiveTrees(sortedTrees);
-      setOrchardRows(rowsResult.data || []);
+      setOrchardRows(orchardRows || []);
       setCacheByPositionId(new Map((cacheResult.data || []).map((entry) => [
         entry.position_id,
         {

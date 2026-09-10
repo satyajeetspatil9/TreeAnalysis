@@ -1,5 +1,10 @@
 /** Resolve trees, rows, zones, and money records for the active farm. */
 
+function addId(set, value) {
+  if (value == null || value === '') return;
+  set.add(value);
+}
+
 export async function loadFarmSectionIds(supabase, farmId) {
   if (!farmId) return [];
   const { data: phases } = await supabase.from('phases').select('id').eq('farm_id', farmId);
@@ -15,24 +20,46 @@ export async function loadFarmZoneIds(supabase, farmId) {
   return (data || []).map((z) => z.id);
 }
 
+export async function loadFarmLotIds(supabase, farmId) {
+  const sectionIds = await loadFarmSectionIds(supabase, farmId);
+  const lotIds = new Set();
+  if (!sectionIds.length) return [];
+
+  const { data: sectionLots } = await supabase.from('lots').select('id').in('section_id', sectionIds);
+  (sectionLots || []).forEach((lot) => addId(lotIds, lot.id));
+
+  const { data: rows } = await supabase.from('rows').select('id').in('section_id', sectionIds);
+  const rowIds = (rows || []).map((row) => row.id);
+  if (rowIds.length) {
+    const { data: lotRowLinks } = await supabase.from('lot_rows').select('lot_id').in('row_id', rowIds);
+    (lotRowLinks || []).forEach((link) => addId(lotIds, link.lot_id));
+
+    const { data: legacyLots, error: legacyError } = await supabase
+      .from('lots')
+      .select('id')
+      .in('row_id', rowIds);
+    if (!legacyError) {
+      (legacyLots || []).forEach((lot) => addId(lotIds, lot.id));
+    }
+  }
+
+  return [...lotIds];
+}
+
 export async function loadFarmTreeIds(supabase, farmId) {
   if (!farmId) return [];
   const ids = new Set();
 
-  const sectionIds = await loadFarmSectionIds(supabase, farmId);
-  if (sectionIds.length) {
-    const { data: lots } = await supabase.from('lots').select('id').in('section_id', sectionIds);
-    const lotIds = (lots || []).map((l) => l.id);
-    if (lotIds.length) {
-      const { data: positions } = await supabase
-        .from('tree_positions')
-        .select('id')
-        .in('lot_id', lotIds);
-      const posIds = (positions || []).map((p) => p.id);
-      if (posIds.length) {
-        const { data: trees } = await supabase.from('trees').select('id').in('position_id', posIds);
-        (trees || []).forEach((t) => ids.add(Number(t.id)));
-      }
+  const lotIds = await loadFarmLotIds(supabase, farmId);
+  if (lotIds.length) {
+    const { data: positions } = await supabase
+      .from('tree_positions')
+      .select('id')
+      .in('lot_id', lotIds);
+    const posIds = (positions || []).map((p) => p.id);
+    if (posIds.length) {
+      const { data: trees } = await supabase.from('trees').select('id').in('position_id', posIds);
+      (trees || []).forEach((t) => addId(ids, t.id));
     }
   }
 
@@ -42,9 +69,7 @@ export async function loadFarmTreeIds(supabase, farmId) {
       .from('tree_irrigation_zones')
       .select('tree_id')
       .in('zone_id', zoneIds);
-    (links || []).forEach((row) => {
-      if (row.tree_id) ids.add(Number(row.tree_id));
-    });
+    (links || []).forEach((row) => addId(ids, row.tree_id));
   }
 
   return [...ids];
@@ -76,8 +101,8 @@ export async function loadFarmRows(supabase, farmId, select) {
 }
 
 export function filterByTreeIds(rows, treeIds, key = 'tree_id') {
-  const allowed = new Set((treeIds || []).map(Number));
-  return (rows || []).filter((row) => allowed.has(Number(row[key])));
+  const allowed = new Set((treeIds || []).map((id) => String(id)));
+  return (rows || []).filter((row) => allowed.has(String(row[key])));
 }
 
 export function expenseScopeNotes({ scopeType, scopeId, farmId }) {
@@ -100,13 +125,12 @@ export function parseExpenseScope(notes) {
 
 export function expenseMatchesFarm(expense, { farmId, zoneIdSet, treeIdSet, expenseIdSet }) {
   if (expenseIdSet?.has(Number(expense.id))) return true;
-  const notes = String(expense?.notes || '');
-  const farmMatch = notes.match(/^farm:(\d+)/);
-  if (farmMatch) return Number(farmMatch[1]) === Number(farmId);
-  const zoneMatch = notes.match(/^zone:(\d+)/);
-  if (zoneMatch) return zoneIdSet.has(Number(zoneMatch[1]));
-  if (notes.startsWith('tree:')) return treeIdSet.has(Number(notes.slice(5)));
-  return false;
+  const scope = parseExpenseScope(expense?.notes);
+  if (scope.type === 'farm') return Number(scope.id) === Number(farmId);
+  if (scope.type === 'zone') return zoneIdSet.has(Number(scope.id));
+  if (scope.type === 'tree') return treeIdSet.has(String(scope.id)) || treeIdSet.has(Number(scope.id));
+  // Legacy rows with free-text or empty notes are not farm-tagged.
+  return true;
 }
 
 export async function loadFarmExpenses(supabase, farmId, {
@@ -122,7 +146,7 @@ export async function loadFarmExpenses(supabase, farmId, {
   if (error) throw error;
 
   const zoneIdSet = new Set((zoneIds || []).map(Number));
-  const treeIdSet = new Set((treeIds || []).map(Number));
+  const treeIdSet = new Set((treeIds || []).flatMap((id) => [id, Number(id), String(id)]));
   const expenseIdSet = new Set();
   if (treeIds.length) {
     const { data: allocs } = await supabase

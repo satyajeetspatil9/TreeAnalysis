@@ -31,7 +31,13 @@ function FertilizerOptimizerPage() {
   const [plans, setPlans] = useState([]);
 
   const load = useCallback(async () => {
-    if (!farm?.id) return;
+    if (!farm?.id) {
+      setLab(null);
+      setPlans([]);
+      setGdd(null);
+      setStage('');
+      return;
+    }
 
     const { data: labRows } = await supabase
       .from('farm_soil_lab_reports')

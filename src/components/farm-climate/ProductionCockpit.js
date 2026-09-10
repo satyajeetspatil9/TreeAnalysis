@@ -4,6 +4,7 @@ import { Alert, Button, Chip, Stack } from '@mui/material';
 import { supabase } from '../../supabaseClient';
 import { useFarm } from '../../hooks/useFarm';
 import { TREE_LIST_SELECT } from '../../utils/schema';
+import { loadFarmTrees } from '../../utils/farmScope';
 import { analyzeRisks, resolveStage } from '../../utils/farmClimateLogic';
 import { loadFarmClimateSnapshot } from '../../utils/farmClimateData';
 import { fetchGpsSatelliteStats } from '../../utils/treeGpsSatelliteCache';
@@ -15,12 +16,8 @@ function ProductionCockpit() {
   useEffect(() => {
     let cancelled = false;
     async function load() {
-      if (!farm) return;
-      const { data: trees } = await supabase
-        .from('trees')
-        .select(TREE_LIST_SELECT)
-        .eq('status', 'Active')
-        .limit(40);
+      if (!farm?.id) return;
+      const trees = await loadFarmTrees(supabase, farm.id, { select: TREE_LIST_SELECT });
       const snapshot = await loadFarmClimateSnapshot(supabase, farm, trees || [], 'Mango');
       const stage = resolveStage('Mango', snapshot.gdd);
       const warnings = analyzeRisks(snapshot.sensors, 'Mango', stage, snapshot.isOverMoisture3Days);
