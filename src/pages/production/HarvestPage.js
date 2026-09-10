@@ -29,8 +29,6 @@ function HarvestPage() {
   const [message, setMessage] = useState(null);
   const [stage, setStage] = useState('');
   const [gdd, setGdd] = useState(null);
-  const [flowerCount, setFlowerCount] = useState(0);
-  const [fruitCount, setFruitCount] = useState(0);
   const [saving, setSaving] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState({
@@ -78,12 +76,6 @@ function HarvestPage() {
       return;
     }
     setRecords(data || []);
-    const [{ count: flowers }, { count: fruit }] = await Promise.all([
-      supabase.from('flowering_events').select('id', { count: 'exact', head: true }).in('tree_id', treeIds),
-      supabase.from('fruit_set_observations').select('id', { count: 'exact', head: true }).in('tree_id', treeIds),
-    ]);
-    setFlowerCount(flowers || 0);
-    setFruitCount(fruit || 0);
   }, [treeIds]);
 
   useEffect(() => {
@@ -147,17 +139,13 @@ function HarvestPage() {
       <PageHeader
         section="Production"
         title="Harvest"
-        subtitle="Record yield and revenue per tree. Compare with this season’s GDD stage and flowering / fruit-set counts."
+        subtitle="Record yield and revenue per tree. Compare with this season’s GDD stage."
       />
       {message && <Alert severity={message.type} sx={{ mb: 2 }} onClose={() => setMessage(null)}>{message.text}</Alert>}
 
       {(stage || gdd != null) && (
         <Alert severity="info" sx={{ mb: 2 }}>
           Climate stage {stage || '—'} · GDD {formatNumber(gdd, 0)}
-          {' · '}
-          {flowerCount} flowering record{flowerCount === 1 ? '' : 's'}
-          {' · '}
-          {fruitCount} fruit-set record{fruitCount === 1 ? '' : 's'}.
         </Alert>
       )}
 

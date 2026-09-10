@@ -76,8 +76,6 @@ export const navSections = [
     title: 'Production',
     icon: EmojiNatureIcon,
     items: [
-      { label: 'Flowering', path: '/production/flowering', icon: EmojiNatureIcon, description: 'Bloom vs GDD season' },
-      { label: 'Fruit set', path: '/production/fruit-set', icon: AgricultureIcon, description: 'Fruit set vs GDD season' },
       { label: 'Harvest', path: '/production/harvest', icon: AgricultureIcon, description: 'Yield records' },
       { label: 'Revenue', path: '/production/revenue', icon: PaidIcon, description: 'Sales income' },
     ],
