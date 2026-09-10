@@ -375,7 +375,7 @@ function SettingsPage() {
           A monthly 7-in-1 reading per tree and a lab report every 6 months will not fill
           the database in a practical lifetime (tens to hundreds of years for soil and lab alone;
           typically 1–3+ years for the whole app including irrigation and satellite).
-          Tree photos can fill the 1 GB bucket in days to a few months.
+          Tree photos are compressed under 200 KB before upload (~5,000 photos per 1 GB).
           Check live size in the Supabase Dashboard under Project Settings → Usage.
           Free projects also pause after 1 week of inactivity.
         </Typography>

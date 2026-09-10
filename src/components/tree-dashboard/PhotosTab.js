@@ -157,7 +157,7 @@ function PhotosTab({ tree }) {
       <Paper sx={{ p: 3, mb: 3 }} variant="outlined">
         <Typography variant="h6" gutterBottom>Add Photo</Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Upload from your phone or computer, or paste an image URL.
+          Upload from your phone or computer, or paste an image URL. Device photos are compressed under 200 KB.
         </Typography>
 
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ mb: 2 }}>

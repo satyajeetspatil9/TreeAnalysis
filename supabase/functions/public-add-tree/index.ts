@@ -228,7 +228,7 @@ function parseNumber(value: unknown) {
 }
 
 const TREE_PHOTOS_BUCKET = 'tree-photos';
-const MAX_PHOTO_BYTES = 10 * 1024 * 1024;
+const MAX_PHOTO_BYTES = 200 * 1024;
 
 function plantingDateToTakenAt(plantingDate: string) {
   return new Date(plantingDate).toISOString();
@@ -254,7 +254,7 @@ function parsePhotoPayload(body: Record<string, unknown>) {
   try {
     const binary = atob(base64);
     if (binary.length > MAX_PHOTO_BYTES) {
-      return { error: 'Photo exceeds 10 MB limit' };
+      return { error: 'Photo exceeds 200 KB limit' };
     }
     const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
     return { photo: { bytes, contentType } };

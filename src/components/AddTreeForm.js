@@ -332,7 +332,7 @@ function AddTreeForm({ onSuccess, publicAccessKey = '' }) {
 
         if (photoFile) {
           payload.photo_base64 = await fileToBase64(photoFile);
-          payload.photo_content_type = photoFile.type || 'image/jpeg';
+          payload.photo_content_type = 'image/jpeg';
         }
 
         const result = await submitPublicAddTree(publicAccessKey, payload);
@@ -577,7 +577,7 @@ function AddTreeForm({ onSuccess, publicAccessKey = '' }) {
 
       <Typography variant="subtitle2" sx={{ mt: 2, mb: 1 }}>Tree photo (optional)</Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-        Saved as Full Tree photo with the planting date above.
+        Saved as Full Tree photo with the planting date above. Compressed to under 200 KB.
       </Typography>
       <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 1 }}>
         <Button

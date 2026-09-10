@@ -1,5 +1,6 @@
 export const TREE_PHOTOS_BUCKET = 'tree-photos';
 export const TREE_PHOTO_TYPE_FULL = 'TREE';
+export const MAX_PHOTO_BYTES = 200 * 1024;
 
 export function photosRlsHint(message) {
   if (!message) return message;
@@ -41,11 +42,113 @@ function inferImageContentType(file) {
   return 'image/jpeg';
 }
 
+function jpegFileName(name) {
+  const base = sanitizeFileName(String(name || 'photo').replace(/\.[^.]+$/, ''));
+  return `${base || 'photo'}.jpg`;
+}
+
+function canvasToJpegBlob(canvas, quality) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        reject(new Error('Could not compress photo.'));
+        return;
+      }
+      resolve(blob);
+    }, 'image/jpeg', quality);
+  });
+}
+
+async function loadImageForCompress(file) {
+  if (typeof createImageBitmap === 'function') {
+    try {
+      return await createImageBitmap(file, { imageOrientation: 'from-image' });
+    } catch {
+      try {
+        return await createImageBitmap(file);
+      } catch {
+        // Fall through to HTMLImageElement.
+      }
+    }
+  }
+
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(image);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('Could not read this photo. Try a JPEG from the camera.'));
+    };
+    image.src = url;
+  });
+}
+
+/** Resize and JPEG-compress until the file is under 200 KB. */
+export async function compressPhotoUnderMaxBytes(file, maxBytes = MAX_PHOTO_BYTES) {
+  if (!file) throw new Error('Choose a photo file first.');
+  if (file.size <= maxBytes && (file.type === 'image/jpeg' || file.type === 'image/jpg')) {
+    return file;
+  }
+
+  let source;
+  try {
+    source = await loadImageForCompress(file);
+  } catch {
+    throw new Error('Could not compress this photo. Try a JPEG from the camera.');
+  }
+
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Could not compress photo.');
+
+  let width = source.width || source.naturalWidth;
+  let height = source.height || source.naturalHeight;
+  if (!width || !height) throw new Error('Could not compress photo.');
+
+  const maxEdge = 1280;
+  if (Math.max(width, height) > maxEdge) {
+    const scale = maxEdge / Math.max(width, height);
+    width = Math.max(1, Math.round(width * scale));
+    height = Math.max(1, Math.round(height * scale));
+  }
+
+  let quality = 0.72;
+  let blob = null;
+  for (let attempt = 0; attempt < 14; attempt += 1) {
+    canvas.width = width;
+    canvas.height = height;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, width, height);
+    ctx.drawImage(source, 0, 0, width, height);
+    blob = await canvasToJpegBlob(canvas, quality);
+    if (blob.size <= maxBytes) break;
+    if (quality > 0.42) {
+      quality = Math.max(0.42, quality - 0.1);
+    } else {
+      width = Math.max(1, Math.round(width * 0.82));
+      height = Math.max(1, Math.round(height * 0.82));
+      quality = 0.62;
+    }
+  }
+
+  if (source.close) source.close();
+  if (!blob || blob.size > maxBytes) {
+    throw new Error('Photo is still over 200 KB after compression. Try a simpler shot.');
+  }
+
+  return new File([blob], jpegFileName(file.name), { type: 'image/jpeg' });
+}
+
 export function plantingDateToTakenAt(plantingDate) {
   return new Date(plantingDate).toISOString();
 }
 
-export function fileToBase64(file) {
+export async function fileToBase64(file) {
+  const compressed = await compressPhotoUnderMaxBytes(file);
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {
@@ -54,7 +157,7 @@ export function fileToBase64(file) {
       resolve(base64);
     };
     reader.onerror = () => reject(new Error('Could not read photo file.'));
-    reader.readAsDataURL(file);
+    reader.readAsDataURL(compressed);
   });
 }
 
@@ -72,17 +175,15 @@ export async function uploadTreePhotoFile(supabase, treeId, file) {
   if (!treeId) throw new Error('Tree not found.');
   if (!file) throw new Error('Choose a photo file first.');
 
-  const extension = file.name.includes('.')
-    ? file.name.split('.').pop().toLowerCase()
-    : 'jpg';
-  const path = `${treeId}/${Date.now()}-${sanitizeFileName(file.name.replace(/\.[^.]+$/, ''))}.${extension}`;
+  const compressed = await compressPhotoUnderMaxBytes(file);
+  const path = `${treeId}/${Date.now()}-${sanitizeFileName(compressed.name.replace(/\.[^.]+$/, ''))}.jpg`;
 
   const { error: uploadError } = await supabase.storage
     .from(TREE_PHOTOS_BUCKET)
-    .upload(path, file, {
+    .upload(path, compressed, {
       cacheControl: '3600',
       upsert: false,
-      contentType: inferImageContentType(file),
+      contentType: inferImageContentType(compressed),
     });
 
   if (uploadError) {
