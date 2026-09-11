@@ -68,4 +68,5 @@
 -- 057_seed_catalog_products.sql — analysed farm inputs (N-P2O5-K2O-Ca-Mg-S-Zn-B)
 -- 058_event_start_end_times.sql — start/end on irrigation and fertigation events
 -- 059_fertigation_injector_specs.sql — injector tank, fertilizer flow, and product
+-- 060_irrigation_scheduler_cron_auth.sql — cron Authorization header for scheduler
 -- =============================================================================
