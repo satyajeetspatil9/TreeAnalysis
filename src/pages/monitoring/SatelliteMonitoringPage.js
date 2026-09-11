@@ -54,7 +54,6 @@ import { fetchGpsSatelliteStats, parseCachedAnalysis } from '../../utils/treeGps
 import {
   SATELLITE_MONITOR_COLUMNS,
   SATELLITE_STRESS_FILTER_OPTIONS,
-  countSatelliteStressRows,
   extractSatelliteIndicators,
   getSatelliteRowMeta,
   matchesSatelliteStressFilter,
@@ -289,8 +288,6 @@ function SatelliteMonitoringPage() {
       return a.positionCode.localeCompare(b.positionCode, undefined, { numeric: true });
     }), [tableRows, searchQuery, filters, stressFilter]);
 
-  const stressCounts = useMemo(() => countSatelliteStressRows(tableRows), [tableRows]);
-  const attentionCount = stressCounts.critical + stressCounts.high + stressCounts.moderate;
   const filtersActive = hasActiveTreeFilters(searchQuery, filters) || stressFilter !== 'all';
   const showMonsoonBanner = useMemo(
     () => filteredRows.some((row) => {
@@ -383,35 +380,85 @@ function SatelliteMonitoringPage() {
         </Alert>
       )}
 
-      <Paper
-        sx={(theme) => ({
-          p: 2.5,
-          mb: 3,
-          border: '2px solid',
-          borderColor: attentionCount > 0
-            ? theme.palette.warning.main
-            : alpha(theme.palette.success.main, 0.45),
-          borderLeftWidth: 8,
-          borderLeftColor: attentionCount > 0
-            ? theme.palette.warning.dark
-            : theme.palette.success.main,
-          bgcolor: attentionCount > 0
-            ? alpha(theme.palette.warning.main, 0.12)
-            : alpha(theme.palette.success.main, 0.08),
-        })}
-        variant="outlined"
-      >
-        <Typography variant="h6" gutterBottom sx={{ fontWeight: 700 }}>
-          Orchard satellite summary
-        </Typography>
-        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-          <Chip label={`${stressCounts.critical} critical`} color="error" size="small" />
-          <Chip label={`${stressCounts.high} high stress`} color="error" variant="outlined" size="small" />
-          <Chip label={`${stressCounts.moderate} needs attention`} color="warning" size="small" />
-          <Chip label={`${stressCounts.low} looking good`} color="success" size="small" />
-          <Chip label={`${stressCounts.no_cache} no data`} color="default" size="small" />
-          <Chip label={`${stressCounts.no_gps} missing GPS`} color="default" variant="outlined" size="small" />
+      <Paper sx={{ p: 2, mb: 3 }} variant="outlined">
+        <Box sx={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 2, flexWrap: 'wrap', mb: 1 }}>
+          <Box>
+            <Typography variant="h6">{mapLayerColumn.label} by tree</Typography>
+            <Typography variant="body2" color="text.secondary">
+              {mapLayerColumn.short}. Switch signal below — same orchard layout as Moisture.
+            </Typography>
+          </Box>
+          <Typography variant="caption" color="text.secondary">
+            {positions.length} tree{positions.length === 1 ? '' : 's'}
+          </Typography>
         </Box>
+        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 1.5 }}>
+          {SATELLITE_MONITOR_COLUMNS.map((column) => (
+            <Chip
+              key={column.key}
+              clickable
+              label={column.label}
+              variant={mapLayer === column.key ? 'filled' : 'outlined'}
+              color={mapLayer === column.key ? 'primary' : 'default'}
+              onClick={() => {
+                setMapLayerChosen(true);
+                setMapLayer(column.key);
+              }}
+            />
+          ))}
+        </Box>
+        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 2 }}>
+          {mapLayer === 'radar' ? (
+            <>
+              <Chip size="small" color="error" label="Very dry" />
+              <Chip size="small" color="warning" label="Dry" />
+              <Chip size="small" color="success" label="Normal moisture" />
+              <Chip size="small" color="success" variant="outlined" label="Good moisture" />
+              <Chip size="small" color="info" label="Very high moisture" />
+              <Chip size="small" label="No data" />
+            </>
+          ) : (
+            <>
+              <Chip size="small" color="success" label="Looking good" />
+              <Chip size="small" color="warning" label="Needs attention" />
+              <Chip size="small" color="error" label="Stress" />
+              <Chip size="small" label="No data" />
+            </>
+          )}
+        </Box>
+        {positions.length > 0 ? (
+          <OrchardZoneLayout
+            positions={positions}
+            renderTree={(pos) => {
+              const row = rowByPositionId.get(pos.id);
+              const parsed = parsePositionCode(pos.position_code);
+              const friendly = row?.indicators?.[mapLayer];
+              const chipColor = mapLayerChipColor(mapLayer, friendly);
+              const tooltip = [
+                pos.position_code,
+                parsed ? formatLocationLabel(parsed) : null,
+                friendly?.label
+                  || (row?.indicators?.opticalHidden && mapLayer !== 'radar' ? 'Hidden when cloudy' : null)
+                  || (row?.hasGps ? 'No satellite data' : 'No reading'),
+                mapLayer === 'radar'
+                && row?.indicators?.radarFromPriorWeek
+                && (row.indicators.radarAsOf || row.cache?.last_good_radar_week)
+                  ? `from ${formatDate(row.indicators.radarAsOf || row.cache.last_good_radar_week)}`
+                  : null,
+              ].filter(Boolean).join(' · ');
+              return (
+                <TreeCircleLink
+                  pos={pos}
+                  to={treeDashboardUrl(pos.position_code, 'satellite')}
+                  color={chipToDotColor(theme, chipColor)}
+                  tooltip={tooltip}
+                />
+              );
+            }}
+          />
+        ) : (
+          <Typography color="text.secondary">No tree positions found. Add trees in Farm Setup and Trees first.</Typography>
+        )}
       </Paper>
 
       <Paper sx={{ p: 2, mb: 3 }} variant="outlined">
@@ -505,87 +552,6 @@ function SatelliteMonitoringPage() {
             <Button size="small" onClick={clearFilters}>Clear filters</Button>
           )}
         </Box>
-      </Paper>
-
-      <Paper sx={{ p: 2, mb: 3 }} variant="outlined">
-        <Box sx={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 2, flexWrap: 'wrap', mb: 1 }}>
-          <Box>
-            <Typography variant="h6">{mapLayerColumn.label} by tree</Typography>
-            <Typography variant="body2" color="text.secondary">
-              {mapLayerColumn.short}. Switch signal below — same orchard layout as Moisture.
-            </Typography>
-          </Box>
-          <Typography variant="caption" color="text.secondary">
-            {positions.length} tree{positions.length === 1 ? '' : 's'}
-          </Typography>
-        </Box>
-        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 1.5 }}>
-          {SATELLITE_MONITOR_COLUMNS.map((column) => (
-            <Chip
-              key={column.key}
-              clickable
-              label={column.label}
-              variant={mapLayer === column.key ? 'filled' : 'outlined'}
-              color={mapLayer === column.key ? 'primary' : 'default'}
-              onClick={() => {
-                setMapLayerChosen(true);
-                setMapLayer(column.key);
-              }}
-            />
-          ))}
-        </Box>
-        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 2 }}>
-          {mapLayer === 'radar' ? (
-            <>
-              <Chip size="small" color="error" label="Very dry" />
-              <Chip size="small" color="warning" label="Dry" />
-              <Chip size="small" color="success" label="Normal moisture" />
-              <Chip size="small" color="success" variant="outlined" label="Good moisture" />
-              <Chip size="small" color="info" label="Very high moisture" />
-              <Chip size="small" label="No data" />
-            </>
-          ) : (
-            <>
-              <Chip size="small" color="success" label="Looking good" />
-              <Chip size="small" color="warning" label="Needs attention" />
-              <Chip size="small" color="error" label="Stress" />
-              <Chip size="small" label="No data" />
-            </>
-          )}
-        </Box>
-        {positions.length > 0 ? (
-          <OrchardZoneLayout
-            positions={positions}
-            renderTree={(pos) => {
-              const row = rowByPositionId.get(pos.id);
-              const parsed = parsePositionCode(pos.position_code);
-              const friendly = row?.indicators?.[mapLayer];
-              const chipColor = mapLayerChipColor(mapLayer, friendly);
-              const tooltip = [
-                pos.position_code,
-                parsed ? formatLocationLabel(parsed) : null,
-                friendly?.label
-                  || (row?.indicators?.opticalHidden && mapLayer !== 'radar' ? 'Hidden when cloudy' : null)
-                  || (row?.hasGps ? 'No satellite data' : 'No reading'),
-                mapLayer === 'radar'
-                && row?.indicators?.radarFromPriorWeek
-                && (row.indicators.radarAsOf || row.cache?.last_good_radar_week)
-                  ? `from ${formatDate(row.indicators.radarAsOf || row.cache.last_good_radar_week)}`
-                  : null,
-              ].filter(Boolean).join(' · ');
-              return (
-                <TreeCircleLink
-                  pos={pos}
-                  to={treeDashboardUrl(pos.position_code, 'satellite')}
-                  color={chipToDotColor(theme, chipColor)}
-                  tooltip={tooltip}
-                />
-              );
-            }}
-          />
-        ) : (
-          <Typography color="text.secondary">No tree positions found. Add trees in Farm Setup and Trees first.</Typography>
-        )}
       </Paper>
 
       <Paper variant="outlined" sx={{ overflow: 'hidden' }}>
