@@ -13,7 +13,7 @@ import {
 import { supabase } from '../../supabaseClient';
 import { useFarm } from '../../hooks/useFarm';
 import PageHeader from '../../components/common/PageHeader';
-import { formatDate, formatNumber } from '../../utils/formatters';
+import { formatDate, formatNumber, formatTime } from '../../utils/formatters';
 import {
   calcIrrigationWaterLiters,
   formatWaterLiters,
@@ -279,6 +279,8 @@ function IrrigationEventsPage() {
             <TableRow>
               <TableCell>Zone</TableCell>
               <TableCell>Date</TableCell>
+              <TableCell>Start</TableCell>
+              <TableCell>End</TableCell>
               <TableCell>Duration</TableCell>
               <TableCell>Water</TableCell>
               <TableCell>Flow (L/hr)</TableCell>
@@ -288,13 +290,15 @@ function IrrigationEventsPage() {
           <TableBody>
             {filteredEvents.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={6} align="center">No irrigation events yet.</TableCell>
+                <TableCell colSpan={8} align="center">No irrigation events yet.</TableCell>
               </TableRow>
             ) : (
               filteredEvents.map((e) => (
                 <TableRow key={e.id} hover>
                   <TableCell>{e.irrigation_zones?.zone_code}</TableCell>
                   <TableCell>{formatDate(e.event_date)}</TableCell>
+                  <TableCell>{formatTime(e.started_at)}</TableCell>
+                  <TableCell>{formatTime(e.ended_at)}</TableCell>
                   <TableCell>{e.duration_minutes ? `${e.duration_minutes} min` : '—'}</TableCell>
                   <TableCell>{formatWaterLiters(resolveEventWaterLiters(e))}</TableCell>
                   <TableCell>{e.flow_rate_lph ?? e.irrigation_zones?.flow_rate_lph ?? '—'}</TableCell>

@@ -9,6 +9,18 @@ export function formatDate(dateStr) {
   });
 }
 
+export function formatTime(value) {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+  return date.toLocaleTimeString('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  });
+}
+
 export function formatCurrency(amount) {
   if (amount == null || Number.isNaN(Number(amount))) return '—';
   return new Intl.NumberFormat('en-IN', {

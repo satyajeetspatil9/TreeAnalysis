@@ -925,14 +925,22 @@ async function recordWaterIrrigationEvent(
     .maybeSingle();
   if (existing) return;
 
-  await supabase.from('irrigation_events').insert({
+  const payload: Record<string, unknown> = {
     zone_id: job.zone_id,
     event_date: local.dateKey,
     duration_minutes: Math.max(1, Math.round(duration)),
     water_liters: waterLiters != null && waterLiters > 0 ? waterLiters : null,
     flow_rate_lph: flow,
     notes,
-  });
+    started_at: job.started_at ?? null,
+    ended_at: job.completed_at ?? now.toISOString(),
+  };
+  const { error } = await supabase.from('irrigation_events').insert(payload);
+  if (error && /started_at|ended_at/.test(error.message || '')) {
+    delete payload.started_at;
+    delete payload.ended_at;
+    await supabase.from('irrigation_events').insert(payload);
+  }
 }
 
 async function recordFertigationEvent(
@@ -976,6 +984,8 @@ async function recordFertigationEvent(
       duration_minutes: Math.max(1, Math.round(duration)),
       water_liters: waterLiters != null && waterLiters > 0 ? waterLiters : null,
       notes,
+      started_at: job.started_at ?? null,
+      ended_at: job.completed_at ?? now.toISOString(),
     };
 
     const { data: inserted, error } = await supabase
@@ -985,6 +995,25 @@ async function recordFertigationEvent(
       .single();
     if (error && /notes/.test(error.message || '')) {
       delete payload.notes;
+      const retry = await supabase.from('fertigation_events').insert(payload).select('id').single();
+      if (retry.error && /started_at|ended_at/.test(retry.error.message || '')) {
+        delete payload.started_at;
+        delete payload.ended_at;
+        const retryTimes = await supabase.from('fertigation_events').insert(payload).select('id').single();
+        if (retryTimes.error) {
+          console.error('fertigation_events insert failed', retryTimes.error.message);
+          return;
+        }
+        eventId = retryTimes.data?.id != null ? Number(retryTimes.data.id) : null;
+      } else if (retry.error) {
+        console.error('fertigation_events insert failed', retry.error.message);
+        return;
+      } else {
+        eventId = retry.data?.id != null ? Number(retry.data.id) : null;
+      }
+    } else if (error && /started_at|ended_at/.test(error.message || '')) {
+      delete payload.started_at;
+      delete payload.ended_at;
       const retry = await supabase.from('fertigation_events').insert(payload).select('id').single();
       if (retry.error) {
         console.error('fertigation_events insert failed', retry.error.message);

@@ -25,6 +25,35 @@ export function parseFertigationJobIdFromNotes(notes) {
   return match ? Number(match[1]) : null;
 }
 
+export function eventTimesFromJob(job, fallbackEnd = null) {
+  if (!job) return { started_at: null, ended_at: null };
+  const started_at = job.started_at || null;
+  let ended_at = job.completed_at || fallbackEnd || null;
+  if (!ended_at && started_at) {
+    const minutes = Number(job.duration_elapsed_minutes) || Number(job.on_duration_minutes) || 0;
+    if (minutes > 0) {
+      ended_at = new Date(new Date(started_at).getTime() + minutes * 60000).toISOString();
+    }
+  }
+  return { started_at, ended_at };
+}
+
+export function attachJobTimesToEvents(events, jobs) {
+  const byId = new Map((jobs || []).map((job) => [Number(job.id), job]));
+  return (events || []).map((event) => {
+    const jobId = parseFertigationJobIdFromNotes(event.notes);
+    const fromJob = jobId != null
+      ? eventTimesFromJob(byId.get(jobId))
+      : { started_at: null, ended_at: null };
+    const started_at = event.started_at || fromJob.started_at || null;
+    let ended_at = event.ended_at || fromJob.ended_at || null;
+    if (!ended_at && started_at && Number(event.duration_minutes) > 0) {
+      ended_at = new Date(new Date(started_at).getTime() + Number(event.duration_minutes) * 60000).toISOString();
+    }
+    return { ...event, started_at, ended_at };
+  });
+}
+
 export function annotateInheritedFertigationProducts(events) {
   const byJob = new Map();
   (events || []).forEach((event) => {
@@ -110,7 +139,7 @@ export async function deleteSprayEvent(supabase, eventId) {
 export async function loadFarmFertigationEvents(supabase, zoneIds) {
   if (!zoneIds.length) return [];
   const selectWithNotes = `
-      id, zone_id, event_date, duration_minutes, water_liters, notes,
+      id, zone_id, event_date, duration_minutes, water_liters, notes, started_at, ended_at,
       irrigation_zones(zone_code, flow_rate_lph),
       fertigation_products(id, product_id, quantity, unit, products(name))
     `;
@@ -135,8 +164,21 @@ export async function loadFarmFertigationEvents(supabase, zoneIds) {
       .order('id', { ascending: false })
       .limit(200));
   }
+  if (error && /started_at|ended_at/.test(error.message || '')) {
+    ({ data, error } = await supabase
+      .from('fertigation_events')
+      .select(selectWithNotes.replace(', started_at, ended_at', ''))
+      .in('zone_id', zoneIds)
+      .order('event_date', { ascending: false })
+      .order('id', { ascending: false })
+      .limit(200));
+  }
   if (error) throw error;
   return annotateInheritedFertigationProducts(data || []);
+}
+
+function missingTimeColumns(error) {
+  return /started_at|ended_at/.test(error?.message || '');
 }
 
 /** Write missing fertigation_events for completed fertigation jobs so Monitoring can list them. */
@@ -153,7 +195,7 @@ export async function syncCompletedFertigationJobs(supabase, { farmId, zoneIds }
     .in('zone_id', zoneIds)
     .order('completed_at', { ascending: false })
     .limit(100);
-  if (jobsError) return { events, created: 0 };
+  if (jobsError) return { events: attachJobTimesToEvents(events, []), created: 0 };
 
   const notedJobIds = new Set();
   events.forEach((event) => {
@@ -170,12 +212,15 @@ export async function syncCompletedFertigationJobs(supabase, { farmId, zoneIds }
     const eventDate = kolkataDateKey(job.completed_at || job.started_at || job.updated_at);
     if (!eventDate || !job.zone_id) continue;
 
+    const times = eventTimesFromJob(job, job.updated_at);
     const payload = {
       zone_id: job.zone_id,
       event_date: eventDate,
       duration_minutes: Math.max(1, Math.round(duration || 1)),
       water_liters: liters > 0 ? liters : null,
       notes: fertigationJobNotesKey(job),
+      started_at: times.started_at,
+      ended_at: times.ended_at,
     };
     let { data: inserted, error: insertError } = await supabase
       .from('fertigation_events')
@@ -184,6 +229,15 @@ export async function syncCompletedFertigationJobs(supabase, { farmId, zoneIds }
       .single();
     if (insertError && /notes/.test(insertError.message || '')) {
       delete payload.notes;
+      ({ data: inserted, error: insertError } = await supabase
+        .from('fertigation_events')
+        .insert(payload)
+        .select('id')
+        .single());
+    }
+    if (insertError && missingTimeColumns(insertError)) {
+      delete payload.started_at;
+      delete payload.ended_at;
       ({ data: inserted, error: insertError } = await supabase
         .from('fertigation_events')
         .insert(payload)
@@ -228,7 +282,7 @@ export async function syncCompletedFertigationJobs(supabase, { farmId, zoneIds }
   }
 
   return {
-    events: annotateInheritedFertigationProducts(events),
+    events: annotateInheritedFertigationProducts(attachJobTimesToEvents(events, jobs)),
     created,
     productError,
   };

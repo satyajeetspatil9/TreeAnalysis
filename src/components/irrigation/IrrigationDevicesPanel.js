@@ -37,21 +37,33 @@ import {
   scheduleTableHint,
 } from '../../utils/irrigationSchedule';
 
+const emptyForm = {
+  name: '',
+  device_code: '',
+  io_type: 'output',
+  kind: 'irrigation_motor',
+  zone_id: '',
+  is_active: true,
+  tank_capacity_liters: '',
+  fertilizer_flow_lph: '',
+  product_id: '',
+};
+
+function optionalNumber(value) {
+  if (value === '' || value == null) return null;
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 function IrrigationDevicesPanel({ farmId, zones, onChanged }) {
   const [devices, setDevices] = useState([]);
+  const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState(null);
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState(null);
-  const [form, setForm] = useState({
-    name: '',
-    device_code: '',
-    io_type: 'output',
-    kind: 'irrigation_motor',
-    zone_id: '',
-    is_active: true,
-  });
+  const [form, setForm] = useState(emptyForm);
 
   const takenCodes = useMemo(() => new Set(
     devices
@@ -69,11 +81,47 @@ function IrrigationDevicesPanel({ farmId, zones, onChanged }) {
   const load = useCallback(async () => {
     if (!farmId) return;
     setLoading(true);
-    const { data, error } = await supabase
-      .from('irrigation_devices')
-      .select('*')
-      .eq('farm_id', farmId)
-      .order('name');
+    const [{ data, error }, productsResult] = await Promise.all([
+      supabase
+        .from('irrigation_devices')
+        .select('*, products(name)')
+        .eq('farm_id', farmId)
+        .order('name'),
+      supabase
+        .from('products')
+        .select('id, name, unit')
+        .eq('active', true)
+        .eq('category', 'Fertilizer')
+        .order('name'),
+    ]);
+
+    setProducts(productsResult.data || []);
+
+    if (error && /product_id/.test(error.message || '')) {
+      const fallback = await supabase
+        .from('irrigation_devices')
+        .select('*')
+        .eq('farm_id', farmId)
+        .order('name');
+      if (fallback.error) {
+        setMessage({
+          type: isMissingScheduleTable(fallback.error) ? 'warning' : 'error',
+          text: isMissingScheduleTable(fallback.error)
+            ? 'Run migration 039_irrigation_schedule_control.sql in Supabase, then reload.'
+            : scheduleTableHint(fallback.error.message),
+        });
+        setDevices([]);
+      } else {
+        setDevices(fallback.data || []);
+        setMessage({
+          type: 'warning',
+          text: 'Run migration 059_fertigation_injector_specs.sql in Supabase so injector tank, flow, and product can be saved.',
+        });
+        if (onChanged) onChanged(fallback.data || []);
+      }
+      setLoading(false);
+      return;
+    }
 
     if (error) {
       setMessage({
@@ -101,12 +149,8 @@ function IrrigationDevicesPanel({ farmId, zones, onChanged }) {
     const used = new Set(devices.map((d) => String(d.device_code || '').toUpperCase()));
     setEditing(null);
     setForm({
-      name: '',
+      ...emptyForm,
       device_code: controllerPinOptions('output').find((pin) => !used.has(pin)) || '',
-      io_type: 'output',
-      kind: 'irrigation_motor',
-      zone_id: '',
-      is_active: true,
     });
     setOpen(true);
   };
@@ -114,12 +158,16 @@ function IrrigationDevicesPanel({ farmId, zones, onChanged }) {
   const openEdit = (device) => {
     setEditing(device);
     setForm({
+      ...emptyForm,
       name: device.name,
       device_code: device.device_code,
       io_type: device.io_type || ioTypeFromDeviceCode(device.device_code) || 'output',
       kind: device.kind,
       zone_id: device.zone_id || '',
       is_active: device.is_active !== false,
+      tank_capacity_liters: device.tank_capacity_liters != null ? String(device.tank_capacity_liters) : '',
+      fertilizer_flow_lph: device.fertilizer_flow_lph != null ? String(device.fertilizer_flow_lph) : '',
+      product_id: device.product_id != null ? String(device.product_id) : '',
     });
     setOpen(true);
   };
@@ -148,6 +196,7 @@ function IrrigationDevicesPanel({ farmId, zones, onChanged }) {
       return;
     }
     setSaving(true);
+    const isInjector = form.kind === 'fertigation';
     const payload = {
       farm_id: farmId,
       name: form.name.trim(),
@@ -156,6 +205,9 @@ function IrrigationDevicesPanel({ farmId, zones, onChanged }) {
       kind: form.kind,
       zone_id: form.kind === 'zone_valve' && form.zone_id ? Number(form.zone_id) : null,
       is_active: form.is_active,
+      tank_capacity_liters: isInjector ? optionalNumber(form.tank_capacity_liters) : null,
+      fertilizer_flow_lph: isInjector ? optionalNumber(form.fertilizer_flow_lph) : null,
+      product_id: isInjector && form.product_id ? Number(form.product_id) : null,
       updated_at: new Date().toISOString(),
     };
 
@@ -221,6 +273,9 @@ function IrrigationDevicesPanel({ farmId, zones, onChanged }) {
               <TableCell>Connected to</TableCell>
               <TableCell>Terminal</TableCell>
               <TableCell>Zone</TableCell>
+              <TableCell>Tank</TableCell>
+              <TableCell>Fertilizer flow</TableCell>
+              <TableCell>Product</TableCell>
               <TableCell>On</TableCell>
               <TableCell align="right">Actions</TableCell>
             </TableRow>
@@ -228,7 +283,7 @@ function IrrigationDevicesPanel({ farmId, zones, onChanged }) {
           <TableBody>
             {devices.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7}>
+                <TableCell colSpan={10}>
                   <Typography color="text.secondary">No devices yet.</Typography>
                 </TableCell>
               </TableRow>
@@ -244,6 +299,21 @@ function IrrigationDevicesPanel({ farmId, zones, onChanged }) {
                   <TableCell>{ioTypeLabel(device.io_type || ioTypeFromDeviceCode(device.device_code))}</TableCell>
                   <TableCell>{device.device_code || '—'}</TableCell>
                   <TableCell>{zone?.zone_code || '—'}</TableCell>
+                  <TableCell>
+                    {device.kind === 'fertigation' && device.tank_capacity_liters
+                      ? `${device.tank_capacity_liters} L`
+                      : '—'}
+                  </TableCell>
+                  <TableCell>
+                    {device.kind === 'fertigation' && device.fertilizer_flow_lph
+                      ? `${device.fertilizer_flow_lph} L/hr`
+                      : '—'}
+                  </TableCell>
+                  <TableCell>
+                    {device.kind === 'fertigation'
+                      ? (device.products?.name || products.find((p) => p.id === device.product_id)?.name || '—')
+                      : '—'}
+                  </TableCell>
                   <TableCell>
                     <Switch
                       size="small"
@@ -338,6 +408,54 @@ function IrrigationDevicesPanel({ farmId, zones, onChanged }) {
                 </FormHelperText>
               </FormControl>
             </Grid>
+            {form.kind === 'fertigation' && (
+              <>
+                <Grid item xs={12}>
+                  <FormControl fullWidth>
+                    <InputLabel>Product</InputLabel>
+                    <Select
+                      label="Product"
+                      value={form.product_id}
+                      onChange={(e) => setForm((f) => ({ ...f, product_id: e.target.value }))}
+                    >
+                      <MenuItem value="">None</MenuItem>
+                      {products.map((product) => (
+                        <MenuItem key={product.id} value={String(product.id)}>
+                          {product.name}{product.unit ? ` (${product.unit})` : ''}
+                        </MenuItem>
+                      ))}
+                    </Select>
+                    <FormHelperText>
+                      {products.length === 0
+                        ? 'Add a fertilizer under Farm Setting → Products first.'
+                        : 'Fertilizer loaded in this injector tank'}
+                    </FormHelperText>
+                  </FormControl>
+                </Grid>
+                <Grid item xs={12} sm={6}>
+                  <TextField
+                    fullWidth
+                    type="number"
+                    label="Tank capacity (L)"
+                    value={form.tank_capacity_liters}
+                    onChange={(e) => setForm((f) => ({ ...f, tank_capacity_liters: e.target.value }))}
+                    inputProps={{ min: 0, step: 'any' }}
+                    helperText="Injector stock tank volume"
+                  />
+                </Grid>
+                <Grid item xs={12} sm={6}>
+                  <TextField
+                    fullWidth
+                    type="number"
+                    label="Fertilizer flow (L/hr)"
+                    value={form.fertilizer_flow_lph}
+                    onChange={(e) => setForm((f) => ({ ...f, fertilizer_flow_lph: e.target.value }))}
+                    inputProps={{ min: 0, step: 'any' }}
+                    helperText="Solution injected into the drip line"
+                  />
+                </Grid>
+              </>
+            )}
             {form.kind === 'zone_valve' && (
               <Grid item xs={12}>
                 <FormControl fullWidth>

@@ -1,5 +1,5 @@
 import { formatNumber } from './formatters';
-import { fertigationJobNotesKey, kolkataDateKey, parseFertigationJobIdFromNotes } from './fertilizerEventMaintenance';
+import { fertigationJobNotesKey, kolkataDateKey, parseFertigationJobIdFromNotes, eventTimesFromJob, attachJobTimesToEvents } from './fertilizerEventMaintenance';
 
 /** Water (L) = zone flow (L/hr) × duration (hours) */
 export function calcIrrigationWaterLiters(flowRateLph, durationMinutes) {
@@ -224,6 +224,10 @@ export async function loadFarmIrrigationEvents(supabase, zoneIds) {
   return data || [];
 }
 
+function missingTimeColumns(error) {
+  return /started_at|ended_at/.test(error?.message || '');
+}
+
 /** Write missing irrigation_events for completed water jobs so Monitoring can list them. */
 export async function syncCompletedIrrigationJobs(supabase, { farmId, zoneIds }) {
   let events = await loadFarmIrrigationEvents(supabase, zoneIds);
@@ -238,7 +242,7 @@ export async function syncCompletedIrrigationJobs(supabase, { farmId, zoneIds })
     .in('zone_id', zoneIds)
     .order('completed_at', { ascending: false })
     .limit(100);
-  if (jobsError) return { events, created: 0 };
+  if (jobsError) return { events: attachJobTimesToEvents(events, []), created: 0 };
 
   const notedJobIds = new Set();
   events.forEach((event) => {
@@ -254,21 +258,31 @@ export async function syncCompletedIrrigationJobs(supabase, { farmId, zoneIds })
     const eventDate = kolkataDateKey(job.completed_at || job.started_at || job.updated_at);
     if (!eventDate || !job.zone_id) continue;
 
+    const times = eventTimesFromJob(job, job.updated_at);
     const payload = {
       zone_id: job.zone_id,
       event_date: eventDate,
       duration_minutes: Math.max(1, Math.round(duration || 1)),
       water_liters: liters > 0 ? liters : null,
       notes: fertigationJobNotesKey(job),
+      started_at: times.started_at,
+      ended_at: times.ended_at,
     };
     let { error: insertError } = await supabase.from('irrigation_events').insert(payload);
     if (insertError && /notes/.test(insertError.message || '')) {
       delete payload.notes;
       ({ error: insertError } = await supabase.from('irrigation_events').insert(payload));
     }
+    if (insertError && missingTimeColumns(insertError)) {
+      delete payload.started_at;
+      delete payload.ended_at;
+      ({ error: insertError } = await supabase.from('irrigation_events').insert(payload));
+    }
     if (!insertError) created += 1;
   }
 
-  if (!created) return { events, created: 0 };
-  return { events: await loadFarmIrrigationEvents(supabase, zoneIds), created };
+  if (created) {
+    events = await loadFarmIrrigationEvents(supabase, zoneIds);
+  }
+  return { events: attachJobTimesToEvents(events, jobs), created };
 }

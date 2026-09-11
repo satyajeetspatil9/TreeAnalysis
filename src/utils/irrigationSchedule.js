@@ -77,6 +77,9 @@ export function scheduleTableHint(message) {
   if (/irrigation_events.*notes/.test(message) || /column .*notes.*irrigation_events/.test(message)) {
     return `${message} Run migration 044_irrigation_event_notes.sql in Supabase SQL Editor.`;
   }
+  if (/tank_capacity_liters/.test(message) || /fertilizer_flow_lph/.test(message) || /irrigation_devices.*product_id/.test(message)) {
+    return `${message} Run migration 059_fertigation_injector_specs.sql in Supabase SQL Editor.`;
+  }
   if (/io_type/.test(message)) {
     return `${message} Run migration 042_irrigation_device_io.sql in Supabase SQL Editor.`;
   }

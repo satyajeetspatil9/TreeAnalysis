@@ -13,7 +13,7 @@ import {
 import { supabase } from '../../supabaseClient';
 import { useFarm } from '../../hooks/useFarm';
 import PageHeader from '../../components/common/PageHeader';
-import { formatDate, formatNumber } from '../../utils/formatters';
+import { formatDate, formatNumber, formatTime } from '../../utils/formatters';
 import { getProductStock, productStockLabel, validateFertilizerStock } from '../../utils/products';
 import {
   formatWaterLiters,
@@ -270,6 +270,8 @@ function FertigationPage() {
           <TableHead>
             <TableRow>
               <TableCell>Date</TableCell>
+              <TableCell>Start</TableCell>
+              <TableCell>End</TableCell>
               <TableCell>Zone</TableCell>
               <TableCell>Products</TableCell>
               <TableCell>Water</TableCell>
@@ -280,6 +282,8 @@ function FertigationPage() {
             {filteredEvents.map((event) => (
               <TableRow key={event.id}>
                 <TableCell>{formatDate(event.event_date)}</TableCell>
+                <TableCell>{formatTime(event.started_at)}</TableCell>
+                <TableCell>{formatTime(event.ended_at)}</TableCell>
                 <TableCell>{event.irrigation_zones?.zone_code || '—'}</TableCell>
                 <TableCell>{formatFertilizerProductLines(event.fertigation_products)}</TableCell>
                 <TableCell>{formatWaterLiters(resolveEventWaterLiters(event))}</TableCell>
@@ -303,7 +307,7 @@ function FertigationPage() {
               </TableRow>
             ))}
             {filteredEvents.length === 0 && (
-              <TableRow><TableCell colSpan={5}>No fertigation records yet.</TableCell></TableRow>
+              <TableRow><TableCell colSpan={7}>No fertigation records yet.</TableCell></TableRow>
             )}
           </TableBody>
         </Table>
