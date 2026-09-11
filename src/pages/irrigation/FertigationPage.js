@@ -270,6 +270,7 @@ function FertigationPage() {
           <TableHead>
             <TableRow>
               <TableCell>Date</TableCell>
+              <TableCell>Program</TableCell>
               <TableCell>Start</TableCell>
               <TableCell>End</TableCell>
               <TableCell>Zone</TableCell>
@@ -282,6 +283,7 @@ function FertigationPage() {
             {filteredEvents.map((event) => (
               <TableRow key={event.id}>
                 <TableCell>{formatDate(event.event_date)}</TableCell>
+                <TableCell>{event.program_name || '—'}</TableCell>
                 <TableCell>{formatTime(event.started_at)}</TableCell>
                 <TableCell>{formatTime(event.ended_at)}</TableCell>
                 <TableCell>{event.irrigation_zones?.zone_code || '—'}</TableCell>
@@ -307,7 +309,7 @@ function FertigationPage() {
               </TableRow>
             ))}
             {filteredEvents.length === 0 && (
-              <TableRow><TableCell colSpan={7}>No fertigation records yet.</TableCell></TableRow>
+              <TableRow><TableCell colSpan={8}>No fertigation records yet.</TableCell></TableRow>
             )}
           </TableBody>
         </Table>

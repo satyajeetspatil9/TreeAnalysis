@@ -2,7 +2,8 @@ export function formatFertilizerProductLines(rows, productKey = 'products') {
   return (rows || [])
     .map((row) => {
       const name = row[productKey]?.name || 'Product';
-      return `${name} ${row.quantity} ${row.unit || ''}`.trim();
+      const qty = row.quantity != null && row.quantity !== '' ? String(row.quantity) : '';
+      return `${name} ${qty} ${row.unit || ''}`.trim();
     })
     .join(' · ') || '—';
 }
@@ -42,15 +43,18 @@ export function attachJobTimesToEvents(events, jobs) {
   const byId = new Map((jobs || []).map((job) => [Number(job.id), job]));
   return (events || []).map((event) => {
     const jobId = parseFertigationJobIdFromNotes(event.notes);
-    const fromJob = jobId != null
-      ? eventTimesFromJob(byId.get(jobId))
-      : { started_at: null, ended_at: null };
+    const job = jobId != null ? byId.get(jobId) : null;
+    const fromJob = eventTimesFromJob(job);
     const started_at = event.started_at || fromJob.started_at || null;
     let ended_at = event.ended_at || fromJob.ended_at || null;
     if (!ended_at && started_at && Number(event.duration_minutes) > 0) {
       ended_at = new Date(new Date(started_at).getTime() + Number(event.duration_minutes) * 60000).toISOString();
     }
-    return { ...event, started_at, ended_at };
+    const programName = event.program_name
+      || job?.irrigation_programs?.name
+      || job?.program_name
+      || null;
+    return { ...event, started_at, ended_at, program_name: programName };
   });
 }
 
@@ -70,46 +74,113 @@ export function annotateInheritedFertigationProducts(events) {
   });
 }
 
+function injectorMixQuantity(device, durationMinutes) {
+  const flow = Number(device?.fertilizer_flow_lph);
+  const minutes = Number(durationMinutes);
+  if (flow > 0 && minutes > 0) {
+    return { quantity: Number(((flow * minutes) / 60).toFixed(3)), unit: device?.products?.unit || 'L' };
+  }
+  const tank = Number(device?.tank_capacity_liters);
+  if (tank > 0) {
+    return { quantity: tank, unit: device?.products?.unit || 'L' };
+  }
+  return { quantity: 1, unit: device?.products?.unit || null };
+}
+
+async function fetchInjectorProductRows(supabase, { programId, jobId, durationMinutes }) {
+  const rows = [];
+  const seen = new Set();
+  const takeDevice = (device) => {
+    const productId = Number(device?.product_id);
+    if (!productId || seen.has(productId)) return;
+    seen.add(productId);
+    const qty = injectorMixQuantity(device, durationMinutes);
+    rows.push({
+      product_id: productId,
+      quantity: qty.quantity,
+      unit: qty.unit,
+      products: device.products || null,
+    });
+  };
+
+  if (jobId) {
+    const { data, error } = await supabase
+      .from('irrigation_job_devices')
+      .select('irrigation_devices(product_id, fertilizer_flow_lph, tank_capacity_liters, products(name, unit))')
+      .eq('job_id', jobId);
+    if (!error) {
+      (data || []).forEach((row) => takeDevice(row.irrigation_devices));
+    }
+  }
+
+  if (programId && !rows.length) {
+    const { data, error } = await supabase
+      .from('irrigation_program_devices')
+      .select('irrigation_devices(product_id, fertilizer_flow_lph, tank_capacity_liters, products(name, unit))')
+      .eq('program_id', programId);
+    if (!error) {
+      (data || []).forEach((row) => takeDevice(row.irrigation_devices));
+    }
+  }
+
+  return rows;
+}
+
+export async function fetchFertigationMixRows(supabase, { programId, jobId, durationMinutes }) {
+  if (programId) {
+    const { data, error } = await supabase
+      .from('irrigation_program_products')
+      .select('product_id, quantity, unit, products(name)')
+      .eq('program_id', programId);
+    if (!error && data?.length) return { rows: data, error: null };
+    if (error && !/irrigation_program_products/.test(error.message || '')) {
+      return { rows: [], error };
+    }
+  }
+  const injectorRows = await fetchInjectorProductRows(supabase, { programId, jobId, durationMinutes });
+  return { rows: injectorRows, error: null };
+}
+
 export async function copyProgramProductsOntoEvent(supabase, {
   eventId,
   programId,
   jobId,
   existingEvents,
+  durationMinutes,
 }) {
-  if (!eventId || !programId) return { error: null, inserted: 0 };
+  if (!eventId || (!programId && !jobId)) return { error: null, inserted: 0, rows: [] };
 
   const alreadyOnJob = (existingEvents || []).some((event) => {
+    if (event.productsInherited) return false;
     if (parseFertigationJobIdFromNotes(event.notes) !== Number(jobId)) return false;
     return (event.fertigation_products || []).length > 0;
   });
-  if (alreadyOnJob) return { error: null, inserted: 0 };
+  if (alreadyOnJob) return { error: null, inserted: 0, rows: [] };
 
   const { data: existing } = await supabase
     .from('fertigation_products')
     .select('id')
     .eq('fertigation_event_id', eventId)
     .limit(1);
-  if (existing?.length) return { error: null, inserted: 0 };
+  if (existing?.length) return { error: null, inserted: 0, rows: [] };
 
-  const { data: rows, error } = await supabase
-    .from('irrigation_program_products')
-    .select('product_id, quantity, unit')
-    .eq('program_id', programId);
-  if (error) {
-    if (/irrigation_program_products/.test(error.message || '')) return { error: null, inserted: 0 };
-    return { error, inserted: 0 };
-  }
-  if (!rows?.length) return { error: null, inserted: 0 };
+  const mix = await fetchFertigationMixRows(supabase, { programId, jobId, durationMinutes });
+  if (mix.error) return { error: mix.error, inserted: 0, rows: mix.rows || [] };
+  if (!mix.rows?.length) return { error: null, inserted: 0, rows: [] };
 
   const { error: insertError } = await supabase.from('fertigation_products').insert(
-    rows.map((row) => ({
+    mix.rows.map((row) => ({
       fertigation_event_id: eventId,
       product_id: row.product_id,
       quantity: row.quantity,
       unit: row.unit || null,
     })),
   );
-  return { error: insertError, inserted: insertError ? 0 : rows.length };
+  return {
+    error: insertError || null,
+    inserted: insertError ? 0 : mix.rows.length,
+    rows: mix.rows,
+  };
 }
 
 export async function addProductsToFertigationEvent(supabase, eventId, productRows) {
@@ -186,27 +257,41 @@ export async function syncCompletedFertigationJobs(supabase, { farmId, zoneIds }
   let events = await loadFarmFertigationEvents(supabase, zoneIds);
   if (!farmId || !zoneIds.length) return { events, created: 0 };
 
-  const { data: jobs, error: jobsError } = await supabase
+  const zoneIdSet = new Set((zoneIds || []).map((id) => Number(id)));
+  const jobSelect = 'id, zone_id, program_id, job_type, status, completed_at, started_at, updated_at, duration_elapsed_minutes, on_duration_minutes, liters_delivered, current_step_seq, irrigation_programs(name, program_type)';
+  let { data: jobs, error: jobsError } = await supabase
     .from('irrigation_jobs')
-    .select('id, zone_id, program_id, status, completed_at, started_at, updated_at, duration_elapsed_minutes, on_duration_minutes, liters_delivered, current_step_seq')
+    .select(jobSelect)
     .eq('farm_id', farmId)
-    .eq('job_type', 'fertigation')
     .eq('status', 'completed')
-    .in('zone_id', zoneIds)
     .order('completed_at', { ascending: false })
-    .limit(100);
+    .limit(200);
+  if (jobsError && /irrigation_programs/.test(jobsError.message || '')) {
+    ({ data: jobs, error: jobsError } = await supabase
+      .from('irrigation_jobs')
+      .select('id, zone_id, program_id, job_type, status, completed_at, started_at, updated_at, duration_elapsed_minutes, on_duration_minutes, liters_delivered, current_step_seq')
+      .eq('farm_id', farmId)
+      .eq('status', 'completed')
+      .order('completed_at', { ascending: false })
+      .limit(200));
+  }
   if (jobsError) return { events: attachJobTimesToEvents(events, []), created: 0 };
 
-  const notedJobIds = new Set();
-  events.forEach((event) => {
-    const jobId = parseFertigationJobIdFromNotes(event.notes);
-    if (jobId != null) notedJobIds.add(jobId);
+  const fertigationJobs = (jobs || []).filter((job) => {
+    if (job.job_type !== 'fertigation' && job.irrigation_programs?.program_type !== 'fertigation') {
+      return false;
+    }
+    if (job.zone_id && !zoneIdSet.has(Number(job.zone_id))) return false;
+    return true;
   });
+
+  const notedKeys = new Set((events || []).map((event) => event.notes).filter(Boolean));
 
   let created = 0;
   let productError = null;
-  for (const job of jobs || []) {
-    if (notedJobIds.has(Number(job.id))) continue;
+  for (const job of fertigationJobs) {
+    const notes = fertigationJobNotesKey(job);
+    if (notedKeys.has(notes)) continue;
     const duration = Number(job.duration_elapsed_minutes) || Number(job.on_duration_minutes) || 0;
     const liters = Number(job.liters_delivered) || 0;
     const eventDate = kolkataDateKey(job.completed_at || job.started_at || job.updated_at);
@@ -218,7 +303,7 @@ export async function syncCompletedFertigationJobs(supabase, { farmId, zoneIds }
       event_date: eventDate,
       duration_minutes: Math.max(1, Math.round(duration || 1)),
       water_liters: liters > 0 ? liters : null,
-      notes: fertigationJobNotesKey(job),
+      notes,
       started_at: times.started_at,
       ended_at: times.ended_at,
     };
@@ -246,12 +331,14 @@ export async function syncCompletedFertigationJobs(supabase, { farmId, zoneIds }
     }
     if (!insertError) {
       created += 1;
-      if (inserted?.id && job.program_id) {
+      notedKeys.add(notes);
+      if (inserted?.id) {
         const copied = await copyProgramProductsOntoEvent(supabase, {
           eventId: inserted.id,
           programId: job.program_id,
           jobId: job.id,
           existingEvents: events,
+          durationMinutes: payload.duration_minutes,
         });
         if (copied.error) productError = copied.error;
       }
@@ -263,26 +350,50 @@ export async function syncCompletedFertigationJobs(supabase, { farmId, zoneIds }
   }
 
   let productsAdded = 0;
-  for (const job of jobs || []) {
-    if (!job.program_id) continue;
-    const event = events.find((row) => parseFertigationJobIdFromNotes(row.notes) === Number(job.id));
+  for (const job of fertigationJobs) {
+    const event = events.find((row) => row.notes === fertigationJobNotesKey(job))
+      || events.find((row) => parseFertigationJobIdFromNotes(row.notes) === Number(job.id));
     if (!event) continue;
+    const duration = Number(event.duration_minutes)
+      || Number(job.duration_elapsed_minutes)
+      || Number(job.on_duration_minutes)
+      || 0;
     const copied = await copyProgramProductsOntoEvent(supabase, {
       eventId: event.id,
       programId: job.program_id,
       jobId: job.id,
       existingEvents: events,
+      durationMinutes: duration,
     });
     if (copied.error) productError = copied.error;
     else productsAdded += copied.inserted;
+    if (!(event.fertigation_products || []).length && copied.rows?.length) {
+      event.fertigation_products = copied.rows;
+    }
   }
 
   if (productsAdded) {
     events = await loadFarmFertigationEvents(supabase, zoneIds);
   }
 
+  events = annotateInheritedFertigationProducts(attachJobTimesToEvents(events, fertigationJobs));
+  for (const event of events) {
+    if ((event.fertigation_products || []).length) continue;
+    const job = fertigationJobs.find((row) => (
+      event.notes === fertigationJobNotesKey(row)
+      || parseFertigationJobIdFromNotes(event.notes) === Number(row.id)
+    ));
+    if (!job) continue;
+    const mix = await fetchFertigationMixRows(supabase, {
+      programId: job.program_id,
+      jobId: job.id,
+      durationMinutes: event.duration_minutes,
+    });
+    if (mix.rows?.length) event.fertigation_products = mix.rows;
+  }
+
   return {
-    events: annotateInheritedFertigationProducts(attachJobTimesToEvents(events, jobs)),
+    events,
     created,
     productError,
   };

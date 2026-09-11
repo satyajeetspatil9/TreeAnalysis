@@ -708,10 +708,15 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
     // A job resuming after a pause may already be finished, so completion is
     // checked before the start path rather than only while running.
     const hasRun = Boolean(job.started_at) || elapsed > 0 || delivered > 0;
+    const program = job.program_id
+      ? (programs || []).find((p) => Number(p.id) === Number(job.program_id))
+      : undefined;
+    const isFertigationJob = job.job_type === 'fertigation'
+      || program?.program_type === 'fertigation';
 
     if (hasRun && (hitLiters || hitDuration || hitCap)) {
       const reason = hitLiters ? 'target_liters' : (hitDuration ? 'duration_done' : 'max_duration');
-      if (job.job_type === 'fertigation') {
+      if (isFertigationJob) {
         await recordFertigationEvent(supabase, job, zone, now, elapsed);
       } else {
         await recordWaterIrrigationEvent(supabase, job, zone, now, elapsed);
@@ -730,7 +735,7 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
           liters_delivered: 0,
           liters_baseline: null,
           duration_elapsed_minutes: 0,
-          ...stepFieldsFor(next, job.job_type === 'fertigation', nextZone),
+          ...stepFieldsFor(next, isFertigationJob, nextZone),
         });
         actions.push(`advanced_job:${job.id}:seq:${next.seq}:${reason}`);
       } else {
@@ -743,9 +748,6 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
     if (job.status === 'running') continue;
     if (job.status === 'paused_manual') continue;
 
-    const program = job.program_id
-      ? (programs || []).find((p) => Number(p.id) === Number(job.program_id))
-      : undefined;
     if (programSkipsIfRain(program) && await raining()) {
       patchJob(job, {
         status: 'cancelled',
@@ -1039,7 +1041,6 @@ async function copyProgramProductsOntoFertigationEvent(
   job: Job,
 ) {
   const programId = job.program_id != null ? Number(job.program_id) : null;
-  if (!programId) return;
 
   const { data: siblingEvents } = await supabase
     .from('fertigation_events')
@@ -1048,14 +1049,56 @@ async function copyProgramProductsOntoFertigationEvent(
   const already = (siblingEvents || []).some((row) => (row.fertigation_products || []).length);
   if (already) return;
 
-  const { data: mix, error } = await supabase
-    .from('irrigation_program_products')
-    .select('product_id, quantity, unit')
-    .eq('program_id', programId);
-  if (error || !mix?.length) return;
+  const { data: mix, error } = programId
+    ? await supabase
+      .from('irrigation_program_products')
+      .select('product_id, quantity, unit')
+      .eq('program_id', programId)
+    : { data: [], error: null };
+
+  let rows = !error && mix?.length ? mix : [];
+  if (!rows.length) {
+    const extraDevices: { irrigation_devices?: unknown }[] = [];
+    if (programId) {
+      const { data: programDevices } = await supabase
+        .from('irrigation_program_devices')
+        .select('irrigation_devices(product_id, fertilizer_flow_lph, tank_capacity_liters, products(unit))')
+        .eq('program_id', programId);
+      extraDevices.push(...(programDevices || []));
+    }
+    const { data: jobDevices } = await supabase
+      .from('irrigation_job_devices')
+      .select('irrigation_devices(product_id, fertilizer_flow_lph, tank_capacity_liters, products(unit))')
+      .eq('job_id', job.id);
+    extraDevices.push(...(jobDevices || []));
+    const seen = new Set<number>();
+    const duration = Number(job.duration_elapsed_minutes) || Number(job.on_duration_minutes) || 0;
+    for (const row of extraDevices) {
+      const device = row.irrigation_devices as {
+        product_id?: number;
+        fertilizer_flow_lph?: number;
+        tank_capacity_liters?: number;
+        products?: { unit?: string };
+      } | null;
+      const productId = Number(device?.product_id);
+      if (!productId || seen.has(productId)) continue;
+      seen.add(productId);
+      const flow = Number(device?.fertilizer_flow_lph);
+      const tank = Number(device?.tank_capacity_liters);
+      const quantity = flow > 0 && duration > 0
+        ? Number(((flow * duration) / 60).toFixed(3))
+        : (tank > 0 ? tank : 1);
+      rows.push({
+        product_id: productId,
+        quantity,
+        unit: device?.products?.unit || (flow > 0 || tank > 0 ? 'L' : null),
+      });
+    }
+  }
+  if (!rows.length) return;
 
   const { error: insertError } = await supabase.from('fertigation_products').insert(
-    mix.map((row) => ({
+    rows.map((row) => ({
       fertigation_event_id: eventId,
       product_id: row.product_id,
       quantity: row.quantity,
