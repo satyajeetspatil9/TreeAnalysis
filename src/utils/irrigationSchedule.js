@@ -713,6 +713,23 @@ export function jobElapsedMinutes(job, now = new Date()) {
   return banked + Math.max(0, since);
 }
 
+/** Stop today's waiting job so a program edit can be picked up on the next scheduler pass. */
+export async function cancelUnusedProgramJobs(farmId, programId) {
+  if (!farmId || !programId) return { error: null };
+  const now = new Date().toISOString();
+  const { error } = await supabase
+    .from('irrigation_jobs')
+    .update({
+      status: 'cancelled',
+      completed_at: now,
+      updated_at: now,
+    })
+    .eq('farm_id', farmId)
+    .eq('program_id', programId)
+    .eq('status', 'planned');
+  return { error };
+}
+
 /** Stop hardware and hold the job until the operator resumes it. */
 export async function pauseIrrigationJob(farmId, job) {
   if (!job?.id) return { error: { message: 'No irrigation job to pause.' } };

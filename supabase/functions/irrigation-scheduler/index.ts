@@ -8,8 +8,6 @@ const corsHeaders = {
 
 const FARM_TZ = 'Asia/Kolkata';
 
-/** A program fires only within this many minutes of a listed start time. */
-const START_GRACE_MINUTES = 15;
 /** Queue rows the controller never picks up are dropped after this long. */
 const COMMAND_TTL_MINUTES = 30;
 /** Liter targets with no metering get a run-time cap of estimate x this. */
@@ -545,7 +543,8 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
 
       const dueMin = originalStartMinutes(program)
         .map((original) => original + shiftMinutes)
-        .find((m) => m < 24 * 60 && nowMin >= m && nowMin < m + START_GRACE_MINUTES);
+        .filter((m) => Number.isFinite(m) && m < 24 * 60 && nowMin >= m)
+        .sort((a, b) => a - b)[0];
       if (dueMin == null) continue;
 
       if (programSkipsIfRain(program) && await raining()) {
@@ -648,6 +647,53 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
     || null;
 
   for (const job of sortedOpen) {
+    const program = job.program_id
+      ? (programs || []).find((p) => Number(p.id) === Number(job.program_id))
+      : undefined;
+    const isFertigationJob = job.job_type === 'fertigation'
+      || program?.program_type === 'fertigation';
+
+    // Saving a program does not rewrite today's waiting job. Pull zone, minutes,
+    // and injector/motor links from the current program before we try to start.
+    if (job.status === 'planned' && !job.started_at && job.program_id) {
+      const programSteps = activeStepsOf(steps || [], Number(job.program_id));
+      const current = programSteps.find((s) => Number(s.seq) === Number(job.current_step_seq))
+        || programSteps[0];
+      if (current) {
+        const currentZone = current.zone_id ? zonesById.get(Number(current.zone_id)) : undefined;
+        patchJob(job, stepFieldsFor(current, isFertigationJob, currentZone));
+      }
+
+      const wantedIds = [
+        ...((program?.motor_device_ids as number[]) || []),
+        ...(programDevices || [])
+          .filter((d) => Number(d.program_id) === Number(job.program_id))
+          .map((d) => Number(d.device_id)),
+      ].filter((id) => Number.isFinite(id) && id > 0 && devicesById.has(Number(id)));
+      const have = new Set(
+        (jobDevices || [])
+          .filter((jd) => Number(jd.job_id) === Number(job.id))
+          .map((jd) => Number(jd.device_id)),
+      );
+      const links = [...new Set(wantedIds)]
+        .filter((id) => !have.has(Number(id)))
+        .map((id) => {
+          const device = devicesById.get(Number(id));
+          return {
+            job_id: job.id,
+            device_id: Number(id),
+            role: device?.kind === 'fertigation'
+              ? 'injector'
+              : (String(device?.kind || '').includes('motor') ? 'motor' : 'other'),
+          };
+        });
+      if (links.length) {
+        await supabase.from('irrigation_job_devices').insert(links);
+        (jobDevices || []).push(...links);
+        actions.push(`relinked_devices:${job.id}:${links.length}`);
+      }
+    }
+
     const codes = devicesForJob(job);
     const zone = job.zone_id ? zonesById.get(Number(job.zone_id)) : undefined;
     const status = job.zone_id ? statusByZone.get(Number(job.zone_id)) : undefined;
@@ -708,11 +754,6 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
     // A job resuming after a pause may already be finished, so completion is
     // checked before the start path rather than only while running.
     const hasRun = Boolean(job.started_at) || elapsed > 0 || delivered > 0;
-    const program = job.program_id
-      ? (programs || []).find((p) => Number(p.id) === Number(job.program_id))
-      : undefined;
-    const isFertigationJob = job.job_type === 'fertigation'
-      || program?.program_type === 'fertigation';
 
     if (hasRun && (hitLiters || hitDuration || hitCap)) {
       const reason = hitLiters ? 'target_liters' : (hitDuration ? 'duration_done' : 'max_duration');

@@ -49,6 +49,7 @@ import {
   scheduleTableHint,
   timeToInputValue,
   updateIrrigationJob,
+  cancelUnusedProgramJobs,
 } from '../../utils/irrigationSchedule';
 import { emptyFertigationLineItem, formatFertilizerProductLines } from '../../utils/fertilizerEventMaintenance';
 
@@ -437,9 +438,18 @@ function IrrigationProgramsPanel({
       }
     }
 
+    if (editing && programId) {
+      await cancelUnusedProgramJobs(farmId, programId);
+    }
+
     setSaving(false);
     setDialogOpen(false);
-    setMessage({ type: 'success', text: editing ? 'Program updated.' : 'Program created.' });
+    setMessage({
+      type: 'success',
+      text: editing
+        ? 'Program updated. If it was waiting today, the scheduler will start it on the next minute.'
+        : 'Program created.',
+    });
     await load();
   };
 
