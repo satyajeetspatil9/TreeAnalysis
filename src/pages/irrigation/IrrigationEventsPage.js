@@ -188,7 +188,7 @@ function IrrigationEventsPage() {
       <PageHeader
         section="Monitoring"
         title="Irrigation"
-        subtitle="Water applied from programs and logged events. Completed water programs appear here automatically."
+        subtitle="Water-only runs. Fertigation programs are listed under Monitoring → Fertigation, not here."
       />
 
       {message && <Alert severity={message.type} sx={{ mb: 2 }} onClose={() => setMessage(null)}>{message.text}</Alert>}
@@ -278,6 +278,7 @@ function IrrigationEventsPage() {
           <TableHead>
             <TableRow>
               <TableCell>Zone</TableCell>
+              <TableCell>Program</TableCell>
               <TableCell>Date</TableCell>
               <TableCell>Start</TableCell>
               <TableCell>End</TableCell>
@@ -290,12 +291,13 @@ function IrrigationEventsPage() {
           <TableBody>
             {filteredEvents.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} align="center">No irrigation events yet.</TableCell>
+                <TableCell colSpan={9} align="center">No irrigation events yet.</TableCell>
               </TableRow>
             ) : (
               filteredEvents.map((e) => (
                 <TableRow key={e.id} hover>
                   <TableCell>{e.irrigation_zones?.zone_code}</TableCell>
+                  <TableCell>{e.program_name || (e.notes?.startsWith('irrigation_job:') ? 'Water program' : 'Logged')}</TableCell>
                   <TableCell>{formatDate(e.event_date)}</TableCell>
                   <TableCell>{formatTime(e.started_at)}</TableCell>
                   <TableCell>{formatTime(e.ended_at)}</TableCell>

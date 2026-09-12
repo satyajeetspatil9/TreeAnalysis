@@ -56,6 +56,7 @@ import {
   statusTableHint,
   zoneTelemetryAt,
 } from '../../utils/irrigationStatus';
+import { isWaterMonitoringJob } from '../../utils/irrigation';
 import {
   OPEN_JOB_STATUSES,
   buildCommandQueueSampleJson,
@@ -207,7 +208,7 @@ function IrrigationDashboardPage() {
 
     const [
       { data: queueRows },
-      { data: jobRows },
+      jobsResult,
       { data: scheduleRows },
       { power: powerRow },
     ] = await Promise.all([
@@ -220,7 +221,7 @@ function IrrigationDashboardPage() {
         .limit(50),
       supabase
         .from('irrigation_jobs')
-        .select('id, zone_id, job_type, program_id, status, started_at, duration_elapsed_minutes')
+        .select('id, zone_id, job_type, program_id, status, started_at, duration_elapsed_minutes, irrigation_programs(name, program_type)')
         .eq('farm_id', farm.id)
         .in('job_type', ['water', 'fertigation', 'manual'])
         .in('status', OPEN_JOB_STATUSES),
@@ -231,6 +232,16 @@ function IrrigationDashboardPage() {
         .eq('enabled', true),
       fetchPowerStatus(farm.id),
     ]);
+    let jobRows = jobsResult.data;
+    if (jobsResult.error && /irrigation_programs/.test(jobsResult.error.message || '')) {
+      const fallbackJobs = await supabase
+        .from('irrigation_jobs')
+        .select('id, zone_id, job_type, program_id, status, started_at, duration_elapsed_minutes')
+        .eq('farm_id', farm.id)
+        .in('job_type', ['water', 'fertigation', 'manual'])
+        .in('status', OPEN_JOB_STATUSES);
+      jobRows = fallbackJobs.data;
+    }
     setQueueCommands(queueRows || []);
     setProgramJobs(jobRows || []);
     setPower(powerRow);
@@ -354,6 +365,14 @@ function IrrigationDashboardPage() {
       : null),
     [rows, runningJob],
   );
+  const liveZone = runningJobZone || activeZone;
+  const isLive = Boolean(runningJob || activeZone);
+  const isFertigating = Boolean(runningJob && !isWaterMonitoringJob(runningJob));
+  const liveStartedAt = activeZone?.status?.started_at || runningJob?.started_at || null;
+  const liveHeadline = !isLive
+    ? 'No watering'
+    : (isFertigating ? 'Fertigating now' : 'Watering now');
+  const liveZoneCode = liveZone?.zone?.zone_code || null;
   const controlRow = useMemo(
     () => rows.find((row) => String(row.zone.id) === String(controlZoneId)) || rows[0] || null,
     [rows, controlZoneId],
@@ -510,10 +529,10 @@ function IrrigationDashboardPage() {
                 p: { xs: 2, sm: 3 },
                 mb: 3,
                 border: '2px solid',
-                borderColor: activeZone ? theme.palette.info.main : alpha(theme.palette.success.main, 0.5),
+                borderColor: isLive ? theme.palette.info.main : alpha(theme.palette.success.main, 0.5),
                 borderLeftWidth: 10,
-                borderLeftColor: activeZone ? theme.palette.info.dark : theme.palette.success.main,
-                bgcolor: activeZone
+                borderLeftColor: isLive ? theme.palette.info.dark : theme.palette.success.main,
+                bgcolor: isLive
                   ? alpha(theme.palette.info.main, 0.12)
                   : alpha(theme.palette.success.main, 0.08),
               })}
@@ -524,22 +543,29 @@ function IrrigationDashboardPage() {
                   <Typography variant="overline" sx={{ fontWeight: 800, letterSpacing: 1 }}>
                     Right now
                   </Typography>
-                  {activeZone ? (
+                  {isLive ? (
                     <>
                       <Typography variant="h4" fontWeight={800} sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
                         <WaterDropIcon color="info" fontSize="large" />
-                        Watering now
+                        {liveHeadline}
                       </Typography>
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1, flexWrap: 'wrap' }}>
                         <Chip
                           color="info"
-                          label={`Running zone: ${activeZone.zone.zone_code}`}
+                          label={liveZoneCode ? `Running zone: ${liveZoneCode}` : 'Program running'}
                           sx={{ fontWeight: 800, fontSize: '1rem', height: 36 }}
                         />
-                        {activeZone.zone.description && (
+                        {liveZone?.zone?.description && (
                           <Typography variant="body1" color="text.secondary">
-                            {activeZone.zone.description}
+                            {liveZone.zone.description}
                           </Typography>
+                        )}
+                        {runningJob?.irrigation_programs?.name && (
+                          <Chip
+                            variant="outlined"
+                            label={runningJob.irrigation_programs.name}
+                            sx={{ fontWeight: 700 }}
+                          />
                         )}
                       </Box>
                       {activeZones.length > 1 && (
@@ -578,33 +604,29 @@ function IrrigationDashboardPage() {
 
               <Typography variant="subtitle2" fontWeight={800} sx={{ mt: 3, mb: 1 }}>
                 Live readings
-                {activeZone ? ` · ${activeZone.zone.zone_code}` : ''}
+                {liveZoneCode ? ` · ${liveZoneCode}` : ''}
               </Typography>
               <Grid container spacing={1.5}>
                 <Grid item xs={6} sm={4} md={3}>
                   <MetricTile
                     label="Running zone"
-                    value={activeZone ? activeZone.zone.zone_code : 'None'}
-                    emphasize={Boolean(activeZone)}
+                    value={liveZoneCode || 'None'}
+                    emphasize={isLive}
                   />
                 </Grid>
                 <Grid item xs={6} sm={4} md={3}>
                   <MetricTile
                     label="Running for"
-                    value={activeZone
-                      ? formatIrrigationDurationLong(activeZone.status?.started_at, nowMs)
-                      : (runningJob?.started_at
-                        ? formatIrrigationDurationLong(runningJob.started_at, nowMs)
-                        : '—')}
-                    emphasize={Boolean(activeZone || runningJob)}
+                    value={isLive && liveStartedAt
+                      ? formatIrrigationDurationLong(liveStartedAt, nowMs)
+                      : '—'}
+                    emphasize={isLive}
                   />
                 </Grid>
                 <Grid item xs={6} sm={4} md={3}>
                   <MetricTile
                     label="Started"
-                    value={activeZone
-                      ? formatDateTime(activeZone.status?.started_at)
-                      : formatDateTime(runningJob?.started_at)}
+                    value={isLive ? formatDateTime(liveStartedAt) : '—'}
                   />
                 </Grid>
                 <Grid item xs={6} sm={4} md={3}>
@@ -702,10 +724,16 @@ function IrrigationDashboardPage() {
                   offLabel="Pump stop off"
                   color="error"
                 />
-                {activeZone && (
-                  <Chip color="info" variant="outlined" label={`Status: watering ${activeZone.zone.zone_code}`} />
+                {isLive && (
+                  <Chip
+                    color="info"
+                    variant="outlined"
+                    label={liveZoneCode
+                      ? `Status: ${isFertigating ? 'fertigating' : 'watering'} ${liveZoneCode}`
+                      : `Status: ${isFertigating ? 'fertigating' : 'watering'}`}
+                  />
                 )}
-                {!activeZone && (
+                {!isLive && (
                   <Chip color="success" variant="outlined" label="Status: idle" />
                 )}
               </Box>
