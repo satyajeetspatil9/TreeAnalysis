@@ -730,6 +730,185 @@ export async function cancelUnusedProgramJobs(farmId, programId) {
   return { error };
 }
 
+function capMinutesForStep(step, zone) {
+  const explicit = Number(step?.on_duration_minutes);
+  if (Number.isFinite(explicit) && explicit > 0) return Math.round(explicit);
+  const liters = Number(step?.target_liters);
+  const flow = zone?.flow_rate_lph != null ? Number(zone.flow_rate_lph) : null;
+  if (liters > 0 && flow && flow > 0) {
+    return Math.max(1, Math.ceil((liters / flow) * 60 * 1.5));
+  }
+  return null;
+}
+
+/**
+ * If this program is running, stop it, apply the saved steps/devices to the
+ * same job, and start only that job again. Other programs stay queued.
+ */
+export async function applySavedProgramToRunningJob(farmId, programId) {
+  if (!farmId || !programId) return { applied: false, error: null };
+
+  const { data: runningRows, error: jobError } = await supabase
+    .from('irrigation_jobs')
+    .select('*')
+    .eq('farm_id', farmId)
+    .eq('program_id', programId)
+    .eq('status', 'running')
+    .order('id', { ascending: false })
+    .limit(1);
+  if (jobError) return { applied: false, error: jobError };
+
+  const job = (runningRows || [])[0];
+  if (!job) return { applied: false, error: null };
+
+  const now = new Date();
+  const nowIso = now.toISOString();
+
+  const oldCodes = await fetchJobTerminalCodes(farmId, job);
+  if (oldCodes.length) {
+    await enqueueIrrigationCommand({
+      farmId,
+      deviceCodes: oldCodes,
+      action: 'stop',
+      jobId: job.id,
+      zoneId: job.zone_id,
+      payload: { reason: 'program_edited' },
+    });
+  }
+  if (job.zone_id) {
+    await supabase.from('irrigation_zone_status').update({
+      pending_command: 'stop',
+      pending_command_at: nowIso,
+      updated_at: nowIso,
+    }).eq('zone_id', job.zone_id);
+  }
+
+  const [
+    { data: program },
+    { data: steps },
+    { data: programDevices },
+  ] = await Promise.all([
+    supabase.from('irrigation_programs').select('*').eq('id', programId).maybeSingle(),
+    supabase
+      .from('irrigation_program_steps')
+      .select('*')
+      .eq('program_id', programId)
+      .order('seq', { ascending: true }),
+    supabase.from('irrigation_program_devices').select('device_id, role').eq('program_id', programId),
+  ]);
+
+  const firstStep = (steps || []).find((step) => step.is_active !== false);
+  if (!firstStep?.zone_id) {
+    return { applied: false, error: { message: 'Saved program has no active zone step to restart.' } };
+  }
+
+  const isFertigation = program?.program_type === 'fertigation' || job.job_type === 'fertigation';
+  const { data: zone } = await supabase
+    .from('irrigation_zones')
+    .select('id, flow_rate_lph')
+    .eq('id', firstStep.zone_id)
+    .maybeSingle();
+
+  const cap = capMinutesForStep(firstStep, zone);
+  const duration = Number(firstStep.on_duration_minutes);
+  const patch = {
+    program_step_id: firstStep.id ?? job.program_step_id ?? null,
+    zone_id: Number(firstStep.zone_id),
+    current_step_seq: Number(firstStep.seq) || 0,
+    target_liters: isFertigation
+      ? null
+      : (firstStep.target_liters != null ? Number(firstStep.target_liters) : null),
+    on_duration_minutes: isFertigation && Number.isFinite(duration) && duration > 0
+      ? Math.round(duration)
+      : null,
+    max_duration_minutes: cap,
+    status: 'running',
+    started_at: nowIso,
+    completed_at: null,
+    liters_delivered: 0,
+    liters_baseline: null,
+    duration_elapsed_minutes: 0,
+    updated_at: nowIso,
+  };
+
+  let { error: patchError } = await supabase.from('irrigation_jobs').update(patch).eq('id', job.id);
+  if (patchError && /program_step_id/.test(patchError.message || '')) {
+    delete patch.program_step_id;
+    ({ error: patchError } = await supabase.from('irrigation_jobs').update(patch).eq('id', job.id));
+  }
+  if (patchError) return { applied: false, error: patchError };
+
+  await supabase.from('irrigation_job_devices').delete().eq('job_id', job.id);
+  const wantedIds = [
+    ...((program?.motor_device_ids || []).map((id) => Number(id))),
+    ...((programDevices || []).map((row) => Number(row.device_id))),
+  ].filter((id) => Number.isFinite(id) && id > 0);
+
+  if (wantedIds.length) {
+    const { data: devices } = await supabase
+      .from('irrigation_devices')
+      .select('id, kind')
+      .in('id', [...new Set(wantedIds)]);
+    const deviceById = new Map((devices || []).map((d) => [Number(d.id), d]));
+    const links = [...new Set(wantedIds)]
+      .filter((id) => deviceById.has(id))
+      .map((id) => {
+        const device = deviceById.get(id);
+        return {
+          job_id: job.id,
+          device_id: id,
+          role: device?.kind === 'fertigation'
+            ? 'injector'
+            : (String(device?.kind || '').includes('motor') ? 'motor' : 'other'),
+        };
+      });
+    if (links.length) {
+      await supabase.from('irrigation_job_devices').insert(links);
+    }
+  }
+
+  const updatedJob = { ...job, ...patch, program_id: programId };
+  await pauseOpenIrrigationJobs(farmId, { exceptJobId: job.id, reason: 'program_edited' });
+
+  const startCodes = await fetchJobTerminalCodes(farmId, updatedJob);
+  if (!startCodes.length) {
+    return {
+      applied: false,
+      error: { message: 'Link a motor and zone valve terminal under Devices, then save again.' },
+    };
+  }
+
+  const valveCode = await fetchZoneValveDeviceCode(farmId, updatedJob.zone_id);
+  const liters = updatedJob.target_liters != null ? Number(updatedJob.target_liters) : null;
+  await enqueueIrrigationCommand({
+    farmId,
+    deviceCodes: startCodes,
+    action: 'start',
+    jobId: job.id,
+    zoneId: updatedJob.zone_id,
+    untilFor: (code) => (
+      code === valveCode && liters != null && liters > 0
+        ? { liters, minutes: cap ?? undefined }
+        : { minutes: cap ?? undefined }
+    ),
+  });
+
+  const { data: existingStatus } = await supabase
+    .from('irrigation_zone_status')
+    .select('zone_id')
+    .eq('zone_id', updatedJob.zone_id)
+    .maybeSingle();
+  if (existingStatus) {
+    await supabase.from('irrigation_zone_status').update({
+      pending_command: 'start',
+      pending_command_at: nowIso,
+      updated_at: nowIso,
+    }).eq('zone_id', updatedJob.zone_id);
+  }
+
+  return { applied: true, error: null, job: updatedJob };
+}
+
 /** Stop hardware and hold the job until the operator resumes it. */
 export async function pauseIrrigationJob(farmId, job) {
   if (!job?.id) return { error: { message: 'No irrigation job to pause.' } };
