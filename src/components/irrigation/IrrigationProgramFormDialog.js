@@ -185,8 +185,8 @@ export default function IrrigationProgramFormDialog({
       <DialogContent dividers>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
           {isFertigation
-            ? 'Selected equipment terminals (motor, injector, zone valve) start and stop together. Next zone starts when that time is over.'
-            : 'Each zone waters until the liters are done, then the next zone starts. If mains is late, remaining programs today move by that delay. A mid-run outage extends this program and shifts later ones.'}
+            ? 'Selected equipment terminals (motor, injector, zone valve) start and stop together. Next zone starts when that time is over. After this program runs today it will not start again unless you save a change and a start time is still later today.'
+            : 'Each zone waters until the liters are done, then the next zone starts. If mains is late, remaining programs today move by that delay. A mid-run outage extends this program and shifts later ones. After this program runs today it will not start again unless you save a change and a start time is still later today.'}
         </Typography>
 
         {error && (

@@ -317,6 +317,42 @@ function originalStartMinutes(program: Job) {
   return ((program.start_times || []) as string[]).map((t) => timeToMinutes(t));
 }
 
+function jobOnLocalDate(job: Job, dateKey: string) {
+  for (const raw of [job.scheduled_for, job.started_at, job.completed_at]) {
+    if (!raw) continue;
+    const parsed = new Date(String(raw));
+    if (!Number.isNaN(parsed.getTime()) && partsInTz(parsed, FARM_TZ).dateKey === dateKey) {
+      return true;
+    }
+    if (String(raw).slice(0, 10) === dateKey) return true;
+  }
+  return false;
+}
+
+/** A run that actually held the pump. Cancelled / never-started planned do not count. */
+function jobExecuted(job: Job) {
+  if (!job || job.status === 'cancelled') return false;
+  if (job.started_at) return true;
+  return [
+    'completed',
+    'running',
+    'paused_outside_window',
+    'paused_no_power',
+    'paused_manual',
+  ].includes(String(job.status || ''));
+}
+
+function latestExecutedAt(job: Job) {
+  return job.completed_at || job.started_at || job.updated_at || null;
+}
+
+function programEditedAfterJob(program: Job, job: Job) {
+  if (!program?.updated_at) return false;
+  const runAt = latestExecutedAt(job);
+  if (!runAt) return true;
+  return new Date(String(program.updated_at)).getTime() > new Date(String(runAt)).getTime();
+}
+
 // ---------------------------------------------------------------------------
 // Main per-farm pass
 // ---------------------------------------------------------------------------
@@ -339,7 +375,7 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
     { data: statusRows },
     { data: powerRows },
     { data: recentQueue },
-    { data: todayProgramJobsRows },
+    todayJobsResult,
     { data: steps },
     { data: programDevices },
     { data: jobDevices },
@@ -359,9 +395,10 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
       .select('id, device_code, action, status, job_id, payload, created_at')
       .eq('farm_id', farmId).in('status', ['pending', 'acked']).gte('created_at', since24h)
       .order('created_at', { ascending: false }),
-    supabase.from('irrigation_jobs').select('id, program_id, status, scheduled_for')
+    supabase.from('irrigation_jobs')
+      .select('id, program_id, status, scheduled_for, started_at, completed_at, updated_at')
       .eq('farm_id', farmId).not('program_id', 'is', null)
-      .gte('scheduled_for', dayStart).lte('scheduled_for', dayEnd),
+      .or(`scheduled_for.gte.${dayStart},started_at.gte.${dayStart},completed_at.gte.${dayStart}`),
     supabase.from('irrigation_program_steps').select('*, irrigation_programs!inner(farm_id)')
       .eq('irrigation_programs.farm_id', farmId),
     supabase.from('irrigation_program_devices').select('*, irrigation_programs!inner(farm_id)')
@@ -421,7 +458,26 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
   };
 
   const zonePendingPatches = new Map<number, string>();
-  const todayProgramJobs = [...(todayProgramJobsRows || [])];
+  let todayProgramJobsRows = todayJobsResult.data as Job[] | null;
+  if (todayJobsResult.error) {
+    const fallback = await supabase.from('irrigation_jobs')
+      .select('id, program_id, status, scheduled_for, started_at, completed_at, updated_at')
+      .eq('farm_id', farmId).not('program_id', 'is', null)
+      .gte('scheduled_for', dayStart).lte('scheduled_for', dayEnd);
+    todayProgramJobsRows = fallback.data as Job[] | null;
+  }
+
+  const todayById = new Map<number, Job>();
+  for (const job of todayProgramJobsRows || []) {
+    if (jobOnLocalDate(job, local.dateKey) || OPEN_STATUSES.includes(String(job.status || ''))) {
+      todayById.set(Number(job.id), job);
+    }
+  }
+  for (const job of openJobs || []) {
+    if (!job.program_id) continue;
+    if (!todayById.has(Number(job.id))) todayById.set(Number(job.id), job);
+  }
+  const todayProgramJobs = [...todayById.values()];
 
   let rainCache: boolean | null = null;
   const raining = async () => {
@@ -429,16 +485,54 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
     return rainCache;
   };
 
-  const programHasJobToday = (programId: number) => (
-    todayProgramJobs.some((j) => Number(j.program_id) === Number(programId) && j.status !== 'cancelled')
+  const jobsForProgramToday = (programId: number) => (
+    todayProgramJobs.filter((j) => Number(j.program_id) === Number(programId))
   );
+
+  const effectiveStartMinutes = (program: Job) => (
+    originalStartMinutes(program)
+      .map((original) => original + shiftMinutes)
+      .filter((m) => Number.isFinite(m) && m < 24 * 60)
+  );
+
+  const futureStartMin = (program: Job) => (
+    effectiveStartMinutes(program)
+      .filter((m) => nowMin < m)
+      .sort((a, b) => a - b)[0]
+  );
+
+  const catchUpStartMin = (program: Job) => (
+    effectiveStartMinutes(program)
+      .filter((m) => nowMin >= m)
+      .sort((a, b) => a - b)[0]
+  );
+
+  const latestExecutedToday = (programId: number) => {
+    const executed = jobsForProgramToday(programId).filter(jobExecuted);
+    if (!executed.length) return null;
+    return executed.sort((a, b) => {
+      const ta = new Date(String(latestExecutedAt(a) || 0)).getTime();
+      const tb = new Date(String(latestExecutedAt(b) || 0)).getTime();
+      return tb - ta;
+    })[0];
+  };
+
+  /** Open job, or already ran today unless an edit left a later start time. */
+  const programBlocksNewJob = (program: Job) => {
+    const rows = jobsForProgramToday(Number(program.id));
+    if (rows.some((j) => OPEN_STATUSES.includes(String(j.status || '')))) return true;
+    const executed = latestExecutedToday(Number(program.id));
+    if (!executed) return false;
+    if (!programEditedAfterJob(program, executed)) return true;
+    return futureStartMin(program) == null;
+  };
 
   const earliestUnstartedEffectiveMin = () => {
     let earliest: number | null = null;
     for (const program of programs || []) {
       const days = ((program.days_of_week || []) as number[]).map(Number);
       if (days.length && !days.includes(local.weekday)) continue;
-      if (programHasJobToday(Number(program.id))) continue;
+      if (programBlocksNewJob(program)) continue;
       for (const original of originalStartMinutes(program)) {
         const effective = original + shiftMinutes;
         if (effective >= 24 * 60) continue;
@@ -582,12 +676,12 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
     for (const program of programs || []) {
       const days = ((program.days_of_week || []) as number[]).map(Number);
       if (days.length && !days.includes(local.weekday)) continue;
-      if (programHasJobToday(Number(program.id))) continue;
+      if (programBlocksNewJob(program)) continue;
 
-      const dueMin = originalStartMinutes(program)
-        .map((original) => original + shiftMinutes)
-        .filter((m) => Number.isFinite(m) && m < 24 * 60 && nowMin >= m)
-        .sort((a, b) => a - b)[0];
+      const executed = latestExecutedToday(Number(program.id));
+      const dueMin = executed && programEditedAfterJob(program, executed)
+        ? futureStartMin(program)
+        : catchUpStartMin(program);
       if (dueMin == null) continue;
 
       if (programSkipsIfRain(program) && await raining()) {

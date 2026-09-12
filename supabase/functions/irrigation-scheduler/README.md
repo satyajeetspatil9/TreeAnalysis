@@ -48,7 +48,9 @@ flushes batched writes. A minute with nothing to do performs no writes at all.
 
 - Creates a job when a program's `start_times` plus today's `shift_minutes` has
   been reached in Asia/Kolkata (catch-up for the rest of that calendar day).
-  Allowed hours are not used.
+  Allowed hours are not used. A program that already started or completed today
+  is not created again unless you save an edit and a listed start is still later
+  today. An edit after all starts have passed waits until the next scheduled day.
 - If mains is still off at the first unstarted start time, the controller's
   `outage_ended_at` postpones **every remaining program today** by the lateness
   (listed 6:00, outage ended 7:00 → remaining starts +60 minutes). The duration is

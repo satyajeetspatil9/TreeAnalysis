@@ -447,7 +447,7 @@ function IrrigationProgramsPanel({
     setMessage({
       type: 'success',
       text: editing
-        ? 'Program updated. If it was waiting today, the scheduler will start it on the next minute.'
+        ? 'Program updated. A waiting job is replaced. If it already ran today, it runs again only when a start time is still later today; otherwise it waits for the next scheduled day.'
         : 'Program created.',
     });
     await load();
@@ -680,8 +680,8 @@ function IrrigationProgramsPanel({
         <Box sx={{ maxWidth: 640 }}>
           <Typography variant="body2" color="text.secondary">
             {programType === 'fertigation'
-              ? 'Fertigation programs run one after another. Selected equipment terminals start and stop together for the minutes on each zone.'
-              : 'Water programs run one after another. Each zone finishes its liters before the next starts. Programs wait for mains; a late restore shifts remaining starts today, and a mid-run outage extends that job.'}
+              ? 'Fertigation programs run one after another. Selected equipment terminals start and stop together for the minutes on each zone. After a program runs today it will not start again unless you save a change and a start time is still later today.'
+              : 'Water programs run one after another. Each zone finishes its liters before the next starts. Programs wait for mains; a late restore shifts remaining starts today, and a mid-run outage extends that job. After a program runs today it will not start again unless you save a change and a start time is still later today.'}
           </Typography>
         </Box>
         <Button variant="contained" startIcon={<AddIcon />} onClick={openCreate}>
