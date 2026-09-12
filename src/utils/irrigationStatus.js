@@ -116,6 +116,27 @@ export function mergeZoneStatusRows(zones, statusRows) {
   });
 }
 
+/** Controller can keep is_irrigating true after Start now has already finished. */
+export function isZoneTelemetryStale(row, runningJob, recentCompleted) {
+  if (runningJob) return false;
+  if (!row?.isIrrigating) return true;
+  if (row.status?.pending_command === 'stop') return true;
+  const zoneId = Number(row.zone?.id);
+  const done = (recentCompleted || []).find((job) => (
+    Number(job.zone_id) === zoneId && job.completed_at
+  ));
+  if (!done) return false;
+  const doneAt = new Date(done.completed_at).getTime();
+  if (!Number.isFinite(doneAt)) return false;
+  const pendingAt = row.status?.pending_command_at;
+  const startedAt = row.status?.started_at;
+  if (row.status?.pending_command === 'start' && pendingAt) {
+    return doneAt >= new Date(pendingAt).getTime();
+  }
+  if (startedAt) return doneAt >= new Date(startedAt).getTime();
+  return true;
+}
+
 export function countIrrigationStatusRows(rows) {
   const counts = {
     irrigating: 0,

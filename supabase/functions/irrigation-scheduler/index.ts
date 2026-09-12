@@ -1012,13 +1012,19 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
   }
 
   for (const [zoneId, command] of zonePendingPatches) {
-    await supabase.from('irrigation_zone_status').upsert({
+    const patch: Record<string, unknown> = {
       zone_id: zoneId,
       farm_id: farmId,
       pending_command: command,
       pending_command_at: now.toISOString(),
       updated_at: now.toISOString(),
-    }, { onConflict: 'zone_id' });
+    };
+    if (command === 'stop') {
+      patch.is_irrigating = false;
+      patch.start_indicator = false;
+      patch.stop_indicator = true;
+    }
+    await supabase.from('irrigation_zone_status').upsert(patch, { onConflict: 'zone_id' });
   }
 
   if (powerClockDirty) {

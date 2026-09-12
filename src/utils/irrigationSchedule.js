@@ -909,6 +909,61 @@ export async function applySavedProgramToRunningJob(farmId, programId) {
   return { applied: true, error: null, job: updatedJob };
 }
 
+/** Finish a Start now / program job whose minutes or liters are already done. */
+export async function completeOverdueIrrigationJobs(farmId, jobs = []) {
+  if (!farmId) return { completedIds: [] };
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const completedIds = [];
+
+  for (const job of jobs || []) {
+    if (job.status !== 'running') continue;
+    const elapsed = jobElapsedMinutes(job, now);
+    const duration = Number(job.on_duration_minutes);
+    const cap = Number(job.max_duration_minutes);
+    const target = Number(job.target_liters);
+    const delivered = Number(job.liters_delivered) || 0;
+    const overdue = (
+      (Number.isFinite(duration) && duration > 0 && elapsed >= duration)
+      || (Number.isFinite(cap) && cap > 0 && elapsed >= cap)
+      || (Number.isFinite(target) && target > 0 && delivered >= target)
+    );
+    if (!overdue) continue;
+
+    const codes = await fetchJobTerminalCodes(farmId, job);
+    if (codes.length) {
+      await enqueueIrrigationCommand({
+        farmId,
+        deviceCodes: codes,
+        action: 'stop',
+        jobId: job.id,
+        zoneId: job.zone_id,
+        payload: { reason: 'duration_done' },
+      });
+    }
+    if (job.zone_id) {
+      await supabase.from('irrigation_zone_status').update({
+        pending_command: 'stop',
+        pending_command_at: nowIso,
+        is_irrigating: false,
+        start_indicator: false,
+        stop_indicator: true,
+        updated_at: nowIso,
+      }).eq('zone_id', job.zone_id);
+    }
+    await supabase.from('irrigation_jobs').update({
+      status: 'completed',
+      completed_at: nowIso,
+      duration_elapsed_minutes: Number(elapsed.toFixed(2)),
+      liters_baseline: null,
+      updated_at: nowIso,
+    }).eq('id', job.id);
+    completedIds.push(job.id);
+  }
+
+  return { completedIds };
+}
+
 /** Stop hardware and hold the job until the operator resumes it. */
 export async function pauseIrrigationJob(farmId, job) {
   if (!job?.id) return { error: { message: 'No irrigation job to pause.' } };

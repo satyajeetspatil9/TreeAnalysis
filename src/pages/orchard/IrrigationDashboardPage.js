@@ -52,6 +52,7 @@ import {
   formatVoltage,
   isMissingStatusTable,
   latestTimestamp,
+  isZoneTelemetryStale,
   mergeZoneStatusRows,
   statusTableHint,
   zoneTelemetryAt,
@@ -66,6 +67,8 @@ import {
   expandQueuedCommands,
   fetchPowerStatus,
   formatEstimatedDuration,
+  completeOverdueIrrigationJobs,
+  jobElapsedMinutes,
   pauseIrrigationJob,
   powerStatusLabel,
   scheduleTableHint,
@@ -129,6 +132,7 @@ function IrrigationDashboardPage() {
   const [confirmStart, setConfirmStart] = useState(null);
   const [queueCommands, setQueueCommands] = useState([]);
   const [programJobs, setProgramJobs] = useState([]);
+  const [recentCompletedJobs, setRecentCompletedJobs] = useState([]);
   const [scheduleDeviceCodes, setScheduleDeviceCodes] = useState([]);
   const [power, setPower] = useState(null);
 
@@ -151,6 +155,7 @@ function IrrigationDashboardPage() {
       setZones([]);
       setQueueCommands([]);
       setProgramJobs([]);
+      setRecentCompletedJobs([]);
       setScheduleDeviceCodes([]);
       setLoading(false);
       return;
@@ -211,6 +216,7 @@ function IrrigationDashboardPage() {
       jobsResult,
       { data: scheduleRows },
       { power: powerRow },
+      { data: completedRows },
     ] = await Promise.all([
       supabase
         .from('irrigation_command_queue')
@@ -221,7 +227,7 @@ function IrrigationDashboardPage() {
         .limit(50),
       supabase
         .from('irrigation_jobs')
-        .select('id, zone_id, job_type, program_id, status, started_at, duration_elapsed_minutes, irrigation_programs(name, program_type)')
+        .select('id, zone_id, job_type, program_id, status, started_at, duration_elapsed_minutes, on_duration_minutes, max_duration_minutes, target_liters, liters_delivered, irrigation_programs(name, program_type)')
         .eq('farm_id', farm.id)
         .in('job_type', ['water', 'fertigation', 'manual'])
         .in('status', OPEN_JOB_STATUSES),
@@ -231,19 +237,49 @@ function IrrigationDashboardPage() {
         .eq('farm_id', farm.id)
         .eq('enabled', true),
       fetchPowerStatus(farm.id),
+      supabase
+        .from('irrigation_jobs')
+        .select('id, zone_id, completed_at, status')
+        .eq('farm_id', farm.id)
+        .eq('status', 'completed')
+        .order('completed_at', { ascending: false })
+        .limit(20),
     ]);
     let jobRows = jobsResult.data;
     if (jobsResult.error && /irrigation_programs/.test(jobsResult.error.message || '')) {
       const fallbackJobs = await supabase
         .from('irrigation_jobs')
-        .select('id, zone_id, job_type, program_id, status, started_at, duration_elapsed_minutes')
+        .select('id, zone_id, job_type, program_id, status, started_at, duration_elapsed_minutes, on_duration_minutes, max_duration_minutes, target_liters, liters_delivered')
         .eq('farm_id', farm.id)
         .in('job_type', ['water', 'fertigation', 'manual'])
         .in('status', OPEN_JOB_STATUSES);
       jobRows = fallbackJobs.data;
     }
+    const overdue = await completeOverdueIrrigationJobs(farm.id, jobRows || []);
+    const overdueJobs = (jobRows || []).filter((job) => overdue.completedIds.includes(job.id));
+    if (overdueJobs.length) {
+      const overdueZones = new Set(overdueJobs.map((job) => Number(job.zone_id)));
+      jobRows = (jobRows || []).filter((job) => !overdue.completedIds.includes(job.id));
+      setRows(mergeZoneStatusRows(
+        zoneRows,
+        (statusRows || []).map((row) => (
+          overdueZones.has(Number(row.zone_id))
+            ? { ...row, is_irrigating: false, pending_command: 'stop' }
+            : row
+        )),
+      ));
+    }
     setQueueCommands(queueRows || []);
     setProgramJobs(jobRows || []);
+    setRecentCompletedJobs([
+      ...overdueJobs.map((job) => ({
+        id: job.id,
+        zone_id: job.zone_id,
+        completed_at: new Date().toISOString(),
+        status: 'completed',
+      })),
+      ...(completedRows || []),
+    ]);
     setPower(powerRow);
     setScheduleDeviceCodes(
       [...new Set(
@@ -302,6 +338,20 @@ function IrrigationDashboardPage() {
     return () => window.clearInterval(id);
   }, [tab, farm?.id, refreshQueue]);
 
+  useEffect(() => {
+    const running = (programJobs || []).find((job) => job.status === 'running');
+    if (!farm?.id || !running) return undefined;
+    const limit = Number(running.on_duration_minutes) || Number(running.max_duration_minutes);
+    if (!(limit > 0)) return undefined;
+    const remainMs = Math.max(0, (limit - jobElapsedMinutes(running, new Date())) * 60000);
+    const timerId = window.setTimeout(() => {
+      completeOverdueIrrigationJobs(farm.id, [running]).then((result) => {
+        if (result.completedIds.length) load();
+      });
+    }, remainMs + 750);
+    return () => window.clearTimeout(timerId);
+  }, [farm?.id, programJobs, load]);
+
   const programJobIds = useMemo(
     () => new Set((programJobs || []).map((job) => Number(job.id))),
     [programJobs],
@@ -353,12 +403,17 @@ function IrrigationDashboardPage() {
     [programRows],
   );
   const counts = useMemo(() => countIrrigationStatusRows(rows), [rows]);
-  const activeZones = useMemo(() => rows.filter((row) => row.isIrrigating), [rows]);
-  const activeZone = activeZones[0] || null;
   const runningJob = useMemo(
     () => (programJobs || []).find((job) => job.status === 'running') || null,
     [programJobs],
   );
+  const activeZones = useMemo(
+    () => rows.filter((row) => (
+      row.isIrrigating && !isZoneTelemetryStale(row, runningJob, recentCompletedJobs)
+    )),
+    [rows, runningJob, recentCompletedJobs],
+  );
+  const activeZone = activeZones[0] || null;
   const runningJobZone = useMemo(
     () => (runningJob?.zone_id
       ? (rows || []).find((row) => Number(row.zone.id) === Number(runningJob.zone_id))
