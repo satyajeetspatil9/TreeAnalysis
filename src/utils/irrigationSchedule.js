@@ -1173,16 +1173,28 @@ export function estimateStepMinutes(step, zones, program = null) {
     if (fromLiters != null) mins = fromLiters;
   }
   if (mins == null) return null;
-  const pre = Number(step?.pre_flush_minutes ?? program?.pre_flush_minutes ?? 0) || 0;
-  const post = Number(step?.post_flush_minutes ?? program?.post_flush_minutes ?? 0) || 0;
+  // If the step has its own explicit flush override, include it
+  const pre = Number(step?.pre_flush_minutes || 0);
+  const post = Number(step?.post_flush_minutes || 0);
   return mins + pre + post;
 }
 
 export function estimateProgramMinutes(steps, zones, program = null) {
-  return (steps || []).reduce((sum, step) => {
+  const anyStepFlushes = (steps || []).some(
+    (s) => Number(s?.pre_flush_minutes) > 0 || Number(s?.post_flush_minutes) > 0,
+  );
+  const stepSum = (steps || []).reduce((sum, step) => {
     const mins = estimateStepMinutes(step, zones, program);
     return sum + (mins || 0);
   }, 0);
+
+  // If steps do not have individual step-level flushes, add program-level pre and post flush once
+  if (!anyStepFlushes && program) {
+    const progPre = Number(program.pre_flush_minutes || 0);
+    const progPost = Number(program.post_flush_minutes || 0);
+    return stepSum + progPre + progPost;
+  }
+  return stepSum;
 }
 
 /**

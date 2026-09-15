@@ -61,6 +61,8 @@ function IrrigationProgramsPanel({
   devices,
   programType = 'water',
   title = 'Programs',
+  refreshKey = 0,
+  onProgramsChanged,
 }) {
   const [programs, setPrograms] = useState([]);
   const [allFarmPrograms, setAllFarmPrograms] = useState([]);
@@ -192,7 +194,7 @@ function IrrigationProgramsPanel({
 
   useEffect(() => {
     load();
-  }, [load]);
+  }, [load, refreshKey]);
 
   useEffect(() => {
     if (programType !== 'fertigation') {
@@ -226,7 +228,8 @@ function IrrigationProgramsPanel({
   };
 
   const openCreate = () => {
-    const days = [1, 2, 3, 4];
+    load();
+    const days = [0, 1, 2, 3, 4, 5, 6];
     setEditing(null);
     setForm({
       name: programType === 'fertigation'
@@ -248,6 +251,7 @@ function IrrigationProgramsPanel({
   };
 
   const openEdit = (program) => {
+    load();
     const steps = (program.irrigation_program_steps || [])
       .slice()
       .sort((a, b) => a.seq - b.seq)
@@ -486,6 +490,7 @@ function IrrigationProgramsPanel({
           : 'Program updated. A waiting job is replaced. If it already ran today, it runs again only when a start time is still later today; otherwise it waits for the next scheduled day.',
       });
       await load();
+      onProgramsChanged?.();
       return;
     }
 
@@ -493,6 +498,7 @@ function IrrigationProgramsPanel({
     setDialogOpen(false);
     setMessage({ type: 'success', text: 'Program created.' });
     await load();
+    onProgramsChanged?.();
   };
 
   const deleteProgram = async (program) => {
@@ -503,6 +509,7 @@ function IrrigationProgramsPanel({
     }
     setMessage({ type: 'success', text: 'Program deleted.' });
     await load();
+    onProgramsChanged?.();
   };
 
   const toggleActive = async (program) => {
@@ -530,6 +537,7 @@ function IrrigationProgramsPanel({
       return;
     }
     await load();
+    onProgramsChanged?.();
   };
 
   const moveProgram = async (program, direction) => {
@@ -1007,6 +1015,7 @@ function IrrigationProgramsPanel({
         editing={editing}
         form={form}
         setForm={setForm}
+        farmId={farmId}
         allPrograms={allFarmPrograms}
         zones={zones}
         motors={motors}

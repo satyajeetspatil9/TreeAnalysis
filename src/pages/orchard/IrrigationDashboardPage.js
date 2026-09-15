@@ -134,6 +134,11 @@ function IrrigationDashboardPage() {
   const [recentCompletedJobs, setRecentCompletedJobs] = useState([]);
   const [scheduleDeviceCodes, setScheduleDeviceCodes] = useState([]);
   const [power, setPower] = useState(null);
+  const [programsRefreshKey, setProgramsRefreshKey] = useState(0);
+
+  const handleProgramsChanged = useCallback(() => {
+    setProgramsRefreshKey((k) => k + 1);
+  }, []);
 
   const loadDevices = useCallback(async () => {
     if (!farm?.id) {
@@ -886,6 +891,8 @@ function IrrigationDashboardPage() {
           devices={devices}
           programType="water"
           title="Water programs"
+          refreshKey={programsRefreshKey}
+          onProgramsChanged={handleProgramsChanged}
         />
         <Box sx={{ mt: 5 }}>
           <IrrigationProgramsPanel
@@ -894,6 +901,8 @@ function IrrigationDashboardPage() {
             devices={devices}
             programType="fertigation"
             title="Fertigation programs"
+            refreshKey={programsRefreshKey}
+            onProgramsChanged={handleProgramsChanged}
           />
         </Box>
         <Box sx={{ mt: 5 }}>

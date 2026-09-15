@@ -23,6 +23,7 @@ import {
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
+import { supabase } from '../../supabaseClient';
 import {
   estimateLitersFromMinutes,
   estimateMinutesFromLiters,
@@ -72,6 +73,7 @@ export default function IrrigationProgramFormDialog({
   editing,
   form,
   setForm,
+  farmId,
   zones,
   motors,
   injectors,
@@ -83,7 +85,32 @@ export default function IrrigationProgramFormDialog({
 }) {
   const [error, setError] = useState(null);
   const [submitted, setSubmitted] = useState(false);
+  const [activeFarmPrograms, setActiveFarmPrograms] = useState(allPrograms || []);
   const isFertigation = programType === 'fertigation';
+
+  // Keep in sync with prop updates
+  useEffect(() => {
+    setActiveFarmPrograms(allPrograms || []);
+  }, [allPrograms]);
+
+  // When dialog opens, immediately query fresh programs from database so any recent edits in other panels are reflected
+  useEffect(() => {
+    if (!open || !farmId) return;
+    let isMounted = true;
+    supabase
+      .from('irrigation_programs')
+      .select('*, irrigation_program_steps(*), irrigation_program_devices(*)')
+      .eq('farm_id', farmId)
+      .eq('is_active', true)
+      .then(({ data, error: fetchErr }) => {
+        if (isMounted && data && !fetchErr) {
+          setActiveFarmPrograms(data);
+        }
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, [open, farmId]);
 
   const startTimes = (form.start_times || []).filter(Boolean);
   const hasCompleteStep = (form.steps || []).some(stepHasTarget);
@@ -97,11 +124,11 @@ export default function IrrigationProgramFormDialog({
   const conflicts = useMemo(() => {
     return findProgramScheduleConflicts({
       program: form,
-      allPrograms,
+      allPrograms: activeFarmPrograms,
       zones,
       editingProgramId: editing?.id,
     });
-  }, [form, allPrograms, zones, editing?.id]);
+  }, [form, activeFarmPrograms, zones, editing?.id]);
 
   useEffect(() => {
     if (open) {
