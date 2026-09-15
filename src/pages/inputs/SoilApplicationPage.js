@@ -355,7 +355,7 @@ function SoilApplicationPage() {
                       <MenuItem
                         key={p.id}
                         value={String(p.id)}
-                        disabled={!editingId && getProductStock(p) <= 0}
+                        disabled={!editingId && !p.is_inhouse && getProductStock(p) <= 0}
                       >
                         {productStockLabel(p)}
                       </MenuItem>
@@ -376,7 +376,9 @@ function SoilApplicationPage() {
                   }}
                   helperText={
                     product
-                      ? `Stock: ${stock} ${product.unit}${form.scope === 'zone' ? ' · split across zone trees' : ' · applied to this tree only'}`
+                      ? (product.is_inhouse
+                          ? `In-house rate: ₹${product.default_unit_cost || 0}/${product.unit}${form.scope === 'zone' ? ' · split across zone trees' : ' · applied to this tree only'}`
+                          : `Stock: ${stock} ${product.unit}${form.scope === 'zone' ? ' · split across zone trees' : ' · applied to this tree only'}`)
                       : undefined
                   }
                 />

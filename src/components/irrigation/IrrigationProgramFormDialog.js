@@ -639,7 +639,7 @@ export default function IrrigationProgramFormDialog({
                 {(form.products || []).map((line, idx) => {
                   const product = fertilizerProducts.find((p) => String(p.id) === String(line.product_id));
                   const stock = product?.inventory?.[0]?.current_stock ?? product?.current_stock ?? null;
-                  const isDeficit = stock != null && Number(line.quantity) > Number(stock);
+                  const isDeficit = !product?.is_inhouse && stock != null && Number(line.quantity) > Number(stock);
 
                   return (
                     <Grid container spacing={1.5} alignItems="flex-start" key={idx} sx={{ mb: 1.5 }}>
@@ -666,19 +666,28 @@ export default function IrrigationProgramFormDialog({
                             <MenuItem value="">None</MenuItem>
                             {fertilizerProducts.map((p) => {
                               const s = p.inventory?.[0]?.current_stock ?? p.current_stock ?? null;
+                              const tag = p.is_inhouse
+                                ? ` — In-house (₹${p.default_unit_cost || 0}/${p.unit || 'L'})`
+                                : (s != null ? ` — ${s} in stock` : '');
                               return (
                                 <MenuItem key={p.id} value={String(p.id)}>
-                                  {p.name}{p.unit ? ` (${p.unit})` : ''}{s != null ? ` — ${s} in stock` : ''}
+                                  {p.name}{p.unit ? ` (${p.unit})` : ''}{tag}
                                 </MenuItem>
                               );
                             })}
                           </Select>
-                          {stock != null && (
-                            <FormHelperText sx={{ color: isDeficit ? 'error.main' : 'text.secondary' }}>
-                              {isDeficit
-                                ? `⚠️ Exceeds stock! Only ${stock} ${product?.unit || ''} available`
-                                : `Available stock: ${stock} ${product?.unit || ''}`}
+                          {product?.is_inhouse ? (
+                            <FormHelperText sx={{ color: 'success.main', fontWeight: 600 }}>
+                              🌿 In-house formulation · Direct rate: ₹{product.default_unit_cost || 0}/{product.unit} (No inventory purchase required)
                             </FormHelperText>
+                          ) : (
+                            stock != null && (
+                              <FormHelperText sx={{ color: isDeficit ? 'error.main' : 'text.secondary' }}>
+                                {isDeficit
+                                  ? `⚠️ Exceeds stock! Only ${stock} ${product?.unit || ''} available`
+                                  : `Available stock: ${stock} ${product?.unit || ''}`}
+                              </FormHelperText>
+                            )
                           )}
                         </FormControl>
                       </Grid>

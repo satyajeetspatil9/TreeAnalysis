@@ -219,7 +219,7 @@ export function getProductStock(product) {
   return Number(inv?.current_stock ?? 0);
 }
 
-/** Sum quantities per product and verify against inventory stock. */
+/** Sum quantities per product and verify against inventory stock (in-house fertilizers are exempt). */
 export function validateFertilizerStock(products, lineItems) {
   const totals = {};
 
@@ -239,6 +239,10 @@ export function validateFertilizerStock(products, lineItems) {
 
   for (const [productId, needed] of Object.entries(totals)) {
     const product = products.find((p) => String(p.id) === productId);
+    if (product?.is_inhouse) {
+      // In-house prepared fertilizers have direct unit rates and zero inventory requirement
+      continue;
+    }
     const stock = getProductStock(product);
     if (needed > stock) {
       return {
@@ -253,5 +257,53 @@ export function validateFertilizerStock(products, lineItems) {
 
 export function productStockLabel(product) {
   if (!product) return '';
+  if (product.is_inhouse) {
+    const rate = Number(product.default_unit_cost) || 0;
+    return `${product.name} (In-house · ₹${rate}/${product.unit})`;
+  }
   return `${product.name} (${getProductStock(product)} ${product.unit} in stock)`;
+}
+
+export function emptyInHouseProductForm() {
+  return {
+    name: '',
+    category: 'Fertilizer',
+    unit: 'L',
+    default_unit_cost: '0',
+    preparation_notes: '',
+    active: true,
+  };
+}
+
+export async function loadInHouseProducts(supabase) {
+  const { data, error } = await supabase
+    .from('products')
+    .select('*')
+    .eq('is_inhouse', true)
+    .order('name');
+  if (error) throw error;
+  return data || [];
+}
+
+export async function saveInHouseProduct(supabase, form, id = null) {
+  const payload = {
+    name: form.name.trim(),
+    category: form.category || 'Fertilizer',
+    unit: form.unit || 'L',
+    default_unit_cost: form.default_unit_cost !== '' && form.default_unit_cost != null
+      ? Number(form.default_unit_cost)
+      : 0,
+    preparation_notes: form.preparation_notes?.trim() || null,
+    is_inhouse: true,
+    active: form.active !== false,
+  };
+
+  if (id) {
+    return supabase.from('products').update(payload).eq('id', id);
+  }
+  return supabase.from('products').insert(payload).select().single();
+}
+
+export async function deleteInHouseProduct(supabase, id) {
+  return supabase.from('products').delete().eq('id', id);
 }

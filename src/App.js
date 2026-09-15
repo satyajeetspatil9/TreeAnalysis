@@ -22,6 +22,7 @@ import IrrigationEventsPage from './pages/irrigation/IrrigationEventsPage';
 import FertigationPage from './pages/irrigation/FertigationPage';
 import AddProductPage from './pages/inputs/AddProductPage';
 import InventoryPage from './pages/inputs/InventoryPage';
+import InHouseFertilizersPage from './pages/inputs/InHouseFertilizersPage';
 import SprayPage from './pages/inputs/SprayPage';
 import SoilApplicationPage from './pages/inputs/SoilApplicationPage';
 import SoilMonitoringPage from './pages/monitoring/SoilMonitoringPage';
@@ -70,6 +71,8 @@ function ProtectedApp() {
           <Route path="irrigation/fertigation" element={<FertigationPage />} />
           <Route path="inputs/add-product" element={<AddProductPage />} />
           <Route path="inputs/inventory" element={<InventoryPage />} />
+          <Route path="inputs/in-house" element={<InHouseFertilizersPage />} />
+          <Route path="inputs/inhouse-fertilizers" element={<Navigate to="/inputs/in-house" replace />} />
           <Route path="inputs/spray" element={<SprayPage />} />
           <Route path="inputs/soil-application" element={<SoilApplicationPage />} />
           <Route path="inputs/optimizer" element={<FertilizerOptimizerPage />} />

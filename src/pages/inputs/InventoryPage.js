@@ -8,6 +8,8 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import { supabase } from '../../supabaseClient';
 import PageHeader from '../../components/common/PageHeader';
 import { formatCurrency, formatDate } from '../../utils/formatters';
+import { Link as RouterLink } from 'react-router-dom';
+import LocalFloristIcon from '@mui/icons-material/LocalFlorist';
 import {
   inventoryStockHint,
   getProductStock,
@@ -169,8 +171,27 @@ function InventoryPage() {
 
       {message && <Alert severity={message.type} sx={{ mb: 2 }} onClose={() => setMessage(null)}>{message.text}</Alert>}
 
+      <Alert
+        severity="info"
+        icon={<LocalFloristIcon />}
+        sx={{ mb: 3 }}
+        action={
+          <Button
+            component={RouterLink}
+            to="/inputs/in-house"
+            color="inherit"
+            size="small"
+            variant="outlined"
+          >
+            Manage In-House
+          </Button>
+        }
+      >
+        <strong>In-house formulations</strong> (such as DGA, Jeevamrut, Dashparni Ark) do not require inventory purchases or stock maintenance. Their direct rates are managed on the In-House Fertilizers page and used automatically.
+      </Alert>
+
       <Paper sx={{ mb: 3 }} variant="outlined">
-        <Typography variant="h6" sx={{ p: 2, pb: 0 }}>Current Stock</Typography>
+        <Typography variant="h6" sx={{ p: 2, pb: 0 }}>Current Stock (Commercial Products)</Typography>
         <Table size="small">
           <TableHead>
             <TableRow>
@@ -198,7 +219,7 @@ function InventoryPage() {
       <Paper sx={{ p: 3, mb: 3 }} variant="outlined">
         <Typography variant="h6" gutterBottom>Record Purchase</Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Enter the unit cost you paid for this purchase.
+          Enter the unit cost you paid for this commercial purchase. For in-house prepared inputs (like DGA), use the In-House Fertilizers page instead.
         </Typography>
         <Grid container spacing={2}>
           <Grid item xs={12} md={4}>
@@ -209,7 +230,9 @@ function InventoryPage() {
                 label="Product"
                 onChange={(e) => setPurchase({ ...purchase, product_id: e.target.value })}
               >
-                {products.map((p) => <MenuItem key={p.id} value={String(p.id)}>{p.name}</MenuItem>)}
+                {products
+                  .filter((p) => !p.is_inhouse)
+                  .map((p) => <MenuItem key={p.id} value={String(p.id)}>{p.name}</MenuItem>)}
               </Select>
             </FormControl>
           </Grid>

@@ -363,7 +363,12 @@ function FertigationPage() {
                   }}
                   helperText={
                     li.product_id
-                      ? `${getProductStock(products.find((p) => String(p.id) === String(li.product_id)))} available`
+                      ? (() => {
+                          const p = products.find((prod) => String(prod.id) === String(li.product_id));
+                          return p?.is_inhouse
+                            ? `In-house rate: ₹${p.default_unit_cost || 0}/${p.unit || 'L'}`
+                            : `${getProductStock(p)} ${p?.unit || ''} available in stock`;
+                        })()
                       : ' '
                   }
                 />

@@ -26,6 +26,7 @@ import ReceiptLongIcon from '@mui/icons-material/ReceiptLong';
 import GroupsIcon from '@mui/icons-material/Groups';
 import AnalyticsIcon from '@mui/icons-material/Analytics';
 import AgricultureIcon from '@mui/icons-material/Agriculture';
+import LocalFloristIcon from '@mui/icons-material/LocalFlorist';
 import PaidIcon from '@mui/icons-material/Paid';
 
 export const navSections = [
@@ -44,6 +45,7 @@ export const navSections = [
     icon: ScienceIcon,
     items: [
       { label: 'Inventory', path: '/inputs/inventory', icon: Inventory2Icon, description: 'Purchases and stock levels' },
+      { label: 'In-House Fertilizers', path: '/inputs/in-house', icon: LocalFloristIcon, description: 'Farm-prepared inputs and direct rates' },
       { label: 'Soil Application', path: '/inputs/soil-application', icon: GrassIcon, description: 'Direct fertilizer on soil' },
       { label: 'Fertilizer rec.', path: '/inputs/optimizer', icon: ScienceIcon, description: 'Dose from lab report and GDD stage' },
       { label: 'Spray', path: '/inputs/spray', icon: PestControlIcon, description: 'Plant protection' },
