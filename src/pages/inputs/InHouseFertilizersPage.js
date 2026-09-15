@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
+  Autocomplete,
   Box,
   Button,
   Chip,
@@ -47,6 +48,7 @@ import {
   PRODUCT_UNITS,
   emptyInHouseProductForm,
   loadInHouseProducts,
+  loadAllProducts,
   saveInHouseProduct,
   deleteInHouseProduct,
 } from '../../utils/products';
@@ -100,6 +102,7 @@ function StatCard({ label, value, subtext, icon, color = 'primary' }) {
 
 export default function InHouseFertilizersPage() {
   const [products, setProducts] = useState([]);
+  const [allCatalogProducts, setAllCatalogProducts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState(null);
 
@@ -121,8 +124,12 @@ export default function InHouseFertilizersPage() {
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await loadInHouseProducts(supabase);
-      setProducts(data || []);
+      const [inHouseData, allData] = await Promise.all([
+        loadInHouseProducts(supabase),
+        loadAllProducts(supabase),
+      ]);
+      setProducts(inHouseData || []);
+      setAllCatalogProducts(allData || []);
     } catch (err) {
       setMessage({ type: 'error', text: err.message || 'Failed to load in-house products.' });
     } finally {
@@ -177,6 +184,7 @@ export default function InHouseFertilizersPage() {
   const openEditDialog = (product) => {
     setEditingId(product.id);
     setForm({
+      product_id: product.id,
       name: product.name || '',
       category: product.category || 'Fertilizer',
       unit: product.unit || 'L',
@@ -190,7 +198,7 @@ export default function InHouseFertilizersPage() {
 
   const handleSave = async () => {
     if (!form.name.trim()) {
-      setMessage({ type: 'error', text: 'Fertilizer name is required.' });
+      setMessage({ type: 'error', text: 'Please select or enter a product name.' });
       return;
     }
     if (form.default_unit_cost === '' || Number(form.default_unit_cost) < 0) {
@@ -201,7 +209,8 @@ export default function InHouseFertilizersPage() {
     setSaving(true);
     setMessage(null);
 
-    const { error } = await saveInHouseProduct(supabase, form, editingId);
+    const targetId = editingId || form.product_id;
+    const { error } = await saveInHouseProduct(supabase, form, targetId);
     setSaving(false);
 
     if (error) {
@@ -516,14 +525,101 @@ export default function InHouseFertilizersPage() {
 
           <Grid container spacing={2}>
             <Grid item xs={12} sm={8}>
-              <TextField
-                label="Fertilizer Name"
-                placeholder="e.g. DGA, Jeevamrut, Vermiwash"
-                fullWidth
-                required
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
-                autoFocus
+              <Autocomplete
+                id="inhouse-product-select"
+                options={allCatalogProducts}
+                getOptionLabel={(option) => {
+                  if (typeof option === 'string') return option;
+                  return option.name || '';
+                }}
+                isOptionEqualToValue={(option, val) => {
+                  if (!option || !val) return false;
+                  if (val.id && option.id) return option.id === val.id;
+                  return option.name?.toLowerCase() === (val.name || val)?.toLowerCase();
+                }}
+                value={
+                  allCatalogProducts.find(
+                    (p) =>
+                      (form.product_id && String(p.id) === String(form.product_id)) ||
+                      (form.name && p.name.toLowerCase() === form.name.trim().toLowerCase())
+                  ) || (form.name ? { name: form.name } : null)
+                }
+                onChange={(event, newValue) => {
+                  if (!newValue) {
+                    setForm(emptyInHouseProductForm());
+                    return;
+                  }
+                  if (typeof newValue === 'string') {
+                    const matched = allCatalogProducts.find(
+                      (p) => p.name.toLowerCase() === newValue.trim().toLowerCase()
+                    );
+                    if (matched) {
+                      setForm({
+                        ...form,
+                        product_id: matched.id,
+                        name: matched.name,
+                        category: matched.category || form.category || 'Fertilizer',
+                        unit: matched.unit || form.unit || 'L',
+                        default_unit_cost:
+                          matched.default_unit_cost != null && Number(matched.default_unit_cost) > 0
+                            ? String(matched.default_unit_cost)
+                            : form.default_unit_cost || '0',
+                        preparation_notes: matched.preparation_notes || form.preparation_notes || '',
+                        active: matched.active !== false,
+                      });
+                    } else {
+                      setForm({ ...form, product_id: '', name: newValue });
+                    }
+                  } else {
+                    setForm({
+                      ...form,
+                      product_id: newValue.id,
+                      name: newValue.name,
+                      category: newValue.category || form.category || 'Fertilizer',
+                      unit: newValue.unit || form.unit || 'L',
+                      default_unit_cost:
+                        newValue.default_unit_cost != null && Number(newValue.default_unit_cost) > 0
+                          ? String(newValue.default_unit_cost)
+                          : form.default_unit_cost || '0',
+                      preparation_notes: newValue.preparation_notes || form.preparation_notes || '',
+                      active: newValue.active !== false,
+                    });
+                  }
+                }}
+                freeSolo
+                renderOption={(props, option) => (
+                  <Box component="li" {...props} key={option.id || option.name}>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+                      <Box>
+                        <Typography variant="body2" fontWeight={600}>
+                          {option.name}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          {option.category || 'Fertilizer'} · Standard unit: {option.unit || 'L'}
+                        </Typography>
+                      </Box>
+                      {option.is_inhouse && (
+                        <Chip
+                          size="small"
+                          label="In-House"
+                          color="success"
+                          variant="outlined"
+                          sx={{ ml: 1, height: 20, fontSize: '0.65rem' }}
+                        />
+                      )}
+                    </Box>
+                  </Box>
+                )}
+                renderInput={(params) => (
+                  <TextField
+                    {...params}
+                    label="Product Name (from Products List)"
+                    placeholder="Select or search product..."
+                    required
+                    helperText="Select a product from the master products catalog"
+                    autoFocus
+                  />
+                )}
               />
             </Grid>
             <Grid item xs={12} sm={4}>

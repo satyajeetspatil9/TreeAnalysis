@@ -266,6 +266,7 @@ export function productStockLabel(product) {
 
 export function emptyInHouseProductForm() {
   return {
+    product_id: '',
     name: '',
     category: 'Fertilizer',
     unit: 'L',
@@ -285,9 +286,32 @@ export async function loadInHouseProducts(supabase) {
   return data || [];
 }
 
+export async function loadAllProducts(supabase) {
+  const { data, error } = await supabase
+    .from('products')
+    .select('*')
+    .order('name');
+  if (error) throw error;
+  return data || [];
+}
+
 export async function saveInHouseProduct(supabase, form, id = null) {
+  let targetId = id || form.product_id;
+  const trimmedName = form.name?.trim();
+
+  // If no explicit targetId, check if product already exists in master catalog by name
+  if (!targetId && trimmedName) {
+    const { data: existing } = await supabase
+      .from('products')
+      .select('id')
+      .ilike('name', trimmedName)
+      .maybeSingle();
+    if (existing?.id) {
+      targetId = existing.id;
+    }
+  }
+
   const payload = {
-    name: form.name.trim(),
     category: form.category || 'Fertilizer',
     unit: form.unit || 'L',
     default_unit_cost: form.default_unit_cost !== '' && form.default_unit_cost != null
@@ -298,12 +322,25 @@ export async function saveInHouseProduct(supabase, form, id = null) {
     active: form.active !== false,
   };
 
-  if (id) {
-    return supabase.from('products').update(payload).eq('id', id);
+  if (trimmedName) {
+    payload.name = trimmedName;
+  }
+
+  if (targetId) {
+    return supabase.from('products').update(payload).eq('id', targetId);
   }
   return supabase.from('products').insert(payload).select().single();
 }
 
 export async function deleteInHouseProduct(supabase, id) {
-  return supabase.from('products').delete().eq('id', id);
+  // If historical records reference this product, hard delete will fail due to foreign keys.
+  // In that case, gracefully remove it from the in-house list and clear direct cost.
+  const { error: deleteError } = await supabase.from('products').delete().eq('id', id);
+  if (deleteError) {
+    return supabase
+      .from('products')
+      .update({ is_inhouse: false, default_unit_cost: null })
+      .eq('id', id);
+  }
+  return { error: null };
 }
