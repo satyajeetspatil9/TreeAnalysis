@@ -41,6 +41,7 @@ import {
   estimateMinutesFromLiters,
   estimateProgramMinutes,
   formatEstimatedDuration,
+  findProgramScheduleConflicts,
   isMissingScheduleTable,
   jobProgressLabel,
   jobStatusLabel,
@@ -62,6 +63,7 @@ function IrrigationProgramsPanel({
   title = 'Programs',
 }) {
   const [programs, setPrograms] = useState([]);
+  const [allFarmPrograms, setAllFarmPrograms] = useState([]);
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState(null);
@@ -162,6 +164,14 @@ function IrrigationProgramsPanel({
       .in('status', OPEN_JOB_STATUSES)
       .order('created_at', { ascending: false });
 
+    // Fetch all active programs across the farm for cross-program conflict and overlap checking
+    const { data: allData } = await supabase
+      .from('irrigation_programs')
+      .select('*, irrigation_program_steps(*), irrigation_program_devices(*)')
+      .eq('farm_id', farmId)
+      .eq('is_active', true);
+    setAllFarmPrograms(allData || []);
+
     if (progError || jobError) {
       const err = progError || jobError;
       setMessage({
@@ -193,7 +203,7 @@ function IrrigationProgramsPanel({
     (async () => {
       const { data } = await supabase
         .from('products')
-        .select('id, name, unit, category')
+        .select('id, name, unit, category, inventory(current_stock)')
         .eq('active', true)
         .eq('category', 'Fertilizer')
         .order('name');
@@ -230,6 +240,8 @@ function IrrigationProgramsPanel({
       steps: [emptyStep(0)],
       injector_ids: programType === 'fertigation' ? defaultInjectorIds() : [],
       skip_if_rain: programType !== 'fertigation',
+      pre_flush_minutes: programType === 'fertigation' ? 10 : 0,
+      post_flush_minutes: programType === 'fertigation' ? 10 : 0,
       products: [emptyFertigationLineItem()],
     });
     setDialogOpen(true);
@@ -244,6 +256,7 @@ function IrrigationProgramsPanel({
         zone_id: s.zone_id || '',
         target_liters: s.target_liters ?? '',
         on_duration_minutes: s.on_duration_minutes ?? '',
+        mode: Number(s.on_duration_minutes) > 0 && !(Number(s.target_liters) > 0) ? 'duration' : 'volume',
         seq: s.seq,
         is_active: s.is_active !== false,
       }));
@@ -260,6 +273,8 @@ function IrrigationProgramsPanel({
       skip_if_rain: program.skip_if_rain != null
         ? Boolean(program.skip_if_rain)
         : programType !== 'fertigation',
+      pre_flush_minutes: program.pre_flush_minutes ?? (programType === 'fertigation' ? 10 : 0),
+      post_flush_minutes: program.post_flush_minutes ?? (programType === 'fertigation' ? 10 : 0),
       products: (program.irrigation_program_products || []).length
         ? program.irrigation_program_products.map((row) => ({
           product_id: String(row.product_id),
@@ -292,18 +307,29 @@ function IrrigationProgramsPanel({
       setMessage({ type: 'error', text: 'Select a fertigation injector.' });
       return;
     }
-    const hasCompleteStep = programType === 'fertigation'
-      ? (form.steps || []).some((s) => s.zone_id && Number(s.on_duration_minutes) > 0)
-      : (form.steps || []).some((s) => s.zone_id && Number(s.target_liters) > 0);
+    const hasCompleteStep = (form.steps || []).some(
+      (s) => s.zone_id && (Number(s.on_duration_minutes) > 0 || Number(s.target_liters) > 0),
+    );
     if (!hasCompleteStep) {
       setMessage({
         type: 'error',
-        text: programType === 'fertigation'
-          ? 'Add at least one zone with duration in minutes.'
-          : 'Add at least one zone with target liters.',
+        text: 'Add at least one zone with duration in minutes or target liters.',
       });
       return;
     }
+
+    // Schedule collision / overlap prevention
+    const conflicts = findProgramScheduleConflicts({
+      program: form,
+      allPrograms: allFarmPrograms,
+      zones,
+      editingProgramId: editing?.id,
+    });
+    if (conflicts.length > 0) {
+      setMessage({ type: 'error', text: `Schedule conflict: ${conflicts[0].message}` });
+      return;
+    }
+
     setSaving(true);
     const payload = {
       farm_id: farmId,
@@ -315,15 +341,22 @@ function IrrigationProgramsPanel({
       start_times: form.start_times.filter(Boolean).map((t) => `${timeToInputValue(t)}:00`),
       motor_device_ids: form.motor_device_ids,
       skip_if_rain: programType === 'fertigation' ? false : Boolean(form.skip_if_rain),
+      pre_flush_minutes: programType === 'fertigation' ? (Number(form.pre_flush_minutes) || 0) : 0,
+      post_flush_minutes: programType === 'fertigation' ? (Number(form.post_flush_minutes) || 0) : 0,
       updated_at: new Date().toISOString(),
     };
 
     let programId = editing?.id;
     if (editing) {
-      const { error } = await supabase
+      let { error } = await supabase
         .from('irrigation_programs')
         .update(payload)
         .eq('id', editing.id);
+      if (error && /pre_flush_minutes|post_flush_minutes/.test(error.message || '')) {
+        delete payload.pre_flush_minutes;
+        delete payload.post_flush_minutes;
+        ({ error } = await supabase.from('irrigation_programs').update(payload).eq('id', editing.id));
+      }
       if (error) {
         if (String(error.message || '').includes('run_order')) {
           setMessage({ type: 'warning', text: 'Run migration 041_irrigation_program_run_order.sql, then try again.' });
@@ -336,11 +369,20 @@ function IrrigationProgramsPanel({
       await supabase.from('irrigation_program_steps').delete().eq('program_id', editing.id);
       await supabase.from('irrigation_program_devices').delete().eq('program_id', editing.id);
     } else {
-      const { data, error } = await supabase
+      let { data, error } = await supabase
         .from('irrigation_programs')
         .insert({ ...payload, created_at: new Date().toISOString() })
         .select('id')
         .single();
+      if (error && /pre_flush_minutes|post_flush_minutes/.test(error.message || '')) {
+        delete payload.pre_flush_minutes;
+        delete payload.post_flush_minutes;
+        ({ data, error } = await supabase
+          .from('irrigation_programs')
+          .insert({ ...payload, created_at: new Date().toISOString() })
+          .select('id')
+          .single());
+      }
       if (error) {
         if (String(error.message || '').includes('run_order')) {
           setMessage({ type: 'warning', text: 'Run migration 041_irrigation_program_run_order.sql, then try again.' });
@@ -354,22 +396,10 @@ function IrrigationProgramsPanel({
     }
 
     const stepRows = form.steps
-      .filter((s) => (programType === 'fertigation'
-        ? s.zone_id && Number(s.on_duration_minutes) > 0
-        : s.zone_id && Number(s.target_liters) > 0))
+      .filter((s) => s.zone_id && (Number(s.on_duration_minutes) > 0 || Number(s.target_liters) > 0))
       .map((s, idx) => {
         const zone = (zones || []).find((z) => String(z.id) === String(s.zone_id));
         const est = estimateMinutesFromLiters(s.target_liters, zone?.flow_rate_lph);
-        if (programType === 'fertigation') {
-          return {
-            program_id: programId,
-            seq: idx,
-            zone_id: Number(s.zone_id),
-            target_liters: null,
-            on_duration_minutes: Number(s.on_duration_minutes),
-            is_active: s.is_active !== false,
-          };
-        }
         return {
           program_id: programId,
           seq: idx,
@@ -476,6 +506,21 @@ function IrrigationProgramsPanel({
   };
 
   const toggleActive = async (program) => {
+    if (!program.is_active) {
+      const conflicts = findProgramScheduleConflicts({
+        program,
+        allPrograms: allFarmPrograms,
+        zones,
+        editingProgramId: program.id,
+      });
+      if (conflicts.length > 0) {
+        setMessage({
+          type: 'error',
+          text: `Cannot activate '${program.name}': schedule conflicts with an active program. (${conflicts[0].message})`,
+        });
+        return;
+      }
+    }
     const { error } = await supabase
       .from('irrigation_programs')
       .update({ is_active: !program.is_active, updated_at: new Date().toISOString() })
@@ -889,7 +934,7 @@ function IrrigationProgramsPanel({
               </TableRow>
             ) : programs.map((program, index) => {
               const steps = (program.irrigation_program_steps || []).slice().sort((a, b) => a.seq - b.seq);
-              const totalMins = estimateProgramMinutes(steps, zones);
+              const totalMins = estimateProgramMinutes(steps, zones, program);
               const motor = motors.find((m) => program.motor_device_ids?.some((id) => Number(id) === Number(m.id)));
               const injector = injectors.find((m) =>
                 (program.irrigation_program_devices || []).some((d) => Number(d.device_id) === Number(m.id)));
@@ -907,6 +952,15 @@ function IrrigationProgramsPanel({
                   </TableCell>
                   <TableCell>
                     <Typography fontWeight={700}>{program.name}</Typography>
+                    {programType === 'fertigation' && (Number(program.pre_flush_minutes) > 0 || Number(program.post_flush_minutes) > 0) && (
+                      <Chip
+                        size="small"
+                        variant="outlined"
+                        color="secondary"
+                        label={`Pre: ${program.pre_flush_minutes || 0}m · Post: ${program.post_flush_minutes || 0}m`}
+                        sx={{ mt: 0.5, fontSize: '0.7rem' }}
+                      />
+                    )}
                   </TableCell>
                   <TableCell>{programDaysLabel(program.days_of_week)}</TableCell>
                   <TableCell>{programTimesLabel(program.start_times)}</TableCell>
@@ -953,6 +1007,7 @@ function IrrigationProgramsPanel({
         editing={editing}
         form={form}
         setForm={setForm}
+        allPrograms={allFarmPrograms}
         zones={zones}
         motors={motors}
         injectors={injectors}

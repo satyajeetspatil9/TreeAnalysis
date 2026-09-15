@@ -670,9 +670,17 @@ export async function pauseOpenIrrigationJobs(farmId, { exceptJobId = null, reas
   const ids = (openJobs || []).map((j) => j.id);
   if (!ids.length) return { error: null, pausedIds: [] };
 
-  // Stop any zones that were watering
+  // Stop any zones that were watering and bank elapsed minutes
   for (const job of openJobs || []) {
     if (job.status !== 'running') continue;
+    const elapsed = jobElapsedMinutes(job, new Date(now));
+    await supabase.from('irrigation_jobs').update({
+      duration_elapsed_minutes: Number(elapsed.toFixed(2)),
+      status: 'planned',
+      liters_baseline: null,
+      updated_at: now,
+    }).eq('id', job.id);
+
     const codes = await fetchJobTerminalCodes(farmId, job);
     if (codes.length) {
       await enqueueIrrigationCommand({
@@ -693,14 +701,20 @@ export async function pauseOpenIrrigationJobs(farmId, { exceptJobId = null, reas
     }
   }
 
-  const { error: updateError } = await supabase
-    .from('irrigation_jobs')
-    .update({
-      status: 'planned',
-      liters_baseline: null,
-      updated_at: now,
-    })
-    .in('id', ids);
+  // Set any non-running open jobs to planned as well
+  const nonRunningIds = (openJobs || []).filter((j) => j.status !== 'running').map((j) => j.id);
+  let updateError = null;
+  if (nonRunningIds.length) {
+    const res = await supabase
+      .from('irrigation_jobs')
+      .update({
+        status: 'planned',
+        liters_baseline: null,
+        updated_at: now,
+      })
+      .in('id', nonRunningIds);
+    updateError = res.error;
+  }
 
   return { error: updateError || null, pausedIds: ids };
 }
@@ -1136,18 +1150,160 @@ export function formatEstimatedDuration(minutes) {
   return `${rem}m`;
 }
 
-export function estimateStepMinutes(step, zones) {
-  const zone = (zones || []).find((z) => String(z.id) === String(step.zone_id));
-  const fromLiters = estimateMinutesFromLiters(step.target_liters, zone?.flow_rate_lph);
-  if (fromLiters != null) return fromLiters;
-  const manual = Number(step.on_duration_minutes);
-  return Number.isFinite(manual) && manual > 0 ? manual : null;
+export function timeToMinutes(time) {
+  const [h, m, s] = String(time ?? '').split(':').map((v) => Number(v) || 0);
+  return h * 60 + m + (s || 0) / 60;
 }
 
-export function estimateProgramMinutes(steps, zones) {
+export function minutesToClock(minutes) {
+  const total = Math.max(0, Math.round(minutes));
+  const h = Math.floor(total / 60) % 24;
+  const m = total % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+export function estimateStepMinutes(step, zones, program = null) {
+  const zone = (zones || []).find((z) => String(z.id) === String(step?.zone_id));
+  let mins = null;
+  const manual = Number(step?.on_duration_minutes);
+  if (Number.isFinite(manual) && manual > 0) {
+    mins = manual;
+  } else {
+    const fromLiters = estimateMinutesFromLiters(step?.target_liters, zone?.flow_rate_lph);
+    if (fromLiters != null) mins = fromLiters;
+  }
+  if (mins == null) return null;
+  const pre = Number(step?.pre_flush_minutes ?? program?.pre_flush_minutes ?? 0) || 0;
+  const post = Number(step?.post_flush_minutes ?? program?.post_flush_minutes ?? 0) || 0;
+  return mins + pre + post;
+}
+
+export function estimateProgramMinutes(steps, zones, program = null) {
   return (steps || []).reduce((sum, step) => {
-    const mins = estimateStepMinutes(step, zones);
+    const mins = estimateStepMinutes(step, zones, program);
     return sum + (mins || 0);
   }, 0);
 }
+
+/**
+ * Detect schedule conflicts between a proposed program schedule and all other active programs.
+ * Returns an array of conflict items if intervals overlap on shared days of the week.
+ */
+export function findProgramScheduleConflicts({ program, allPrograms = [], zones = [], editingProgramId = null }) {
+  if (!program) return [];
+  const days = (
+    Array.isArray(program.days_of_week)
+      ? program.days_of_week
+      : typeof program.days_of_week === 'string'
+        ? program.days_of_week.replace(/[{}]/g, '').split(',').map((s) => Number(s.trim()))
+        : []
+  ).map(Number).filter((d) => !isNaN(d));
+
+  let startTimes = [];
+  if (Array.isArray(program.start_times)) {
+    startTimes = program.start_times.filter(Boolean);
+  } else if (typeof program.start_times === 'string' && program.start_times.trim()) {
+    startTimes = program.start_times.replace(/[{}]/g, '').split(',').map((s) => s.trim()).filter(Boolean);
+  } else if (program.start_time) {
+    startTimes = [program.start_time];
+  }
+
+  if (!days.length || !startTimes.length) return [];
+
+  const programSteps = program.steps || program.irrigation_program_steps || [];
+  const calculatedDuration = estimateProgramMinutes(programSteps, zones, program);
+  // Default to at least 30 minutes if steps are not yet completed so the user gets instant overlap warning
+  const duration = calculatedDuration > 0 ? calculatedDuration : 30;
+
+  const conflicts = [];
+  const currentId = Number(editingProgramId || program.id);
+
+  // 1. Check intra-program pulse overlap (multiple start times in the same program)
+  for (let i = 0; i < startTimes.length; i++) {
+    for (let j = i + 1; j < startTimes.length; j++) {
+      const t1 = startTimes[i];
+      const t2 = startTimes[j];
+      const s1 = timeToMinutes(t1);
+      const e1 = s1 + duration;
+      const s2 = timeToMinutes(t2);
+      const e2 = s2 + duration;
+      const pulseOverlap = Math.max(s1, s2) < Math.min(e1, e2);
+      if (pulseOverlap) {
+        conflicts.push({
+          key: `self-pulse-${t1}-${t2}`,
+          message: `Start time ${formatTimeInput(t2)} overlaps with start time ${formatTimeInput(t1)} in this program (estimated run duration is ${formatEstimatedDuration(duration)}).`,
+        });
+      }
+    }
+  }
+
+  // 2. Check overlap against all other active programs
+  for (const other of allPrograms || []) {
+    if (!other || other.is_active === false) continue;
+    if (currentId && Number(other.id) === currentId) continue;
+
+    let otherDays = [];
+    if (Array.isArray(other.days_of_week)) {
+      otherDays = other.days_of_week.map(Number);
+    } else if (typeof other.days_of_week === 'string' && other.days_of_week.trim()) {
+      otherDays = other.days_of_week.replace(/[{}]/g, '').split(',').map((s) => Number(s.trim())).filter((n) => !isNaN(n));
+    }
+    const sharedDays = days.filter((d) => otherDays.includes(d));
+    if (!sharedDays.length) continue;
+
+    const otherSteps = other.irrigation_program_steps || other.steps || [];
+    const otherDuration = estimateProgramMinutes(otherSteps, zones, other) || 30;
+
+    let otherStarts = [];
+    if (Array.isArray(other.start_times)) {
+      otherStarts = other.start_times.filter(Boolean);
+    } else if (typeof other.start_times === 'string' && other.start_times.trim()) {
+      otherStarts = other.start_times.replace(/[{}]/g, '').split(',').map((s) => s.trim()).filter(Boolean);
+    } else if (other.start_time) {
+      otherStarts = [other.start_time];
+    }
+    if (!otherStarts.length) continue;
+
+    for (const day of sharedDays) {
+      for (const tNew of startTimes) {
+        const sNew = timeToMinutes(tNew);
+        const eNew = sNew + duration;
+
+        for (const tOther of otherStarts) {
+          const sOther = timeToMinutes(tOther);
+          const eOther = sOther + otherDuration;
+
+          // Standard interval overlap: max(start1, start2) < min(end1, end2)
+          const overlaps = Math.max(sNew, sOther) < Math.min(eNew, eOther);
+          // Overnight wrapping overlap
+          const wrapOverlaps = (eNew > 1440 && sOther < (eNew - 1440))
+            || (eOther > 1440 && sNew < (eOther - 1440));
+
+          if (overlaps || wrapOverlaps) {
+            const dayLabel = WEEKDAY_LABELS[day] || `Day ${day}`;
+            const key = `${day}-${other.id}-${tNew}-${tOther}`;
+            if (!conflicts.some((c) => c.key === key)) {
+              conflicts.push({
+                key,
+                day,
+                dayLabel,
+                otherProgramId: other.id,
+                otherProgramName: other.name,
+                otherProgramType: other.program_type,
+                otherStart: formatTimeInput(tOther),
+                otherEnd: minutesToClock(eOther),
+                newStart: formatTimeInput(tNew),
+                newEnd: minutesToClock(eNew),
+                message: `On ${dayLabel}, this program (${formatTimeInput(tNew)} – ${minutesToClock(eNew)}) overlaps with ${other.program_type === 'fertigation' ? 'fertigation' : 'water'} program '${other.name}' (${formatTimeInput(tOther)} – ${minutesToClock(eOther)}).`,
+              });
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return conflicts;
+}
+
 

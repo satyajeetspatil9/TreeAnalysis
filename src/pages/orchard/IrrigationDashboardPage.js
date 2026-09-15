@@ -67,7 +67,6 @@ import {
   expandQueuedCommands,
   fetchPowerStatus,
   formatEstimatedDuration,
-  completeOverdueIrrigationJobs,
   jobElapsedMinutes,
   pauseIrrigationJob,
   powerStatusLabel,
@@ -227,7 +226,7 @@ function IrrigationDashboardPage() {
         .limit(50),
       supabase
         .from('irrigation_jobs')
-        .select('id, zone_id, job_type, program_id, status, started_at, duration_elapsed_minutes, on_duration_minutes, max_duration_minutes, target_liters, liters_delivered, irrigation_programs(name, program_type)')
+        .select('id, zone_id, job_type, program_id, status, started_at, duration_elapsed_minutes, on_duration_minutes, max_duration_minutes, target_liters, liters_delivered, fertigation_phase, irrigation_programs(name, program_type)')
         .eq('farm_id', farm.id)
         .in('job_type', ['water', 'fertigation', 'manual'])
         .in('status', OPEN_JOB_STATUSES),
@@ -246,7 +245,7 @@ function IrrigationDashboardPage() {
         .limit(20),
     ]);
     let jobRows = jobsResult.data;
-    if (jobsResult.error && /irrigation_programs/.test(jobsResult.error.message || '')) {
+    if (jobsResult.error) {
       const fallbackJobs = await supabase
         .from('irrigation_jobs')
         .select('id, zone_id, job_type, program_id, status, started_at, duration_elapsed_minutes, on_duration_minutes, max_duration_minutes, target_liters, liters_delivered')
@@ -255,31 +254,9 @@ function IrrigationDashboardPage() {
         .in('status', OPEN_JOB_STATUSES);
       jobRows = fallbackJobs.data;
     }
-    const overdue = await completeOverdueIrrigationJobs(farm.id, jobRows || []);
-    const overdueJobs = (jobRows || []).filter((job) => overdue.completedIds.includes(job.id));
-    if (overdueJobs.length) {
-      const overdueZones = new Set(overdueJobs.map((job) => Number(job.zone_id)));
-      jobRows = (jobRows || []).filter((job) => !overdue.completedIds.includes(job.id));
-      setRows(mergeZoneStatusRows(
-        zoneRows,
-        (statusRows || []).map((row) => (
-          overdueZones.has(Number(row.zone_id))
-            ? { ...row, is_irrigating: false, pending_command: 'stop' }
-            : row
-        )),
-      ));
-    }
     setQueueCommands(queueRows || []);
     setProgramJobs(jobRows || []);
-    setRecentCompletedJobs([
-      ...overdueJobs.map((job) => ({
-        id: job.id,
-        zone_id: job.zone_id,
-        completed_at: new Date().toISOString(),
-        status: 'completed',
-      })),
-      ...(completedRows || []),
-    ]);
+    setRecentCompletedJobs(completedRows || []);
     setPower(powerRow);
     setScheduleDeviceCodes(
       [...new Set(
@@ -345,10 +322,9 @@ function IrrigationDashboardPage() {
     if (!(limit > 0)) return undefined;
     const remainMs = Math.max(0, (limit - jobElapsedMinutes(running, new Date())) * 60000);
     const timerId = window.setTimeout(() => {
-      completeOverdueIrrigationJobs(farm.id, [running]).then((result) => {
-        if (result.completedIds.length) load();
-      });
-    }, remainMs + 750);
+      // Refresh dashboard status when estimated job run limit expires so backend state machine transition is reflected
+      load();
+    }, remainMs + 1000);
     return () => window.clearTimeout(timerId);
   }, [farm?.id, programJobs, load]);
 
@@ -620,6 +596,25 @@ function IrrigationDashboardPage() {
                             variant="outlined"
                             label={runningJob.irrigation_programs.name}
                             sx={{ fontWeight: 700 }}
+                          />
+                        )}
+                        {runningJob?.job_type === 'fertigation' && (
+                          <Chip
+                            color={
+                              runningJob.fertigation_phase === 'injecting'
+                                ? 'secondary'
+                                : runningJob.fertigation_phase === 'post_flush'
+                                  ? 'warning'
+                                  : 'info'
+                            }
+                            label={
+                              runningJob.fertigation_phase === 'injecting'
+                                ? 'Phase 2/3: Chemical Injection'
+                                : runningJob.fertigation_phase === 'post_flush'
+                                  ? 'Phase 3/3: Line Rinse (Post-flush)'
+                                  : 'Phase 1/3: Line Pressurization (Pre-flush)'
+                            }
+                            sx={{ fontWeight: 800 }}
                           />
                         )}
                       </Box>

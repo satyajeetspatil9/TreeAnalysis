@@ -150,13 +150,6 @@ export async function copyProgramProductsOntoEvent(supabase, {
 }) {
   if (!eventId || (!programId && !jobId)) return { error: null, inserted: 0, rows: [] };
 
-  const alreadyOnJob = (existingEvents || []).some((event) => {
-    if (event.productsInherited) return false;
-    if (parseFertigationJobIdFromNotes(event.notes) !== Number(jobId)) return false;
-    return (event.fertigation_products || []).length > 0;
-  });
-  if (alreadyOnJob) return { error: null, inserted: 0, rows: [] };
-
   const { data: existing } = await supabase
     .from('fertigation_products')
     .select('id')
@@ -168,18 +161,36 @@ export async function copyProgramProductsOntoEvent(supabase, {
   if (mix.error) return { error: mix.error, inserted: 0, rows: mix.rows || [] };
   if (!mix.rows?.length) return { error: null, inserted: 0, rows: [] };
 
-  const { error: insertError } = await supabase.from('fertigation_products').insert(
-    mix.rows.map((row) => ({
-      fertigation_event_id: eventId,
-      product_id: row.product_id,
-      quantity: row.quantity,
-      unit: row.unit || null,
-    })),
-  );
+  // Calculate proportional ratio across active program steps if multiple steps exist
+  let ratio = 1;
+  if (programId) {
+    const { data: steps } = await supabase
+      .from('irrigation_program_steps')
+      .select('on_duration_minutes, is_active')
+      .eq('program_id', programId);
+    const activeSteps = (steps || []).filter((s) => s.is_active !== false);
+    if (activeSteps.length > 1) {
+      const totalMins = activeSteps.reduce((sum, s) => sum + (Number(s.on_duration_minutes) || 1), 0);
+      if (totalMins > 0 && durationMinutes > 0) {
+        ratio = Math.min(1, Math.max(0.01, Number(durationMinutes) / totalMins));
+      } else {
+        ratio = 1 / activeSteps.length;
+      }
+    }
+  }
+
+  const productRows = mix.rows.map((row) => ({
+    fertigation_event_id: eventId,
+    product_id: row.product_id,
+    quantity: Number((Number(row.quantity) * ratio).toFixed(3)),
+    unit: row.unit || null,
+  }));
+
+  const { error: insertError } = await supabase.from('fertigation_products').insert(productRows);
   return {
     error: insertError || null,
-    inserted: insertError ? 0 : mix.rows.length,
-    rows: mix.rows,
+    inserted: insertError ? 0 : productRows.length,
+    rows: productRows,
   };
 }
 

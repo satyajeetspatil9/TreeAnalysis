@@ -294,12 +294,13 @@ async function farmHasRain(supabase: Supabase, farmId: number) {
 function stepFieldsFor(step: Job, isFertigation: boolean, zone: Job | undefined) {
   const cap = capMinutesFor(step, zone);
   const duration = Number(step?.on_duration_minutes);
+  const liters = Number(step?.target_liters);
   return {
     program_step_id: step.id,
     zone_id: step.zone_id,
     current_step_seq: Number(step.seq) || 0,
-    target_liters: isFertigation ? null : (step.target_liters != null ? Number(step.target_liters) : null),
-    on_duration_minutes: isFertigation && Number.isFinite(duration) && duration > 0
+    target_liters: Number.isFinite(liters) && liters > 0 ? liters : null,
+    on_duration_minutes: Number.isFinite(duration) && duration > 0
       ? Math.round(duration)
       : null,
     max_duration_minutes: cap,
@@ -492,39 +493,38 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
   const effectiveStartMinutes = (program: Job) => (
     originalStartMinutes(program)
       .map((original) => original + shiftMinutes)
-      .filter((m) => Number.isFinite(m) && m < 24 * 60)
+      .map((m) => Math.min(23 * 60 + 59, m)) // Cap to 23:59 so day-shifted programs are not dropped
+      .filter((m) => Number.isFinite(m) && m >= 0)
   );
 
-  const futureStartMin = (program: Job) => (
-    effectiveStartMinutes(program)
-      .filter((m) => nowMin < m)
-      .sort((a, b) => a - b)[0]
-  );
-
-  const catchUpStartMin = (program: Job) => (
-    effectiveStartMinutes(program)
-      .filter((m) => nowMin >= m)
-      .sort((a, b) => a - b)[0]
-  );
-
-  const latestExecutedToday = (programId: number) => {
-    const executed = jobsForProgramToday(programId).filter(jobExecuted);
-    if (!executed.length) return null;
-    return executed.sort((a, b) => {
-      const ta = new Date(String(latestExecutedAt(a) || 0)).getTime();
-      const tb = new Date(String(latestExecutedAt(b) || 0)).getTime();
-      return tb - ta;
-    })[0];
+  const executedStartTimesToday = (programId: number) => {
+    const jobs = jobsForProgramToday(programId);
+    const executedSlots = new Set<string>();
+    for (const j of jobs) {
+      if (!j.scheduled_for) continue;
+      const schedLocal = partsInTz(new Date(String(j.scheduled_for)), FARM_TZ);
+      if (schedLocal.dateKey === local.dateKey) {
+        executedSlots.add(schedLocal.hhmm);
+      }
+    }
+    return executedSlots;
   };
 
-  /** Open job, or already ran today unless an edit left a later start time. */
-  const programBlocksNewJob = (program: Job) => {
-    const rows = jobsForProgramToday(Number(program.id));
-    if (rows.some((j) => OPEN_STATUSES.includes(String(j.status || '')))) return true;
-    const executed = latestExecutedToday(Number(program.id));
-    if (!executed) return false;
-    if (!programEditedAfterJob(program, executed)) return true;
-    return futureStartMin(program) == null;
+  const programHasOpenJob = (programId: number) => (
+    jobsForProgramToday(programId).some((j) => OPEN_STATUSES.includes(String(j.status || '')))
+  );
+
+  const nextDueStartMin = (program: Job) => {
+    if (programHasOpenJob(Number(program.id))) return null;
+    const executedSlots = executedStartTimesToday(Number(program.id));
+    const starts = effectiveStartMinutes(program).sort((a, b) => a - b);
+    for (const m of starts) {
+      const clock = minutesToClock(m);
+      if (nowMin >= m && !executedSlots.has(clock)) {
+        return m;
+      }
+    }
+    return null;
   };
 
   const earliestUnstartedEffectiveMin = () => {
@@ -532,10 +532,12 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
     for (const program of programs || []) {
       const days = ((program.days_of_week || []) as number[]).map(Number);
       if (days.length && !days.includes(local.weekday)) continue;
-      if (programBlocksNewJob(program)) continue;
+      if (programHasOpenJob(Number(program.id))) continue;
+      const executedSlots = executedStartTimesToday(Number(program.id));
       for (const original of originalStartMinutes(program)) {
-        const effective = original + shiftMinutes;
-        if (effective >= 24 * 60) continue;
+        const effective = Math.min(23 * 60 + 59, original + shiftMinutes);
+        const clock = minutesToClock(effective);
+        if (executedSlots.has(clock)) continue;
         if (earliest == null || effective < earliest) earliest = effective;
       }
     }
@@ -676,12 +678,9 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
     for (const program of programs || []) {
       const days = ((program.days_of_week || []) as number[]).map(Number);
       if (days.length && !days.includes(local.weekday)) continue;
-      if (programBlocksNewJob(program)) continue;
+      if (programHasOpenJob(Number(program.id))) continue;
 
-      const executed = latestExecutedToday(Number(program.id));
-      const dueMin = executed && programEditedAfterJob(program, executed)
-        ? futureStartMin(program)
-        : catchUpStartMin(program);
+      const dueMin = nextDueStartMin(program);
       if (dueMin == null) continue;
 
       if (programSkipsIfRain(program) && await raining()) {
@@ -852,9 +851,27 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
     const delivered = Number(job.liters_delivered) || 0;
     const elapsed = elapsedMinutes(job, now);
 
+    const activeProgSteps = job.program_id ? activeStepsOf(steps || [], Number(job.program_id)) : [];
+    const currentStep = activeProgSteps.find((s) => Number(s.seq) === Number(job.current_step_seq)) || activeProgSteps[0];
+    const preFlush = Number(currentStep?.pre_flush_minutes ?? program?.pre_flush_minutes ?? 0) || 0;
+    const postFlush = Number(currentStep?.post_flush_minutes ?? program?.post_flush_minutes ?? 0) || 0;
+    const injectionMinutes = Number(job.on_duration_minutes) || 0;
+    const totalStepMinutes = isFertigationJob && (preFlush > 0 || postFlush > 0)
+      ? (preFlush + injectionMinutes + postFlush)
+      : null;
+
+    const effectiveDuration = totalStepMinutes ?? duration;
     const hitLiters = target != null && delivered >= target;
-    const hitDuration = duration != null && elapsed >= duration;
+    const hitDuration = effectiveDuration != null && elapsed >= effectiveDuration;
     const hitCap = cap != null && elapsed >= cap;
+
+    let fertigationPhase = 'full';
+    if (isFertigationJob && (preFlush > 0 || postFlush > 0)) {
+      if (elapsed < preFlush) fertigationPhase = 'pre_flush';
+      else if (elapsed < preFlush + injectionMinutes) fertigationPhase = 'injecting';
+      else fertigationPhase = 'post_flush';
+    }
+
     // A job resuming after a pause may already be finished, so completion is
     // checked before the start path rather than only while running.
     const hasRun = Boolean(job.started_at) || elapsed > 0 || delivered > 0;
@@ -867,22 +884,72 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
         await recordWaterIrrigationEvent(supabase, job, zone, now, elapsed);
       }
 
-      const programSteps = job.program_id ? activeStepsOf(steps || [], Number(job.program_id)) : [];
-      const idx = programSteps.findIndex((s) => Number(s.seq) === Number(job.current_step_seq));
-      const next = idx >= 0 ? programSteps[idx + 1] : null;
+      const idx = activeProgSteps.findIndex((s) => Number(s.seq) === Number(job.current_step_seq));
+      const next = idx >= 0 ? activeProgSteps[idx + 1] : null;
 
       if (next) {
-        stopJob(reason, null);
         const nextZone = next.zone_id ? zonesById.get(Number(next.zone_id)) : undefined;
+        const nextStepFields = stepFieldsFor(next, isFertigationJob, nextZone);
+
+        // Seamless motor continuity: keep motor running and switch valves
+        const oldCodes = devicesForJob(job);
+        job.zone_id = next.zone_id;
+        job.current_step_seq = Number(next.seq) || 0;
+        job.program_step_id = next.id;
+        const newCodes = devicesForJob(job);
+
+        const toStop = oldCodes.filter((c) => !newCodes.includes(c));
+        batch.cancelFor(toStop, 'start');
+        for (const code of toStop) {
+          batch.add(code, 'stop', { jobId: job.id, zoneId: job.zone_id, reason: 'step_advance' });
+        }
+        if (zone?.id) zonePendingPatches.set(Number(zone.id), 'stop');
+
+        const targetNext = nextStepFields.target_liters;
+        const durationNext = nextStepFields.on_duration_minutes;
+        const capNext = nextStepFields.max_duration_minutes;
+        const nextPre = Number(next.pre_flush_minutes ?? program?.pre_flush_minutes ?? 0) || 0;
+        const nextPost = Number(next.post_flush_minutes ?? program?.post_flush_minutes ?? 0) || 0;
+        const totalNextDuration = isFertigationJob && (nextPre > 0 || nextPost > 0)
+          ? (nextPre + (durationNext || 0) + nextPost)
+          : durationNext;
+
+        const nextValve = (devices || []).find((d) => (
+          next.zone_id && Number(d.zone_id) === Number(next.zone_id) && d.kind === 'zone_valve'
+        ));
+        const nextValveCode = normalizeCode(nextValve?.device_code);
+
+        for (const code of newCodes) {
+          const device = (devices || []).find((d) => normalizeCode(d.device_code) === code);
+          const until: Until = {};
+          if (code === nextValveCode && targetNext != null) until.liters = targetNext;
+          if (totalNextDuration != null) until.minutes = totalNextDuration;
+          else if (capNext != null) until.minutes = capNext;
+
+          if (isFertigationJob && device?.kind === 'fertigation' && nextPre > 0) {
+            continue;
+          }
+
+          batch.cancelFor([code], 'stop');
+          batch.add(code, 'start', {
+            jobId: job.id,
+            zoneId: next.zone_id,
+            until,
+            role: device?.kind,
+          });
+        }
+        if (next.zone_id) zonePendingPatches.set(Number(next.zone_id), 'start');
+
         patchJob(job, {
-          status: 'planned',
-          started_at: null,
+          status: 'running',
+          started_at: now.toISOString(),
           liters_delivered: 0,
-          liters_baseline: null,
+          liters_baseline: statusByZone.get(Number(next.zone_id))?.total_discharge_liters ?? 0,
           duration_elapsed_minutes: 0,
-          ...stepFieldsFor(next, isFertigationJob, nextZone),
+          fertigation_phase: isFertigationJob && nextPre > 0 ? 'pre_flush' : (isFertigationJob ? 'injecting' : 'full'),
+          ...nextStepFields,
         });
-        actions.push(`advanced_job:${job.id}:seq:${next.seq}:${reason}`);
+        actions.push(`advanced_job:${job.id}:seq:${next.seq}:${reason}:continuous_motor`);
       } else {
         stopJob(reason, 'completed');
         actions.push(`completed_job:${job.id}:${reason}`);
@@ -898,7 +965,46 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
       continue;
     }
 
-    if (job.status === 'running') continue;
+    if (job.status === 'running') {
+      // Manage 3-phase fertigation injector start/stop while running
+      if (isFertigationJob && (preFlush > 0 || postFlush > 0)) {
+        patchJob(job, { fertigation_phase: fertigationPhase });
+        const injectorCodes = (programDevices || [])
+          .filter((d) => Number(d.program_id) === Number(job.program_id))
+          .map((d) => devicesById.get(Number(d.device_id))?.device_code)
+          .map(normalizeCode)
+          .filter(isTerminal);
+
+        if (fertigationPhase === 'injecting') {
+          const remainingInject = Math.max(1, Math.ceil((preFlush + injectionMinutes) - elapsed));
+          for (const injCode of injectorCodes) {
+            if (!batch.hasPending(injCode, 'start') && !believedOn(injCode)) {
+              batch.cancelFor([injCode], 'stop');
+              batch.add(injCode, 'start', {
+                jobId: job.id,
+                zoneId: job.zone_id,
+                until: { minutes: remainingInject },
+                role: 'fertigation',
+              });
+              actions.push(`fertigation_inject_start:${job.id}:${injCode}:${remainingInject}m`);
+            }
+          }
+        } else if (fertigationPhase === 'post_flush') {
+          for (const injCode of injectorCodes) {
+            if (believedOn(injCode) || batch.hasPending(injCode, 'start')) {
+              batch.cancelFor([injCode], 'start');
+              batch.add(injCode, 'stop', {
+                jobId: job.id,
+                zoneId: job.zone_id,
+                reason: 'post_flush_reached',
+              });
+              actions.push(`fertigation_inject_stop:${job.id}:${injCode}`);
+            }
+          }
+        }
+      }
+      continue;
+    }
     if (job.status === 'paused_manual') continue;
 
     if (programSkipsIfRain(program) && await raining()) {
@@ -919,7 +1025,7 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
 
     const remainingLiters = target != null ? Math.max(0, target - delivered) : null;
     const remainingMinutes = (() => {
-      const limits = [duration, cap].filter((v): v is number => v != null);
+      const limits = [effectiveDuration, cap].filter((v): v is number => v != null);
       if (!limits.length) return null;
       return Math.max(1, Math.ceil(Math.min(...limits) - elapsed));
     })();
@@ -928,17 +1034,20 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
       ? Number(status.total_discharge_liters) - delivered
       : 0;
 
+    const initPhase = isFertigationJob && preFlush > 0 ? 'pre_flush' : (isFertigationJob ? 'injecting' : 'full');
+
     patchJob(job, {
       status: 'running',
       started_at: now.toISOString(),
       liters_baseline: baseline,
+      fertigation_phase: initPhase,
     });
 
-    // Litres belong to the metered zone valve only; pumps and injectors stop on
-    // time. Remaining, not the original target, so a resumed job does not ask
-    // again for water it already delivered.
     for (const code of codes) {
       const device = (devices || []).find((d) => normalizeCode(d.device_code) === code);
+      if (isFertigationJob && device?.kind === 'fertigation' && initPhase === 'pre_flush') {
+        continue;
+      }
       const until: Until = {};
       if (device?.kind === 'zone_valve' && remainingLiters != null) until.liters = remainingLiters;
       if (remainingMinutes != null) until.minutes = remainingMinutes;
@@ -954,7 +1063,8 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
     actions.push(
       `started_job:${job.id}:${codes.join(',')}`
       + (remainingLiters != null ? `:liters:${remainingLiters}` : '')
-      + (remainingMinutes != null ? `:minutes:${remainingMinutes}` : ''),
+      + (remainingMinutes != null ? `:minutes:${remainingMinutes}` : '')
+      + (isFertigationJob ? `:phase:${initPhase}` : ''),
     );
   }
 
@@ -1201,12 +1311,12 @@ async function copyProgramProductsOntoFertigationEvent(
 ) {
   const programId = job.program_id != null ? Number(job.program_id) : null;
 
-  const { data: siblingEvents } = await supabase
-    .from('fertigation_events')
-    .select('id, fertigation_products(id)')
-    .like('notes', `irrigation_job:${job.id}:%`);
-  const already = (siblingEvents || []).some((row) => (row.fertigation_products || []).length);
-  if (already) return;
+  const { data: thisEventProducts } = await supabase
+    .from('fertigation_products')
+    .select('id')
+    .eq('fertigation_event_id', eventId)
+    .limit(1);
+  if (thisEventProducts?.length) return;
 
   const { data: mix, error } = programId
     ? await supabase
@@ -1256,11 +1366,30 @@ async function copyProgramProductsOntoFertigationEvent(
   }
   if (!rows.length) return;
 
+  // Calculate proportional ratio if this is a multi-step program
+  let ratio = 1;
+  if (programId) {
+    const { data: progSteps } = await supabase
+      .from('irrigation_program_steps')
+      .select('on_duration_minutes, is_active')
+      .eq('program_id', programId);
+    const activeSteps = (progSteps || []).filter((s) => s.is_active !== false);
+    if (activeSteps.length > 1) {
+      const totalMins = activeSteps.reduce((sum, s) => sum + (Number(s.on_duration_minutes) || 1), 0);
+      const stepMins = Number(job.on_duration_minutes) || 1;
+      if (totalMins > 0) {
+        ratio = Math.min(1, Math.max(0.01, stepMins / totalMins));
+      } else {
+        ratio = 1 / activeSteps.length;
+      }
+    }
+  }
+
   const { error: insertError } = await supabase.from('fertigation_products').insert(
     rows.map((row) => ({
       fertigation_event_id: eventId,
       product_id: row.product_id,
-      quantity: row.quantity,
+      quantity: Number((Number(row.quantity) * ratio).toFixed(3)),
       unit: row.unit,
     })),
   );

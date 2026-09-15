@@ -22,24 +22,30 @@ import {
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
+import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import {
+  estimateLitersFromMinutes,
   estimateMinutesFromLiters,
   estimateProgramMinutes,
+  findProgramScheduleConflicts,
   formatEstimatedDuration,
   formatTimeInput,
   WEEKDAY_LABELS,
 } from '../../utils/irrigationSchedule';
 
 function emptyStep(seq = 0) {
-  return { zone_id: '', target_liters: '', on_duration_minutes: '', seq, is_active: true };
+  return {
+    zone_id: '',
+    target_liters: '',
+    on_duration_minutes: '',
+    mode: 'duration',
+    seq,
+    is_active: true,
+  };
 }
 
-function stepHasZoneAndLiters(step) {
-  return Boolean(step?.zone_id) && Number(step?.target_liters) > 0;
-}
-
-function stepHasZoneAndDuration(step) {
-  return Boolean(step?.zone_id) && Number(step?.on_duration_minutes) > 0;
+function stepHasTarget(step) {
+  return Boolean(step?.zone_id) && (Number(step?.target_liters) > 0 || Number(step?.on_duration_minutes) > 0);
 }
 
 const fieldsetSx = {
@@ -70,6 +76,7 @@ export default function IrrigationProgramFormDialog({
   motors,
   injectors,
   fertilizerProducts = [],
+  allPrograms = [],
   programType,
   saving,
   onSave,
@@ -78,15 +85,23 @@ export default function IrrigationProgramFormDialog({
   const [submitted, setSubmitted] = useState(false);
   const isFertigation = programType === 'fertigation';
 
-  const startTime = formatTimeInput(form.start_times?.[0]) || '';
-  const hasCompleteStep = (form.steps || []).some(
-    isFertigation ? stepHasZoneAndDuration : stepHasZoneAndLiters,
-  );
+  const startTimes = (form.start_times || []).filter(Boolean);
+  const hasCompleteStep = (form.steps || []).some(stepHasTarget);
 
   const totalMinutes = useMemo(
-    () => estimateProgramMinutes(form.steps, zones),
-    [form.steps, zones],
+    () => estimateProgramMinutes(form.steps, zones, form),
+    [form, zones],
   );
+
+  // Schedule collision and overlap detection
+  const conflicts = useMemo(() => {
+    return findProgramScheduleConflicts({
+      program: form,
+      allPrograms,
+      zones,
+      editingProgramId: editing?.id,
+    });
+  }, [form, allPrograms, zones, editing?.id]);
 
   useEffect(() => {
     if (open) {
@@ -135,6 +150,33 @@ export default function IrrigationProgramFormDialog({
     });
   };
 
+  const addStartTime = () => {
+    const current = (form.start_times || []).filter(Boolean);
+    const last = current[current.length - 1] || '06:00';
+    const [h, m] = last.split(':').map(Number);
+    const nextH = (h + 4) % 24;
+    const nextTime = `${String(nextH).padStart(2, '0')}:${String(m || 0).padStart(2, '0')}`;
+    setForm((f) => ({
+      ...f,
+      start_times: [...current, nextTime],
+    }));
+  };
+
+  const updateStartTime = (idx, value) => {
+    setForm((f) => {
+      const times = [...(f.start_times || [])];
+      times[idx] = value;
+      return { ...f, start_times: times };
+    });
+  };
+
+  const removeStartTime = (idx) => {
+    setForm((f) => {
+      const times = (f.start_times || []).filter((_, i) => i !== idx);
+      return { ...f, start_times: times.length ? times : ['06:00'] };
+    });
+  };
+
   const updateStep = (idx, patch) => {
     setForm((f) => {
       const steps = [...f.steps];
@@ -153,8 +195,8 @@ export default function IrrigationProgramFormDialog({
       setError('Pick at least one day.');
       return;
     }
-    if (!startTime) {
-      setError('Enter a start time.');
+    if (!startTimes.length) {
+      setError('At least one start time is required.');
       return;
     }
     if (!(form.motor_device_ids || []).length) {
@@ -166,9 +208,11 @@ export default function IrrigationProgramFormDialog({
       return;
     }
     if (!hasCompleteStep) {
-      setError(isFertigation
-        ? 'Add at least one zone and how many minutes to run.'
-        : 'Add at least one zone and how many liters to water.');
+      setError('Add at least one zone with run time or target liters.');
+      return;
+    }
+    if (conflicts.length > 0) {
+      setError('Cannot save program: schedule conflicts with an existing active program. Please resolve overlapping start times or days.');
       return;
     }
     setError(null);
@@ -185,9 +229,28 @@ export default function IrrigationProgramFormDialog({
       <DialogContent dividers>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
           {isFertigation
-            ? 'Selected equipment terminals (motor, injector, zone valve) start and stop together. Next zone starts when that time is over. After this program runs today it will not start again unless you save a change and a start time is still later today.'
-            : 'Each zone waters until the liters are done, then the next zone starts. If mains is late, remaining programs today move by that delay. A mid-run outage extends this program and shifts later ones. After this program runs today it will not start again unless you save a change and a start time is still later today.'}
+            ? '3-phase fertigation cycle: clean water pre-wetting, chemical injection, and line post-flushing across sequential zones. Programs cannot overlap with other schedules.'
+            : 'Sequential zone irrigation. Choose duration or target volume per zone. Programs cannot overlap with other schedules on the same days.'}
         </Typography>
+
+        {conflicts.length > 0 && (
+          <Alert severity="error" icon={<WarningAmberIcon />} sx={{ mb: 2 }}>
+            <Typography variant="subtitle2" fontWeight={800} gutterBottom>
+              Schedule Conflict (Overlapping Program Detected)
+            </Typography>
+            <Typography variant="body2" sx={{ mb: 1 }}>
+              Only one program can operate the irrigation pump at a time. The proposed schedule collides with existing active programs:
+            </Typography>
+            {conflicts.map((c) => (
+              <Typography key={c.key} variant="body2" sx={{ fontWeight: 600, pl: 1 }}>
+                • {c.message}
+              </Typography>
+            ))}
+            <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1 }}>
+              Please change the start time, days of week, or step durations to clear the overlap before saving.
+            </Typography>
+          </Alert>
+        )}
 
         {error && (
           <Alert severity="warning" sx={{ mb: 2 }} onClose={() => setError(null)}>
@@ -243,23 +306,40 @@ export default function IrrigationProgramFormDialog({
                 </Typography>
               )}
 
-              <Grid container spacing={2} alignItems="flex-start">
-                <Grid item xs={12} sm={4}>
-                  <TextField
-                    fullWidth
-                    required
-                    type="time"
-                    label="Start time"
-                    value={startTime}
-                    onChange={(e) => setForm((f) => ({
-                      ...f,
-                      start_times: [e.target.value],
-                    }))}
-                    InputLabelProps={{ shrink: true }}
-                    inputProps={{ step: 300 }}
-                    error={submitted && !startTime}
-                    helperText={submitted && !startTime ? 'Required' : undefined}
-                  />
+              <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600, display: 'block', mb: 1 }}>
+                Start Times (Pulse Irrigation Supported)
+              </Typography>
+
+              <Grid container spacing={1.5} alignItems="center">
+                {(form.start_times || ['06:00']).map((timeVal, sIdx) => (
+                  <Grid item xs={12} sm={4} key={sIdx} sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                    <TextField
+                      fullWidth
+                      required
+                      type="time"
+                      label={`Start time ${sIdx + 1}`}
+                      value={formatTimeInput(timeVal)}
+                      onChange={(e) => updateStartTime(sIdx, e.target.value)}
+                      InputLabelProps={{ shrink: true }}
+                      inputProps={{ step: 300 }}
+                      error={submitted && !timeVal}
+                    />
+                    {(form.start_times || []).length > 1 && (
+                      <IconButton size="small" aria-label="Remove start time" onClick={() => removeStartTime(sIdx)}>
+                        <DeleteIcon fontSize="small" />
+                      </IconButton>
+                    )}
+                  </Grid>
+                ))}
+                <Grid item xs={12}>
+                  <Button
+                    size="small"
+                    startIcon={<AddIcon />}
+                    onClick={addStartTime}
+                    sx={{ textTransform: 'none' }}
+                  >
+                    Add another daily start time (pulse)
+                  </Button>
                 </Grid>
               </Grid>
             </FormControl>
@@ -335,55 +415,83 @@ export default function IrrigationProgramFormDialog({
             </FormControl>
           </Grid>
 
-          {!isFertigation && (
-          <Grid item xs={12}>
-            <FormControlLabel
-              control={(
-                <Checkbox
-                  checked={Boolean(form.skip_if_rain)}
-                  onChange={(e) => setForm((f) => ({ ...f, skip_if_rain: e.target.checked }))}
-                />
-              )}
-              label="Skip start if rain detected in Climate"
-            />
-            <Typography variant="caption" color="text.secondary" display="block" sx={{ ml: 4, mt: -0.5 }}>
-              When checked, this program will not start if rainfall is above 0 mm. Water now still runs.
-            </Typography>
-          </Grid>
-          )}
           {isFertigation && (
-          <Grid item xs={12}>
-            <Typography variant="body2" color="text.secondary">
-              Fertigation always starts on schedule, even if Climate shows rain.
-            </Typography>
-          </Grid>
+            <Grid item xs={12}>
+              <FormControl component="fieldset" variant="standard" fullWidth sx={fieldsetSx}>
+                <FormLabel component="legend" sx={legendSx}>3-Phase Fertigation Cycle (Pre & Post Flush)</FormLabel>
+                <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1.5 }}>
+                  Pre-wetting pressurizes lines with clean water before chemical injection. Post-flush rinses chemical residue out of drippers to prevent emitter clogging.
+                </Typography>
+                <Grid container spacing={2}>
+                  <Grid item xs={12} sm={6}>
+                    <TextField
+                      fullWidth
+                      label="Pre-watering / Line Wetting (min)"
+                      type="number"
+                      value={form.pre_flush_minutes != null ? form.pre_flush_minutes : 10}
+                      inputProps={{ min: 0, step: 1 }}
+                      onChange={(e) => setForm((f) => ({ ...f, pre_flush_minutes: e.target.value }))}
+                      helperText="Pure water before injector turns on (default 10 min)"
+                    />
+                  </Grid>
+                  <Grid item xs={12} sm={6}>
+                    <TextField
+                      fullWidth
+                      label="Post-rinse / Emitter Flush (min)"
+                      type="number"
+                      value={form.post_flush_minutes != null ? form.post_flush_minutes : 10}
+                      inputProps={{ min: 0, step: 1 }}
+                      onChange={(e) => setForm((f) => ({ ...f, post_flush_minutes: e.target.value }))}
+                      helperText="Pure water after injector turns off (default 10 min)"
+                    />
+                  </Grid>
+                </Grid>
+              </FormControl>
+            </Grid>
+          )}
+
+          {!isFertigation && (
+            <Grid item xs={12}>
+              <FormControlLabel
+                control={(
+                  <Checkbox
+                    checked={Boolean(form.skip_if_rain)}
+                    onChange={(e) => setForm((f) => ({ ...f, skip_if_rain: e.target.checked }))}
+                  />
+                )}
+                label="Skip start if rain detected in Climate"
+              />
+              <Typography variant="caption" color="text.secondary" display="block" sx={{ ml: 4, mt: -0.5 }}>
+                When checked, this program will not start if rainfall is above 0 mm. Water now still runs.
+              </Typography>
+            </Grid>
           )}
 
           <Grid item xs={12}>
             <FormControl component="fieldset" variant="standard" fullWidth sx={fieldsetSx}>
-              <FormLabel component="legend" sx={legendSx}>
-                Zones
-              </FormLabel>
+              <FormLabel component="legend" sx={legendSx}>Zones</FormLabel>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', mb: 1.5, gap: 1 }}>
                 <Typography variant="body2" color="text.secondary">
-                  {isFertigation
-                    ? 'One after another. Minutes are how long the selected terminals stay on together.'
-                    : 'One after another. Enter liters for each zone.'}
+                  One after another. Choose duration or target liters per zone.
                 </Typography>
                 {totalMinutes > 0 && (
-                  <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
-                    About {formatEstimatedDuration(totalMinutes)} total
+                  <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: 'nowrap', fontWeight: 600 }}>
+                    About {formatEstimatedDuration(totalMinutes)} total run
                   </Typography>
                 )}
               </Box>
 
               {form.steps.map((step, idx) => {
                 const zone = (zones || []).find((z) => String(z.id) === String(step.zone_id));
-                const est = estimateMinutesFromLiters(step.target_liters, zone?.flow_rate_lph);
+                const estFromLiters = estimateMinutesFromLiters(step.target_liters, zone?.flow_rate_lph);
+                const estFromMinutes = estimateLitersFromMinutes(step.on_duration_minutes, zone?.flow_rate_lph);
                 const showStepError = submitted && !hasCompleteStep;
+                const isDurationMode = step.mode === 'duration'
+                  || (Number(step.on_duration_minutes) > 0 && !(Number(step.target_liters) > 0));
+
                 return (
-                  <Grid container spacing={1.5} alignItems="flex-start" key={idx} sx={{ mb: 1.5 }}>
-                    <Grid item xs={12} sm={isFertigation ? 7 : 6}>
+                  <Grid container spacing={1.5} alignItems="center" key={idx} sx={{ mb: 1.5 }}>
+                    <Grid item xs={12} sm={4}>
                       <FormControl fullWidth required error={showStepError && !step.zone_id}>
                         <InputLabel>Zone {idx + 1}</InputLabel>
                         <Select
@@ -391,16 +499,7 @@ export default function IrrigationProgramFormDialog({
                           value={step.zone_id}
                           onChange={(e) => {
                             const zone_id = e.target.value;
-                            if (isFertigation) {
-                              updateStep(idx, { zone_id });
-                              return;
-                            }
-                            const z = (zones || []).find((item) => String(item.id) === String(zone_id));
-                            const computed = estimateMinutesFromLiters(step.target_liters, z?.flow_rate_lph);
-                            updateStep(idx, {
-                              zone_id,
-                              on_duration_minutes: computed != null ? String(computed) : '',
-                            });
+                            updateStep(idx, { zone_id });
                           }}
                         >
                           {(zones || []).map((z) => (
@@ -410,49 +509,70 @@ export default function IrrigationProgramFormDialog({
                         {showStepError && !step.zone_id && <FormHelperText>Pick a zone</FormHelperText>}
                       </FormControl>
                     </Grid>
-                    {isFertigation ? (
-                      <Grid item xs={8} sm={4}>
+
+                    <Grid item xs={5} sm={2.5}>
+                      <FormControl fullWidth size="small">
+                        <InputLabel>Target By</InputLabel>
+                        <Select
+                          label="Target By"
+                          value={isDurationMode ? 'duration' : 'volume'}
+                          onChange={(e) => {
+                            const nextMode = e.target.value;
+                            if (nextMode === 'duration') {
+                              updateStep(idx, {
+                                mode: 'duration',
+                                on_duration_minutes: step.on_duration_minutes || '30',
+                                target_liters: '',
+                              });
+                            } else {
+                              updateStep(idx, {
+                                mode: 'volume',
+                                target_liters: step.target_liters || '5000',
+                                on_duration_minutes: '',
+                              });
+                            }
+                          }}
+                        >
+                          <MenuItem value="duration">Minutes (Time)</MenuItem>
+                          <MenuItem value="volume">Liters (Volume)</MenuItem>
+                        </Select>
+                      </FormControl>
+                    </Grid>
+
+                    <Grid item xs={5} sm={4.5}>
+                      {isDurationMode ? (
                         <TextField
                           fullWidth
                           required
-                          label="Minutes"
+                          label={isFertigation ? "Injection Minutes" : "Run Minutes"}
                           type="number"
                           value={step.on_duration_minutes}
                           error={showStepError && !(Number(step.on_duration_minutes) > 0)}
-                          helperText={showStepError && !(Number(step.on_duration_minutes) > 0)
-                            ? 'Required'
-                            : undefined}
+                          helperText={estFromMinutes != null ? `~${estFromMinutes} L at ${zone?.flow_rate_lph} L/h` : 'Required'}
                           inputProps={{ min: 1, step: 1 }}
                           onChange={(e) => updateStep(idx, {
                             on_duration_minutes: e.target.value,
                             target_liters: '',
                           })}
                         />
-                      </Grid>
-                    ) : (
-                      <Grid item xs={8} sm={5}>
+                      ) : (
                         <TextField
                           fullWidth
                           required
-                          label="Liters"
+                          label="Target Liters"
                           type="number"
                           value={step.target_liters}
                           error={showStepError && !(Number(step.target_liters) > 0)}
-                          helperText={showStepError && !(Number(step.target_liters) > 0)
-                            ? 'Required'
-                            : (est != null ? `About ${formatEstimatedDuration(est)}` : undefined)}
-                          onChange={(e) => {
-                            const target_liters = e.target.value;
-                            const computed = estimateMinutesFromLiters(target_liters, zone?.flow_rate_lph);
-                            updateStep(idx, {
-                              target_liters,
-                              on_duration_minutes: computed != null ? String(computed) : '',
-                            });
-                          }}
+                          helperText={estFromLiters != null ? `~${formatEstimatedDuration(estFromLiters)} at ${zone?.flow_rate_lph} L/h` : 'Required'}
+                          onChange={(e) => updateStep(idx, {
+                            target_liters: e.target.value,
+                            on_duration_minutes: '',
+                          })}
                         />
-                      </Grid>
-                    )}
-                    <Grid item xs={4} sm={1} sx={{ pt: { sm: 1 } }}>
+                      )}
+                    </Grid>
+
+                    <Grid item xs={2} sm={1}>
                       <IconButton
                         size="small"
                         aria-label="Remove zone"
@@ -483,92 +603,114 @@ export default function IrrigationProgramFormDialog({
           </Grid>
 
           {isFertigation && (
-          <Grid item xs={12}>
-            <FormControl component="fieldset" variant="standard" fullWidth sx={fieldsetSx}>
-              <FormLabel component="legend" sx={legendSx}>Products</FormLabel>
-              <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-                Mix recorded on Monitoring when this program finishes. Stock is deducted then, not when you save the program.
-              </Typography>
-              {(form.products || []).map((line, idx) => (
-                <Grid container spacing={1.5} alignItems="flex-start" key={idx} sx={{ mb: 1.5 }}>
-                  <Grid item xs={12} sm={7}>
-                    <FormControl fullWidth>
-                      <InputLabel>Product</InputLabel>
-                      <Select
-                        label="Product"
-                        value={line.product_id}
-                        onChange={(e) => {
-                          const product_id = e.target.value;
-                          const product = fertilizerProducts.find((p) => String(p.id) === String(product_id));
-                          setForm((f) => {
-                            const products = [...(f.products || [])];
-                            products[idx] = {
-                              ...products[idx],
-                              product_id,
-                              unit: product?.unit || products[idx].unit || 'kg',
-                            };
-                            return { ...f, products };
-                          });
-                        }}
-                      >
-                        <MenuItem value="">None</MenuItem>
-                        {fertilizerProducts.map((p) => (
-                          <MenuItem key={p.id} value={String(p.id)}>
-                            {p.name}{p.unit ? ` (${p.unit})` : ''}
-                          </MenuItem>
-                        ))}
-                      </Select>
-                    </FormControl>
-                  </Grid>
-                  <Grid item xs={8} sm={4}>
-                    <TextField
-                      fullWidth
-                      label="Quantity"
-                      type="number"
-                      value={line.quantity}
-                      inputProps={{ min: 0, step: 'any' }}
-                      onChange={(e) => {
-                        setForm((f) => {
-                          const products = [...(f.products || [])];
-                          products[idx] = { ...products[idx], quantity: e.target.value };
-                          return { ...f, products };
-                        });
-                      }}
-                    />
-                  </Grid>
-                  <Grid item xs={4} sm={1} sx={{ pt: { sm: 1 } }}>
-                    <IconButton
-                      size="small"
-                      aria-label="Remove product"
-                      disabled={(form.products || []).length <= 1}
-                      onClick={() => setForm((f) => ({
-                        ...f,
-                        products: (f.products || []).filter((_, i) => i !== idx),
-                      }))}
-                    >
-                      <DeleteIcon fontSize="small" />
-                    </IconButton>
-                  </Grid>
-                </Grid>
-              ))}
-              <Button
-                size="small"
-                startIcon={<AddIcon />}
-                onClick={() => setForm((f) => ({
-                  ...f,
-                  products: [...(f.products || []), { product_id: '', quantity: '', unit: 'kg' }],
-                }))}
-              >
-                Add product
-              </Button>
-            </FormControl>
-          </Grid>
+            <Grid item xs={12}>
+              <FormControl component="fieldset" variant="standard" fullWidth sx={fieldsetSx}>
+                <FormLabel component="legend" sx={legendSx}>Fertilizer Products Recipe</FormLabel>
+                <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1.5 }}>
+                  Total fertilizer mix for this program. Applied and deducted from inventory across completed zones.
+                </Typography>
+                {(form.products || []).map((line, idx) => {
+                  const product = fertilizerProducts.find((p) => String(p.id) === String(line.product_id));
+                  const stock = product?.inventory?.[0]?.current_stock ?? product?.current_stock ?? null;
+                  const isDeficit = stock != null && Number(line.quantity) > Number(stock);
+
+                  return (
+                    <Grid container spacing={1.5} alignItems="flex-start" key={idx} sx={{ mb: 1.5 }}>
+                      <Grid item xs={12} sm={7}>
+                        <FormControl fullWidth>
+                          <InputLabel>Product</InputLabel>
+                          <Select
+                            label="Product"
+                            value={line.product_id}
+                            onChange={(e) => {
+                              const product_id = e.target.value;
+                              const pMatch = fertilizerProducts.find((p) => String(p.id) === String(product_id));
+                              setForm((f) => {
+                                const products = [...(f.products || [])];
+                                products[idx] = {
+                                  ...products[idx],
+                                  product_id,
+                                  unit: pMatch?.unit || products[idx].unit || 'kg',
+                                };
+                                return { ...f, products };
+                              });
+                            }}
+                          >
+                            <MenuItem value="">None</MenuItem>
+                            {fertilizerProducts.map((p) => {
+                              const s = p.inventory?.[0]?.current_stock ?? p.current_stock ?? null;
+                              return (
+                                <MenuItem key={p.id} value={String(p.id)}>
+                                  {p.name}{p.unit ? ` (${p.unit})` : ''}{s != null ? ` — ${s} in stock` : ''}
+                                </MenuItem>
+                              );
+                            })}
+                          </Select>
+                          {stock != null && (
+                            <FormHelperText sx={{ color: isDeficit ? 'error.main' : 'text.secondary' }}>
+                              {isDeficit
+                                ? `⚠️ Exceeds stock! Only ${stock} ${product?.unit || ''} available`
+                                : `Available stock: ${stock} ${product?.unit || ''}`}
+                            </FormHelperText>
+                          )}
+                        </FormControl>
+                      </Grid>
+                      <Grid item xs={8} sm={4}>
+                        <TextField
+                          fullWidth
+                          label="Quantity"
+                          type="number"
+                          value={line.quantity}
+                          error={isDeficit}
+                          inputProps={{ min: 0, step: 'any' }}
+                          onChange={(e) => {
+                            setForm((f) => {
+                              const products = [...(f.products || [])];
+                              products[idx] = { ...products[idx], quantity: e.target.value };
+                              return { ...f, products };
+                            });
+                          }}
+                        />
+                      </Grid>
+                      <Grid item xs={4} sm={1} sx={{ pt: { sm: 1 } }}>
+                        <IconButton
+                          size="small"
+                          aria-label="Remove product"
+                          disabled={(form.products || []).length <= 1}
+                          onClick={() => setForm((f) => ({
+                            ...f,
+                            products: (f.products || []).filter((_, i) => i !== idx),
+                          }))}
+                        >
+                          <DeleteIcon fontSize="small" />
+                        </IconButton>
+                      </Grid>
+                    </Grid>
+                  );
+                })}
+                <Button
+                  size="small"
+                  startIcon={<AddIcon />}
+                  onClick={() => setForm((f) => ({
+                    ...f,
+                    products: [...(f.products || []), { product_id: '', quantity: '', unit: 'kg' }],
+                  }))}
+                >
+                  Add product
+                </Button>
+              </FormControl>
+            </Grid>
           )}
         </Grid>
       </DialogContent>
       <DialogActions sx={{ px: 3, py: 2 }}>
         <Button onClick={onClose} disabled={saving}>Cancel</Button>
-        <Button variant="contained" disabled={saving} onClick={handleSave}>
+        <Button
+          variant="contained"
+          color={conflicts.length > 0 ? "error" : "primary"}
+          disabled={saving || conflicts.length > 0}
+          onClick={handleSave}
+        >
           {saving ? 'Saving…' : (editing ? 'Save' : 'Create')}
         </Button>
       </DialogActions>
