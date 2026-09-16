@@ -31,6 +31,7 @@ import SatelliteMonitoringPage from './pages/monitoring/SatelliteMonitoringPage'
 import DiseaseDashboardPage from './pages/monitoring/DiseaseDashboardPage';
 import GrowthComparisonPage from './pages/monitoring/GrowthComparisonPage';
 import AlertsPage from './pages/monitoring/AlertsPage';
+import OrchardBriefingPage from './pages/monitoring/OrchardBriefingPage';
 import ExpensesPage from './pages/finance/ExpensesPage';
 import LabourPage from './pages/finance/LabourPage';
 import CostAnalysisPage from './pages/finance/CostAnalysisPage';
@@ -76,6 +77,7 @@ function ProtectedApp() {
           <Route path="inputs/spray" element={<SprayPage />} />
           <Route path="inputs/soil-application" element={<SoilApplicationPage />} />
           <Route path="inputs/optimizer" element={<FertilizerOptimizerPage />} />
+          <Route path="monitoring/briefing" element={<OrchardBriefingPage />} />
           <Route path="monitoring/soil" element={<SoilMonitoringPage />} />
           <Route path="monitoring/moisture" element={<MoistureMonitoringPage />} />
           <Route path="monitoring/satellite" element={<SatelliteMonitoringPage />} />

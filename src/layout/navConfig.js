@@ -22,6 +22,7 @@ import BiotechIcon from '@mui/icons-material/Biotech';
 import BugReportIcon from '@mui/icons-material/BugReport';
 import TrendingUpIcon from '@mui/icons-material/TrendingUp';
 import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive';
+import SummarizeIcon from '@mui/icons-material/Summarize';
 import ReceiptLongIcon from '@mui/icons-material/ReceiptLong';
 import GroupsIcon from '@mui/icons-material/Groups';
 import AnalyticsIcon from '@mui/icons-material/Analytics';
@@ -55,6 +56,7 @@ export const navSections = [
     title: 'Monitoring',
     icon: MonitorHeartIcon,
     items: [
+      { label: 'Weekly briefing', path: '/monitoring/briefing', icon: SummarizeIcon, description: 'Joined week: water, moisture, radar, soil, climate, growth, disease' },
       { label: 'Soil', path: '/monitoring/soil', icon: GrassIcon, description: 'Soil observations' },
       { label: 'Moisture', path: '/monitoring/moisture', icon: OpacityIcon, description: 'Latest moisture by tree' },
       { label: 'Irrigation', path: '/irrigation/events', icon: EventIcon, description: 'Watering events' },
