@@ -583,26 +583,17 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
 
   const executedStartTimesToday = (programId: number) => {
     const program = (programs || []).find((p) => Number(p.id) === Number(programId));
-    const starts = program ? effectiveStartMinutes(program) : [];
     const jobs = jobsForProgramToday(programId);
     const executedSlots = new Set<string>();
     for (const j of jobs) {
       if (!jobExecuted(j)) continue;
-      const raw = j.started_at || j.scheduled_for;
-      if (!raw) continue;
-      const localParts = partsInTz(new Date(String(raw)), FARM_TZ);
+      // A save after this run is a new instruction; do not consume the new start time.
+      if (program && programEditedAfterJob(program, j)) continue;
+      const slotRaw = j.scheduled_for || j.started_at;
+      if (!slotRaw) continue;
+      const localParts = partsInTz(new Date(String(slotRaw)), FARM_TZ);
       if (localParts.dateKey !== local.dateKey) continue;
-      const mins = timeToMinutes(localParts.hhmm);
-      let clock = localParts.hhmm;
-      let bestDiff = 24 * 60;
-      for (const startMin of starts) {
-        const diff = Math.abs(startMin - mins);
-        if (diff < bestDiff) {
-          bestDiff = diff;
-          clock = minutesToClock(startMin);
-        }
-      }
-      executedSlots.add(bestDiff <= 90 ? clock : localParts.hhmm);
+      executedSlots.add(minutesToClock(timeToMinutes(localParts.hhmm)));
     }
     return executedSlots;
   };
@@ -614,19 +605,10 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
   const nextDueStartMin = (program: Job) => {
     if (programHasOpenJob(Number(program.id))) return null;
     const executedSlots = executedStartTimesToday(Number(program.id));
-    const executedJobs = jobsForProgramToday(Number(program.id)).filter(jobExecuted);
-    const lastRun = executedJobs.slice().sort((a, b) => (
-      new Date(String(latestExecutedAt(b) || 0)).getTime()
-      - new Date(String(latestExecutedAt(a) || 0)).getTime()
-    ))[0];
-    const editedAfterRun = lastRun ? programEditedAfterJob(program, lastRun) : false;
     const starts = effectiveStartMinutes(program).sort((a, b) => a - b);
     for (const m of starts) {
-      const clock = minutesToClock(m);
-      if (executedSlots.has(clock)) continue;
+      if (executedSlots.has(minutesToClock(m))) continue;
       if (nowMin < m) continue;
-      // After a save, only a listed start that is still later today may run again.
-      if (editedAfterRun && m < nowMin) continue;
       return m;
     }
     return null;

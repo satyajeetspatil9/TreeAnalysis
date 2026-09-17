@@ -406,7 +406,6 @@ function IrrigationDashboardPage() {
     }),
     [programRows],
   );
-  const counts = useMemo(() => countIrrigationStatusRows(rows), [rows]);
   const runningJob = useMemo(
     () => (programJobs || []).find((job) => job.status === 'running') || null,
     [programJobs],
@@ -426,6 +425,14 @@ function IrrigationDashboardPage() {
   );
   const liveZone = runningJobZone || activeZone;
   const hardwareLive = Boolean(controllerLive?.watering) && !controllerLive?.stale;
+  const counts = useMemo(
+    () => countIrrigationStatusRows(rows, {
+      runningJob,
+      recentCompleted: recentCompletedJobs,
+      controllerWatering: hardwareLive,
+    }),
+    [rows, runningJob, recentCompletedJobs, hardwareLive],
+  );
   const awaitingController = Boolean(runningJob) && !hardwareLive && !activeZone;
   const isLive = Boolean(hardwareLive || runningJob || activeZone);
   const isFertigating = Boolean(runningJob && !isWaterMonitoringJob(runningJob));

@@ -140,7 +140,12 @@ export function isZoneTelemetryStale(row, runningJob, recentCompleted) {
   return true;
 }
 
-export function countIrrigationStatusRows(rows) {
+export function countIrrigationStatusRows(rows, options = {}) {
+  const {
+    runningJob = null,
+    recentCompleted = [],
+    controllerWatering = false,
+  } = options;
   const counts = {
     irrigating: 0,
     idle: 0,
@@ -152,9 +157,20 @@ export function countIrrigationStatusRows(rows) {
       counts.noData += 1;
       return;
     }
-    if (row.isIrrigating) counts.irrigating += 1;
+    const jobOnZone = Boolean(runningJob && Number(runningJob.zone_id) === Number(row.zone?.id));
+    const watering = jobOnZone || (
+      row.isIrrigating
+      && (controllerWatering || Boolean(runningJob))
+      && !isZoneTelemetryStale(row, runningJob, recentCompleted)
+    );
+    if (watering) counts.irrigating += 1;
     else counts.idle += 1;
   });
+
+  if (controllerWatering && counts.irrigating === 0) {
+    counts.irrigating = 1;
+    if (counts.idle > 0) counts.idle -= 1;
+  }
 
   return counts;
 }
