@@ -315,6 +315,19 @@ function stepFieldsFor(step: Job, isFertigation: boolean, zone: Job | undefined,
   };
 }
 
+function startUntilExpired(row: QueueRow | undefined, now: Date) {
+  if (!row || row.action !== 'start') return false;
+  const payload = row.payload && typeof row.payload === 'object' ? row.payload : {};
+  const until = payload.until && typeof payload.until === 'object'
+    ? payload.until as Record<string, unknown>
+    : {};
+  const minutes = Number(until.minutes);
+  if (!Number.isFinite(minutes) || minutes <= 0) return false;
+  const startMs = new Date(String(row.created_at)).getTime();
+  if (!Number.isFinite(startMs)) return false;
+  return now.getTime() >= startMs + minutes * 60000 + 15000;
+}
+
 function jobScheduledMs(job: Job) {
   const raw = job.scheduled_for || job.started_at;
   if (!raw) return 0;
@@ -343,8 +356,8 @@ function compareJobSequence(a: Job, b: Job, programs: Job[] | null) {
   return pa.id - pb.id;
 }
 
-/** Keep a running job; otherwise run the current start-time wave in run_order. */
-function pickPrimary(startable: Job[], programs: Job[] | null) {
+/** Keep a running job. After fertigation has started today, finish that queue before leftover water. */
+function pickPrimary(startable: Job[], programs: Job[] | null, todayJobs: Job[] = []) {
   const manual = startable.find((job) => job.job_type === 'manual');
   if (manual) return manual;
   const running = startable.find((job) => job.status === 'running');
@@ -354,8 +367,16 @@ function pickPrimary(startable: Job[], programs: Job[] | null) {
   const waveMs = 2 * 60 * 60 * 1000;
   const wave = startable.filter((job) => latest - jobScheduledMs(job) <= waveMs);
   const pool = (wave.length ? wave : startable).slice();
-  pool.sort((a, b) => compareJobSequence(a, b, programs));
-  return pool[0] || null;
+  const fertigationDue = pool.filter((job) => sequenceParts(job, programs).fertigation === 1);
+  const fertigationAlreadyRan = (todayJobs || []).some((job) => (
+    jobExecuted(job) && (
+      job.job_type === 'fertigation'
+      || sequenceParts(job, programs).fertigation === 1
+    )
+  ));
+  const group = (fertigationDue.length && fertigationAlreadyRan) ? fertigationDue : pool;
+  group.sort((a, b) => compareJobSequence(a, b, programs));
+  return group[0] || null;
 }
 
 function outageMinutesBetween(startedAt: string | null | undefined, endedAt: Date) {
@@ -499,8 +520,20 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
     const last = lastAckedByCode.get(code);
     if (!last || last.action !== 'start') return false;
     if (powerChangedAt && new Date(last.created_at) < powerChangedAt) return false;
+    if (startUntilExpired(last, now)) return false;
     return true;
   };
+
+  const hardwareFinishedFor = (codes: string[]) => (
+    codes.length > 0
+    && codes.every((code) => {
+      if (batch.hasPending(code, 'start')) return false;
+      const last = lastAckedByCode.get(code);
+      if (!last) return false;
+      if (last.action === 'stop') return true;
+      return startUntilExpired(last, now);
+    })
+  );
 
   const jobPatches = new Map<number, Record<string, unknown>>();
   const patchJob = (job: Job, patch: Record<string, unknown>) => {
@@ -868,7 +901,7 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
     return compareJobSequence(a, b, programs || []);
   });
 
-  let primary = pickPrimary(startableOf(sortedOpen), programs || []);
+  let primary = pickPrimary(startableOf(sortedOpen), programs || [], todayProgramJobs);
 
   for (const job of sortedOpen) {
     const program = job.program_id
@@ -952,6 +985,7 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
     const hitCap = cap != null
       && elapsed >= cap
       && (effectiveDuration == null || elapsed >= effectiveDuration);
+    const hardwareFinished = job.status === 'running' && hardwareFinishedFor(codes);
 
     let fertigationPhase = 'full';
     if (isFertigationJob && (preFlush > 0 || postFlush > 0)) {
@@ -964,8 +998,10 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
     // checked before the start path rather than only while running.
     const hasRun = Boolean(job.started_at) || elapsed > 0 || delivered > 0;
 
-    if (hasRun && (hitLiters || hitDuration || hitCap)) {
-      const reason = hitLiters ? 'target_liters' : (hitDuration ? 'duration_done' : 'max_duration');
+    if (hasRun && (hitLiters || hitDuration || hitCap || hardwareFinished)) {
+      const reason = hitLiters
+        ? 'target_liters'
+        : (hitDuration ? 'duration_done' : (hitCap ? 'max_duration' : 'controller_until'));
       if (isFertigationJob) {
         await recordFertigationEvent(supabase, job, zone, now, elapsed);
       } else {
@@ -1045,6 +1081,7 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
           primary = pickPrimary(
             startableOf(sortedOpen.filter((j) => Number(j.id) !== Number(job.id))),
             programs || [],
+            todayProgramJobs,
           );
         }
       }
