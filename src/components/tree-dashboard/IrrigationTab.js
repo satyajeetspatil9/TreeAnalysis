@@ -120,7 +120,7 @@ function IrrigationTab({ tree, zoneCode }) {
         return;
       }
       const [live, jobResult] = await Promise.all([
-        fetchControllerLiveState(),
+        fetchControllerLiveState(supabase),
         farm?.id
           ? supabase
             .from('irrigation_jobs')

@@ -29,9 +29,18 @@ export function controllerHeadline(live) {
 }
 
 function parseTime(value) {
-  if (!value) return null;
+  if (value == null || value === '') return null;
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const ms = value > 1e12 ? value : value * 1000;
+    const date = new Date(ms);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function rowTime(row) {
+  return parseTime(row?.recordedAtIst) || parseTime(row?.recordedEpoch);
 }
 
 function parseIstClockOnDate(clock, isoDate) {
@@ -46,6 +55,27 @@ function parseIstClockOnDate(clock, isoDate) {
 function isWateringState(state) {
   const text = String(state || '').toUpperCase();
   return text.includes('WATERING') || text.includes('ENDING');
+}
+
+/** Newest-first history: pin-off is the oldest ALL QUIET in the current quiet streak, not the latest poll. */
+function lastRunFromHistory(history) {
+  const rows = history || [];
+  if (!rows.length) {
+    return { startRow: null, stopRow: null, wateringNow: false };
+  }
+  const wateringNow = isWateringState(rows[0].heroState);
+  let i = 0;
+  if (!wateringNow) {
+    while (i < rows.length && !isWateringState(rows[i].heroState)) i += 1;
+  }
+  const stopRow = wateringNow || i === 0 ? null : rows[i - 1];
+  const run = [];
+  while (i < rows.length && isWateringState(rows[i].heroState)) {
+    run.push(rows[i]);
+    i += 1;
+  }
+  const startRow = run.length ? run[run.length - 1] : null;
+  return { startRow, stopRow, wateringNow };
 }
 
 function addMinutes(date, minutes) {
@@ -70,39 +100,29 @@ export function compareProgramAndControllerTimes({
 } = {}) {
   const history = live?.history || [];
   const watering = Boolean(live?.watering);
+  const { startRow, stopRow } = lastRunFromHistory(history);
 
-  let controllerStart = parseIstClockOnDate(live?.startedAt, live?.updatedAtIst);
+  let controllerStart = parseIstClockOnDate(
+    live?.startedAt,
+    startRow?.recordedAtIst || live?.updatedAtIst,
+  );
+  controllerStart = rowTime(startRow) || controllerStart;
+
   let controllerEnd = null;
   let controllerEnded = !watering;
-
+  const runMinutes = Number(startRow?.durationMin);
   if (watering) {
-    const run = [];
-    for (const row of history) {
-      if (!isWateringState(row.heroState) && run.length) break;
-      if (isWateringState(row.heroState)) run.push(row);
-    }
-    const startRow = run[run.length - 1];
-    controllerStart = parseTime(startRow?.recordedAtIst) || controllerStart;
     controllerEnd = live?.minutesLeft != null
       ? addMinutes(now, live.minutesLeft)
-      : addMinutes(controllerStart, live?.durationMin);
+      : addMinutes(controllerStart, live?.durationMin || runMinutes);
   } else {
-    const stopRow = history.find((row) => !isWateringState(row.heroState));
-    const run = [];
-    let afterStop = Boolean(stopRow);
-    for (const row of history) {
-      if (afterStop && row === stopRow) continue;
-      if (!isWateringState(row.heroState)) {
-        if (run.length) break;
-        continue;
-      }
-      run.push(row);
+    controllerEnd = rowTime(stopRow);
+    if (!controllerEnd && runMinutes > 0) {
+      controllerEnd = addMinutes(controllerStart, runMinutes);
     }
-    const startRow = run[run.length - 1];
-    controllerStart = parseTime(startRow?.recordedAtIst)
-      || parseIstClockOnDate(startRow?.startedAt || live?.startedAt, stopRow?.recordedAtIst || live?.updatedAtIst)
-      || controllerStart;
-    controllerEnd = parseTime(stopRow?.recordedAtIst);
+    if (!controllerEnd && Number(live?.durationMin) > 0) {
+      controllerEnd = addMinutes(controllerStart, live.durationMin);
+    }
   }
 
   const programStartPlanned = parseTime(job?.scheduled_for);
