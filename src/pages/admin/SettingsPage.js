@@ -719,7 +719,9 @@ function SettingsPage() {
         <Typography variant="h6" gutterBottom>Irrigation SQL (037–061)</Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
           Run these in Supabase SQL Editor in order if a feature is missing. Web deploys do not apply SQL.
-          After 061, redeploy <code>irrigation-scheduler</code>.
+          After 061, redeploy irrigation-scheduler. Controller Y0–Y7 come from Turso
+          lilygo_live_state (TreeESP32Controller). Deploy controller-live-state and set
+          Edge secrets TURSO_DATABASE_URL and TURSO_AUTH_TOKEN.
         </Typography>
         <Typography variant="body2" component="div">
           037 zone status · 038 zone commands · 039 schedule control · 040 scheduler cron ·

@@ -1,6 +1,8 @@
 import { formatDate, formatNumber } from './formatters';
 
 export const IRRIGATION_STATUS_POLL_MS = 3 * 60 * 1000;
+/** Now tab + Programs share this poll so jobs, telemetry, and Pause stay aligned. */
+export const IRRIGATION_LIVE_POLL_MS = 15 * 1000;
 
 export function buildIrrigationStatusSampleJson(zoneCode = 'Z01') {
   const now = new Date().toISOString();

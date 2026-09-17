@@ -20,3 +20,6 @@ verify_jwt = false
 
 [functions.irrigation-scheduler]
 verify_jwt = false
+
+[functions.controller-live-state]
+verify_jwt = false

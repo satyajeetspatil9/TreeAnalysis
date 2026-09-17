@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -54,6 +54,12 @@ import {
   applySavedProgramToRunningJob,
 } from '../../utils/irrigationSchedule';
 import { emptyFertigationLineItem, formatFertilizerProductLines } from '../../utils/fertilizerEventMaintenance';
+import { programMatchesController } from '../../utils/controllerLiveState';
+
+function jobsForPanel(jobs, programType) {
+  const types = programType === 'fertigation' ? ['fertigation'] : ['water', 'manual'];
+  return (jobs || []).filter((job) => types.includes(job.job_type));
+}
 
 function IrrigationProgramsPanel({
   farmId,
@@ -62,7 +68,10 @@ function IrrigationProgramsPanel({
   programType = 'water',
   title = 'Programs',
   refreshKey = 0,
+  liveJobs = null,
+  controllerLive = null,
   onProgramsChanged,
+  onJobsChanged,
 }) {
   const [programs, setPrograms] = useState([]);
   const [allFarmPrograms, setAllFarmPrograms] = useState([]);
@@ -100,6 +109,8 @@ function IrrigationProgramsPanel({
   });
   const [jobBusy, setJobBusy] = useState(false);
   const [fertilizerProducts, setFertilizerProducts] = useState([]);
+  const liveJobsRef = useRef(liveJobs);
+  liveJobsRef.current = liveJobs;
 
   const drivable = (devices || []).filter((d) => d.io_type !== 'input');
   const motors = drivable.filter((d) => d.kind === 'irrigation_motor');
@@ -155,16 +166,18 @@ function IrrigationProgramsPanel({
       progError = result.error;
     }
 
-    const { data: jobData, error: jobError } = await supabase
-      .from('irrigation_jobs')
-      .select('*')
-      .eq('farm_id', farmId)
-      .in(
-        'job_type',
-        programType === 'fertigation' ? ['fertigation'] : ['water', 'manual'],
-      )
-      .in('status', OPEN_JOB_STATUSES)
-      .order('created_at', { ascending: false });
+    const { data: jobData, error: jobError } = liveJobsRef.current != null
+      ? { data: [], error: null }
+      : await supabase
+        .from('irrigation_jobs')
+        .select('*')
+        .eq('farm_id', farmId)
+        .in(
+          'job_type',
+          programType === 'fertigation' ? ['fertigation'] : ['water', 'manual'],
+        )
+        .in('status', OPEN_JOB_STATUSES)
+        .order('created_at', { ascending: false });
 
     // Fetch all active programs across the farm for cross-program conflict and overlap checking
     const { data: allData } = await supabase
@@ -186,7 +199,7 @@ function IrrigationProgramsPanel({
       setJobs([]);
     } else {
       setPrograms(progData || []);
-      setJobs(jobData || []);
+      if (liveJobsRef.current == null) setJobs(jobData || []);
       setMessage(productsHint ? { type: 'warning', text: productsHint } : null);
     }
     setLoading(false);
@@ -628,7 +641,7 @@ function IrrigationProgramsPanel({
         ? 'Fertigation started now. Other programs were paused and will resume after this finishes.'
         : 'Watering started now. Other programs were paused and will resume after this job finishes.',
     });
-    await load();
+    await notifyJobsChanged();
   };
 
   const openEditJob = (job) => {
@@ -666,7 +679,7 @@ function IrrigationProgramsPanel({
     }
     setEditJob(null);
     setMessage({ type: 'success', text: 'Job updated.' });
-    await load();
+    await notifyJobsChanged();
   };
 
   const removeJob = async (job) => {
@@ -684,7 +697,7 @@ function IrrigationProgramsPanel({
         ? 'Quick job cancelled. Paused programs can resume.'
         : 'Job cancelled.',
     });
-    await load();
+    await notifyJobsChanged();
   };
 
   const pauseJob = async (job) => {
@@ -696,7 +709,7 @@ function IrrigationProgramsPanel({
       return;
     }
     setMessage({ type: 'success', text: 'Program paused. Resume when you want it to continue.' });
-    await load();
+    await notifyJobsChanged();
   };
 
   const resumeJob = async (job) => {
@@ -708,6 +721,16 @@ function IrrigationProgramsPanel({
       return;
     }
     setMessage({ type: 'success', text: 'Program queued to resume. It will start on the next scheduler tick.' });
+    await notifyJobsChanged();
+  };
+
+  const displayJobs = liveJobs != null ? jobsForPanel(liveJobs, programType) : jobs;
+
+  const notifyJobsChanged = async () => {
+    if (liveJobs != null) {
+      onJobsChanged?.();
+      return;
+    }
     await load();
   };
 
@@ -859,7 +882,7 @@ function IrrigationProgramsPanel({
         </Grid>
       </Paper>
 
-      {jobs.length > 0 && (
+      {displayJobs.length > 0 && (
         <TableContainer component={Paper} variant="outlined" sx={{ mb: 3 }}>
           <Table size="small">
             <TableHead>
@@ -871,7 +894,7 @@ function IrrigationProgramsPanel({
               </TableRow>
             </TableHead>
             <TableBody>
-              {jobs.map((job) => {
+              {displayJobs.map((job) => {
                 const zone = (zones || []).find((z) => z.id === job.zone_id);
                 const est = estimateMinutesFromLiters(job.target_liters, zone?.flow_rate_lph);
                 const isManual = job.job_type === 'manual';
@@ -951,6 +974,7 @@ function IrrigationProgramsPanel({
               const motor = motors.find((m) => program.motor_device_ids?.some((id) => Number(id) === Number(m.id)));
               const injector = injectors.find((m) =>
                 (program.irrigation_program_devices || []).some((d) => Number(d.device_id) === Number(m.id)));
+              const openJob = displayJobs.find((j) => Number(j.program_id) === Number(program.id));
               return (
                 <TableRow key={program.id} hover>
                   <TableCell>
@@ -965,6 +989,22 @@ function IrrigationProgramsPanel({
                   </TableCell>
                   <TableCell>
                     <Typography fontWeight={700}>{program.name}</Typography>
+                    {openJob && (
+                      <Chip
+                        size="small"
+                        color={openJob.status === 'running' ? 'success' : (openJob.status === 'paused_manual' ? 'warning' : 'default')}
+                        label={jobStatusLabel(openJob.status)}
+                        sx={{ mt: 0.5, ml: 0.5 }}
+                      />
+                    )}
+                    {programMatchesController(program, devices, controllerLive) && (
+                      <Chip
+                        size="small"
+                        color="info"
+                        label={`Controller ${(controllerLive.onChannels || []).join(' ')}`}
+                        sx={{ mt: 0.5, ml: 0.5 }}
+                      />
+                    )}
                     {programType === 'fertigation' && (Number(program.pre_flush_minutes) > 0 || Number(program.post_flush_minutes) > 0) && (
                       <Chip
                         size="small"

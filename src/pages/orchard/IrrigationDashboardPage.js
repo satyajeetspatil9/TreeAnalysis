@@ -40,7 +40,7 @@ import IrrigationProgramsPanel from '../../components/irrigation/IrrigationProgr
 import IrrigationDevicesPanel from '../../components/irrigation/IrrigationDevicesPanel';
 import IrrigationDeviceSchedulesPanel from '../../components/irrigation/IrrigationDeviceSchedulesPanel';
 import {
-  IRRIGATION_STATUS_POLL_MS,
+  IRRIGATION_LIVE_POLL_MS,
   buildIrrigationStatusSampleJson,
   countIrrigationStatusRows,
   formatAmperage,
@@ -58,6 +58,7 @@ import {
   zoneTelemetryAt,
 } from '../../utils/irrigationStatus';
 import { isWaterMonitoringJob } from '../../utils/irrigation';
+import { controllerHeadline, fetchControllerLiveState } from '../../utils/controllerLiveState';
 import {
   OPEN_JOB_STATUSES,
   buildCommandQueueSampleJson,
@@ -136,11 +137,8 @@ function IrrigationDashboardPage() {
   const [recentCompletedJobs, setRecentCompletedJobs] = useState([]);
   const [scheduleDeviceCodes, setScheduleDeviceCodes] = useState([]);
   const [power, setPower] = useState(null);
+  const [controllerLive, setControllerLive] = useState(null);
   const [programsRefreshKey, setProgramsRefreshKey] = useState(0);
-
-  const handleProgramsChanged = useCallback(() => {
-    setProgramsRefreshKey((k) => k + 1);
-  }, []);
 
   const loadDevices = useCallback(async () => {
     if (!farm?.id) {
@@ -163,6 +161,7 @@ function IrrigationDashboardPage() {
       setProgramJobs([]);
       setRecentCompletedJobs([]);
       setScheduleDeviceCodes([]);
+      setControllerLive(null);
       setLoading(false);
       return;
     }
@@ -192,6 +191,7 @@ function IrrigationDashboardPage() {
       setQueueCommands([]);
       setProgramJobs([]);
       setScheduleDeviceCodes([]);
+      setControllerLive(null);
       setLoading(false);
       return;
     }
@@ -211,6 +211,7 @@ function IrrigationDashboardPage() {
       setQueueCommands([]);
       setProgramJobs([]);
       setScheduleDeviceCodes([]);
+      setControllerLive(null);
       setLoading(false);
       return;
     }
@@ -223,6 +224,7 @@ function IrrigationDashboardPage() {
       { data: scheduleRows },
       { power: powerRow },
       { data: completedRows },
+      controllerResult,
     ] = await Promise.all([
       supabase
         .from('irrigation_command_queue')
@@ -250,6 +252,7 @@ function IrrigationDashboardPage() {
         .eq('status', 'completed')
         .order('completed_at', { ascending: false })
         .limit(20),
+      fetchControllerLiveState(supabase),
     ]);
     let jobRows = jobsResult.data;
     if (jobsResult.error) {
@@ -272,6 +275,7 @@ function IrrigationDashboardPage() {
     setProgramJobs(jobRows || []);
     setRecentCompletedJobs(completedRows || []);
     setPower(powerRow);
+    setControllerLive(controllerResult?.live || null);
     setScheduleDeviceCodes(
       [...new Set(
         (scheduleRows || [])
@@ -282,6 +286,15 @@ function IrrigationDashboardPage() {
 
     setLoading(false);
   }, [farm?.id]);
+
+  const handleProgramsChanged = useCallback(() => {
+    setProgramsRefreshKey((k) => k + 1);
+    load();
+  }, [load]);
+
+  const handleJobsChanged = useCallback(() => {
+    load();
+  }, [load]);
 
   /**
    * Technician tab refresh. Only the queue and the mains flag change second to
@@ -311,7 +324,7 @@ function IrrigationDashboardPage() {
     const pollId = window.setInterval(() => {
       load();
       setNowMs(Date.now());
-    }, IRRIGATION_STATUS_POLL_MS);
+    }, IRRIGATION_LIVE_POLL_MS);
 
     const tickId = window.setInterval(() => {
       setNowMs(Date.now());
@@ -411,16 +424,21 @@ function IrrigationDashboardPage() {
     [rows, runningJob],
   );
   const liveZone = runningJobZone || activeZone;
-  const awaitingController = Boolean(runningJob) && !activeZone;
-  const isLive = Boolean(activeZone || runningJob);
+  const hardwareLive = Boolean(controllerLive?.watering) && !controllerLive?.stale;
+  const awaitingController = Boolean(runningJob) && !hardwareLive && !activeZone;
+  const isLive = Boolean(hardwareLive || runningJob || activeZone);
   const isFertigating = Boolean(runningJob && !isWaterMonitoringJob(runningJob));
   const liveStartedAt = activeZone?.status?.started_at || runningJob?.started_at || null;
-  const liveHeadline = !isLive
-    ? 'No watering'
-    : awaitingController
-      ? 'Job running — awaiting controller'
-      : (isFertigating ? 'Fertigating now' : 'Watering now');
-  const liveZoneCode = liveZone?.zone?.zone_code || null;
+  const liveHeadline = hardwareLive
+    ? controllerHeadline(controllerLive)
+    : !isLive
+      ? 'No watering'
+      : awaitingController
+        ? 'Job running — awaiting controller'
+        : (isFertigating ? 'Fertigating now' : 'Watering now');
+  const liveZoneCode = controllerLive?.heroZone
+    || liveZone?.zone?.zone_code
+    || null;
   const controlRow = useMemo(
     () => rows.find((row) => String(row.zone.id) === String(controlZoneId)) || rows[0] || null,
     [rows, controlZoneId],
@@ -522,7 +540,7 @@ function IrrigationDashboardPage() {
       <PageHeader
         section="Orchard"
         title="Irrigation"
-        subtitle="Live control, programs, and device schedules. Status updates every 3 minutes."
+        subtitle="Now and Programs read the same irrigation jobs and zone status. Live state refreshes every 15 seconds."
       />
 
       {message && (
@@ -612,6 +630,14 @@ function IrrigationDashboardPage() {
                             {liveZone.zone.description}
                           </Typography>
                         )}
+                        {controllerLive?.heroChannel && hardwareLive && (
+                          <Chip
+                            color="secondary"
+                            variant="outlined"
+                            label={`Controller ${controllerLive.heroChannel}${controllerLive.minutesLeft != null ? ` · ${Number(controllerLive.minutesLeft).toFixed(0)} min left` : ''}`}
+                            sx={{ fontWeight: 700 }}
+                          />
+                        )}
                         {runningJob?.irrigation_programs?.name && (
                           <Chip
                             variant="outlined"
@@ -670,6 +696,19 @@ function IrrigationDashboardPage() {
                   {counts.noData > 0 && (
                     <Chip variant="outlined" label={`${counts.noData} no signal`} />
                   )}
+                  {controllerLive && (
+                    <Chip
+                      variant="outlined"
+                      color={controllerLive.stale ? 'warning' : (controllerLive.wifiOnline ? 'success' : 'default')}
+                      label={
+                        controllerLive.stale
+                          ? 'Controller snapshot stale'
+                          : (controllerLive.wifiOnline
+                            ? `Controller Wi-Fi ${controllerLive.wifiIp || 'on'}`
+                            : 'Controller offline')
+                      }
+                    />
+                  )}
                 </Box>
               </Box>
 
@@ -677,6 +716,22 @@ function IrrigationDashboardPage() {
                 Live readings
                 {liveZoneCode ? ` · ${liveZoneCode}` : ''}
               </Typography>
+              {controllerLive?.onChannels && (
+                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75, mb: 1.5 }}>
+                  {['Y0', 'Y1', 'Y2', 'Y3', 'Y4', 'Y5', 'Y6', 'Y7'].map((code) => {
+                    const on = controllerLive.onChannels.includes(code);
+                    return (
+                      <Chip
+                        key={code}
+                        size="small"
+                        color={on ? 'info' : 'default'}
+                        variant={on ? 'filled' : 'outlined'}
+                        label={on ? `${code} on` : code}
+                      />
+                    );
+                  })}
+                </Box>
+              )}
               <Grid container spacing={1.5}>
                 <Grid item xs={6} sm={4} md={3}>
                   <MetricTile
@@ -907,8 +962,11 @@ function IrrigationDashboardPage() {
           devices={devices}
           programType="water"
           title="Water programs"
+          liveJobs={programJobs}
+          controllerLive={controllerLive}
           refreshKey={programsRefreshKey}
           onProgramsChanged={handleProgramsChanged}
+          onJobsChanged={handleJobsChanged}
         />
         <Box sx={{ mt: 5 }}>
           <IrrigationProgramsPanel
@@ -917,8 +975,11 @@ function IrrigationDashboardPage() {
             devices={devices}
             programType="fertigation"
             title="Fertigation programs"
+            liveJobs={programJobs}
+            controllerLive={controllerLive}
             refreshKey={programsRefreshKey}
             onProgramsChanged={handleProgramsChanged}
+            onJobsChanged={handleJobsChanged}
           />
         </Box>
         <Box sx={{ mt: 5 }}>
