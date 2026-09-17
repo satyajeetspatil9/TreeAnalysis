@@ -256,7 +256,7 @@ function IrrigationDevicesPanel({ farmId, zones, onChanged }) {
 
       <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2, gap: 1, flexWrap: 'wrap' }}>
         <Typography variant="body2" color="text.secondary">
-          Register motors, fertigation injectors, and other equipment, and map each one to the controller
+          Register motors, fertilizer injectors, and other equipment, and map each one to the controller
           terminal it is wired to — outputs Y0–Y8 drive equipment, inputs X0–X8 sense it.
         </Typography>
         <Button variant="contained" startIcon={<AddIcon />} onClick={openCreate}>

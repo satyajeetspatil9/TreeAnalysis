@@ -7,7 +7,7 @@ export const DEVICE_KIND_OPTIONS = [
   { value: 'zone_valve', label: 'Zone valve' },
   { value: 'irrigation_motor', label: 'Irrigation motor' },
   { value: 'bore_motor', label: 'Bore motor' },
-  { value: 'fertigation', label: 'Fertigation injector' },
+  { value: 'fertigation', label: 'Fertilizer injector' },
   { value: 'other', label: 'Other device' },
 ];
 

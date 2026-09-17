@@ -686,7 +686,7 @@ function IrrigationDashboardPage() {
                             }
                             label={
                               runningJob.fertigation_phase === 'injecting'
-                                ? 'Phase 2/3: Chemical Injection'
+                                ? 'Phase 2/3: Fertilizer injector'
                                 : runningJob.fertigation_phase === 'post_flush'
                                   ? 'Phase 3/3: Line Rinse (Post-flush)'
                                   : 'Phase 1/3: Line Pressurization (Pre-flush)'

@@ -323,7 +323,7 @@ function IrrigationProgramsPanel({
       return;
     }
     if (programType === 'fertigation' && !(form.injector_ids || []).length) {
-      setMessage({ type: 'error', text: 'Select a fertigation injector.' });
+      setMessage({ type: 'error', text: 'Select a fertilizer injector.' });
       return;
     }
     const hasCompleteStep = (form.steps || []).some(
@@ -599,7 +599,7 @@ function IrrigationProgramsPanel({
     }
     if (isFertigation) {
       if (!jobForm.injector_id) {
-        setMessage({ type: 'error', text: 'Select an injector.' });
+        setMessage({ type: 'error', text: 'Select a fertilizer injector.' });
         return;
       }
       if (!(Number(jobForm.duration_minutes) > 0)) {
@@ -821,9 +821,9 @@ function IrrigationProgramsPanel({
           {programType === 'fertigation' && (
             <Grid item xs={12} sm={2}>
               <FormControl fullWidth size="small" required>
-                <InputLabel>Injector</InputLabel>
+                <InputLabel>Fertilizer injector</InputLabel>
                 <Select
-                  label="Injector"
+                  label="Fertilizer injector"
                   value={jobForm.injector_id}
                   onChange={(e) => setJobForm((f) => ({ ...f, injector_id: e.target.value }))}
                 >
@@ -946,7 +946,7 @@ function IrrigationProgramsPanel({
               <TableCell>Days</TableCell>
               <TableCell>Start</TableCell>
               <TableCell>Motor</TableCell>
-              {programType === 'fertigation' && <TableCell>Injector</TableCell>}
+              {programType === 'fertigation' && <TableCell>Fertilizer injector</TableCell>}
               {programType === 'fertigation' && <TableCell>Products</TableCell>}
               <TableCell>{programType === 'fertigation' ? 'Zones & minutes' : 'Zones & liters'}</TableCell>
               <TableCell>Time</TableCell>

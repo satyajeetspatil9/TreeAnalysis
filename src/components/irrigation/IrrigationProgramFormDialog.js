@@ -231,7 +231,7 @@ export default function IrrigationProgramFormDialog({
       return;
     }
     if (isFertigation && !(form.injector_ids || []).length) {
-      setError('Select a fertigation injector.');
+      setError('Select a fertilizer injector.');
       return;
     }
     if (!hasCompleteStep) {
@@ -256,7 +256,7 @@ export default function IrrigationProgramFormDialog({
       <DialogContent dividers>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
           {isFertigation
-            ? '3-phase fertigation cycle: clean water pre-wetting, chemical injection, and line post-flushing across sequential zones. Programs cannot overlap with other schedules.'
+            ? '3-phase fertigation cycle: clean water pre-wetting, fertilizer injector, and line post-flushing across sequential zones. Programs cannot overlap with other schedules.'
             : 'Sequential zone irrigation. Choose duration or target volume per zone. Programs cannot overlap with other schedules on the same days.'}
         </Typography>
 
@@ -414,9 +414,9 @@ export default function IrrigationProgramFormDialog({
                       error={submitted && !(form.injector_ids || []).length}
                       disabled={injectors.length === 0}
                     >
-                      <InputLabel>Injector</InputLabel>
+                      <InputLabel>Fertilizer injector</InputLabel>
                       <Select
-                        label="Injector"
+                        label="Fertilizer injector"
                         value={form.injector_ids[0] != null ? String(form.injector_ids[0]) : ''}
                         onChange={(e) => setForm((f) => ({
                           ...f,
@@ -430,7 +430,7 @@ export default function IrrigationProgramFormDialog({
                         ))}
                       </Select>
                       {injectors.length === 0 && (
-                        <FormHelperText>Add an injector under Devices first.</FormHelperText>
+                        <FormHelperText>Add a fertilizer injector under Devices first.</FormHelperText>
                       )}
                       {submitted && injectors.length > 0 && !(form.injector_ids || []).length && (
                         <FormHelperText>Required</FormHelperText>
@@ -447,7 +447,7 @@ export default function IrrigationProgramFormDialog({
               <FormControl component="fieldset" variant="standard" fullWidth sx={fieldsetSx}>
                 <FormLabel component="legend" sx={legendSx}>3-Phase Fertigation Cycle (Pre & Post Flush)</FormLabel>
                 <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1.5 }}>
-                  Pre-wetting pressurizes lines with clean water before chemical injection. Post-flush rinses chemical residue out of drippers to prevent emitter clogging.
+                  Pre-wetting pressurizes lines with clean water before the fertilizer injector. Post-flush rinses fertilizer residue out of drippers to prevent emitter clogging.
                 </Typography>
                 <Grid container spacing={2}>
                   <Grid item xs={12} sm={6}>
