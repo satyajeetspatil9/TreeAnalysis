@@ -37,6 +37,7 @@ import { supabase } from '../../supabaseClient';
 import { useFarm } from '../../hooks/useFarm';
 import PageHeader from '../../components/common/PageHeader';
 import IrrigationProgramsPanel from '../../components/irrigation/IrrigationProgramsPanel';
+import ProgramControllerTimingCard from '../../components/irrigation/ProgramControllerTimingCard';
 import IrrigationDevicesPanel from '../../components/irrigation/IrrigationDevicesPanel';
 import IrrigationDeviceSchedulesPanel from '../../components/irrigation/IrrigationDeviceSchedulesPanel';
 import {
@@ -58,7 +59,7 @@ import {
   zoneTelemetryAt,
 } from '../../utils/irrigationStatus';
 import { isWaterMonitoringJob } from '../../utils/irrigation';
-import { controllerHeadline, fetchControllerLiveState } from '../../utils/controllerLiveState';
+import { compareProgramAndControllerTimes, controllerHeadline, fetchControllerLiveState } from '../../utils/controllerLiveState';
 import {
   OPEN_JOB_STATUSES,
   buildCommandQueueSampleJson,
@@ -235,7 +236,7 @@ function IrrigationDashboardPage() {
         .limit(50),
       supabase
         .from('irrigation_jobs')
-        .select('id, zone_id, job_type, program_id, status, started_at, duration_elapsed_minutes, on_duration_minutes, max_duration_minutes, target_liters, liters_delivered, fertigation_phase, irrigation_programs(name, program_type, pre_flush_minutes, post_flush_minutes)')
+        .select('id, zone_id, job_type, program_id, status, scheduled_for, started_at, duration_elapsed_minutes, on_duration_minutes, max_duration_minutes, target_liters, liters_delivered, fertigation_phase, irrigation_programs(name, program_type, pre_flush_minutes, post_flush_minutes)')
         .eq('farm_id', farm.id)
         .in('job_type', ['water', 'fertigation', 'manual'])
         .in('status', OPEN_JOB_STATUSES),
@@ -247,7 +248,7 @@ function IrrigationDashboardPage() {
       fetchPowerStatus(farm.id),
       supabase
         .from('irrigation_jobs')
-        .select('id, zone_id, completed_at, status')
+        .select('id, zone_id, job_type, program_id, status, scheduled_for, started_at, completed_at, on_duration_minutes, max_duration_minutes, irrigation_programs(name, program_type, pre_flush_minutes, post_flush_minutes)')
         .eq('farm_id', farm.id)
         .eq('status', 'completed')
         .order('completed_at', { ascending: false })
@@ -439,6 +440,16 @@ function IrrigationDashboardPage() {
   const liveZoneCode = controllerLive?.heroZone
     || liveZone?.zone?.zone_code
     || null;
+  const timingJob = runningJob || recentCompletedJobs[0] || null;
+  const timing = useMemo(
+    () => compareProgramAndControllerTimes({
+      job: timingJob,
+      live: controllerLive,
+      runLimitMinutes: jobRunLimitMinutes(timingJob),
+      now: new Date(nowMs),
+    }),
+    [timingJob, controllerLive, nowMs],
+  );
   const controlRow = useMemo(
     () => rows.find((row) => String(row.zone.id) === String(controlZoneId)) || rows[0] || null,
     [rows, controlZoneId],
@@ -732,6 +743,11 @@ function IrrigationDashboardPage() {
                   })}
                 </Box>
               )}
+              <ProgramControllerTimingCard
+                timing={timing}
+                jobName={timingJob?.irrigation_programs?.name}
+                channel={controllerLive?.heroChannel}
+              />
               <Grid container spacing={1.5}>
                 <Grid item xs={6} sm={4} md={3}>
                   <MetricTile
@@ -956,6 +972,11 @@ function IrrigationDashboardPage() {
       </TabPanel>
 
       <TabPanel value={tab} index={1}>
+        <ProgramControllerTimingCard
+          timing={timing}
+          jobName={timingJob?.irrigation_programs?.name}
+          channel={controllerLive?.heroChannel}
+        />
         <IrrigationProgramsPanel
           farmId={farm?.id}
           zones={zones}

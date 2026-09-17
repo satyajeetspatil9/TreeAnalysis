@@ -20,6 +20,10 @@ import {
   IRRIGATION_METRIC_OPTIONS,
 } from '../../utils/irrigation';
 import { getIrrigationZoneId } from '../../utils/schema';
+import { useFarm } from '../../hooks/useFarm';
+import { fetchControllerLiveState, compareProgramAndControllerTimes } from '../../utils/controllerLiveState';
+import { OPEN_JOB_STATUSES, jobRunLimitMinutes } from '../../utils/irrigationSchedule';
+import ProgramControllerTimingCard from '../irrigation/ProgramControllerTimingCard';
 
 const DEFAULT_METRICS = ['zoneWater', 'treeWater'];
 const CHART_TYPES = [
@@ -51,6 +55,7 @@ function ChartTooltip({ active, payload, label }) {
 
 function IrrigationTab({ tree, zoneCode }) {
   const theme = useTheme();
+  const { farm } = useFarm();
   const [events, setEvents] = useState([]);
   const [latest, setLatest] = useState(null);
   const [treeCount, setTreeCount] = useState(0);
@@ -59,6 +64,8 @@ function IrrigationTab({ tree, zoneCode }) {
   const [grouping, setGrouping] = useState('event');
   const [chartType, setChartType] = useState('line');
   const [metrics, setMetrics] = useState(DEFAULT_METRICS);
+  const [timingJob, setTimingJob] = useState(null);
+  const [controllerLive, setControllerLive] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -103,14 +110,47 @@ function IrrigationTab({ tree, zoneCode }) {
       }
     }
 
+    async function loadTiming() {
+      const zoneId = getIrrigationZoneId(tree);
+      if (!zoneId) {
+        if (!cancelled) {
+          setTimingJob(null);
+          setControllerLive(null);
+        }
+        return;
+      }
+      const [live, jobResult] = await Promise.all([
+        fetchControllerLiveState(),
+        farm?.id
+          ? supabase
+            .from('irrigation_jobs')
+            .select('id, status, job_type, zone_id, program_id, scheduled_for, started_at, completed_at, remaining_minutes, duration_minutes, irrigation_programs(name, duration_minutes)')
+            .eq('farm_id', farm.id)
+            .eq('zone_id', zoneId)
+            .in('status', [...OPEN_JOB_STATUSES, 'completed'])
+            .order('updated_at', { ascending: false })
+            .limit(8)
+          : Promise.resolve({ data: [] }),
+      ]);
+      if (cancelled) return;
+      setControllerLive(live);
+      const jobs = jobResult.data || [];
+      const running = jobs.find((job) => job.status === 'running') || jobs.find((job) => OPEN_JOB_STATUSES.includes(job.status));
+      setTimingJob(running || jobs[0] || null);
+    }
+
     setLoading(true);
     loadIrrigation();
-    const pollId = window.setInterval(loadIrrigation, 30000);
+    loadTiming();
+    const pollId = window.setInterval(() => {
+      loadIrrigation();
+      loadTiming();
+    }, 15000);
     return () => {
       cancelled = true;
       window.clearInterval(pollId);
     };
-  }, [tree]);
+  }, [tree, farm?.id]);
 
   const filteredEvents = useMemo(
     () => filterEventsByPeriod(events, period),
@@ -134,6 +174,15 @@ function IrrigationTab({ tree, zoneCode }) {
   const latestTreeWater = useMemo(
     () => calcTreeWaterShare(latestZoneWater, treeCount),
     [latestZoneWater, treeCount],
+  );
+
+  const timing = useMemo(
+    () => compareProgramAndControllerTimes({
+      job: timingJob,
+      live: controllerLive,
+      runLimitMinutes: jobRunLimitMinutes(timingJob),
+    }),
+    [timingJob, controllerLive],
   );
 
   const metricColors = {
@@ -192,6 +241,12 @@ function IrrigationTab({ tree, zoneCode }) {
           </>
         )}
       </Paper>
+
+      <ProgramControllerTimingCard
+        timing={timing}
+        jobName={timingJob?.irrigation_programs?.name}
+        channel={controllerLive?.heroChannel}
+      />
 
       <Paper sx={{ p: 3, mb: 3 }} variant="outlined">
         <Typography variant="h6" gutterBottom>Irrigation Chart</Typography>

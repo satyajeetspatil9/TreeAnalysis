@@ -28,6 +28,104 @@ export function controllerHeadline(live) {
   return raw.charAt(0) + raw.slice(1).toLowerCase();
 }
 
+function parseTime(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function parseIstClockOnDate(clock, isoDate) {
+  const hhmm = String(clock || '').trim();
+  const day = String(isoDate || '').slice(0, 10);
+  if (!/^\d{1,2}:\d{2}$/.test(hhmm) || !/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
+  const [hh, mm] = hhmm.split(':').map(Number);
+  const date = new Date(`${day}T${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}:00+05:30`);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function isWateringState(state) {
+  const text = String(state || '').toUpperCase();
+  return text.includes('WATERING') || text.includes('ENDING');
+}
+
+function addMinutes(date, minutes) {
+  if (!date || !Number.isFinite(Number(minutes))) return null;
+  return new Date(date.getTime() + Number(minutes) * 60000);
+}
+
+export function formatLagLabel(programTime, controllerTime) {
+  if (!programTime || !controllerTime) return '—';
+  const minutes = Math.round((controllerTime.getTime() - programTime.getTime()) / 60000);
+  if (Math.abs(minutes) < 1) return 'Same minute';
+  if (minutes > 0) return `${minutes} min later on controller`;
+  return `${-minutes} min earlier on controller`;
+}
+
+/** Controller pin on/off from Turso vs program job scheduled/start/complete. */
+export function compareProgramAndControllerTimes({
+  job,
+  live,
+  runLimitMinutes = null,
+  now = new Date(),
+} = {}) {
+  const history = live?.history || [];
+  const watering = Boolean(live?.watering);
+
+  let controllerStart = parseIstClockOnDate(live?.startedAt, live?.updatedAtIst);
+  let controllerEnd = null;
+  let controllerEnded = !watering;
+
+  if (watering) {
+    const run = [];
+    for (const row of history) {
+      if (!isWateringState(row.heroState) && run.length) break;
+      if (isWateringState(row.heroState)) run.push(row);
+    }
+    const startRow = run[run.length - 1];
+    controllerStart = parseTime(startRow?.recordedAtIst) || controllerStart;
+    controllerEnd = live?.minutesLeft != null
+      ? addMinutes(now, live.minutesLeft)
+      : addMinutes(controllerStart, live?.durationMin);
+  } else {
+    const stopRow = history.find((row) => !isWateringState(row.heroState));
+    const run = [];
+    let afterStop = Boolean(stopRow);
+    for (const row of history) {
+      if (afterStop && row === stopRow) continue;
+      if (!isWateringState(row.heroState)) {
+        if (run.length) break;
+        continue;
+      }
+      run.push(row);
+    }
+    const startRow = run[run.length - 1];
+    controllerStart = parseTime(startRow?.recordedAtIst)
+      || parseIstClockOnDate(startRow?.startedAt || live?.startedAt, stopRow?.recordedAtIst || live?.updatedAtIst)
+      || controllerStart;
+    controllerEnd = parseTime(stopRow?.recordedAtIst);
+  }
+
+  const programStartPlanned = parseTime(job?.scheduled_for);
+  const programStartActual = parseTime(job?.started_at);
+  const programEndActual = parseTime(job?.completed_at);
+  const programEndPlanned = programEndActual
+    || addMinutes(programStartActual || programStartPlanned, runLimitMinutes);
+
+  return {
+    programStartPlanned,
+    programStartActual,
+    programEndPlanned,
+    programEndActual,
+    controllerStart,
+    controllerEnd,
+    controllerEnded,
+    startLagVsPlanned: formatLagLabel(programStartPlanned, controllerStart),
+    startLagVsJob: formatLagLabel(programStartActual, controllerStart),
+    endLagVsPlanned: formatLagLabel(programEndPlanned, controllerEnd),
+    endLagVsJob: formatLagLabel(programEndActual, controllerEnd),
+  };
+}
+
 export async function fetchControllerLiveState(supabaseClient) {
   const base = process.env.REACT_APP_SUPABASE_URL;
   const anon = process.env.REACT_APP_SUPABASE_ANON_KEY;

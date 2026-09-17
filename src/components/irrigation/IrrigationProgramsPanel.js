@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -54,7 +54,9 @@ import {
   applySavedProgramToRunningJob,
 } from '../../utils/irrigationSchedule';
 import { emptyFertigationLineItem, formatFertilizerProductLines } from '../../utils/fertilizerEventMaintenance';
-import { programMatchesController } from '../../utils/controllerLiveState';
+import { compareProgramAndControllerTimes, programMatchesController } from '../../utils/controllerLiveState';
+import { jobRunLimitMinutes } from '../../utils/irrigationSchedule';
+import ProgramControllerTimingCard from './ProgramControllerTimingCard';
 
 function jobsForPanel(jobs, programType) {
   const types = programType === 'fertigation' ? ['fertigation'] : ['water', 'manual'];
@@ -1003,6 +1005,18 @@ function IrrigationProgramsPanel({
                         color="info"
                         label={`Controller ${(controllerLive.onChannels || []).join(' ')}`}
                         sx={{ mt: 0.5, ml: 0.5 }}
+                      />
+                    )}
+                    {openJob && (
+                      <ProgramControllerTimingCard
+                        compact
+                        timing={compareProgramAndControllerTimes({
+                          job: openJob,
+                          live: controllerLive,
+                          runLimitMinutes: jobRunLimitMinutes(openJob),
+                        })}
+                        jobName={program.name}
+                        channel={controllerLive?.heroChannel}
                       />
                     )}
                     {programType === 'fertigation' && (Number(program.pre_flush_minutes) > 0 || Number(program.post_flush_minutes) > 0) && (
