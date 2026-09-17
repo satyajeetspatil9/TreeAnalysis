@@ -140,12 +140,23 @@ export function isZoneTelemetryStale(row, runningJob, recentCompleted) {
   return true;
 }
 
-export function countIrrigationStatusRows(rows, options = {}) {
+/** Zone is watering only if a live job or ESP32 says so, not a leftover is_irrigating flag. */
+export function isZoneActuallyWatering(row, options = {}) {
   const {
     runningJob = null,
     recentCompleted = [],
     controllerWatering = false,
   } = options;
+  if (!row) return false;
+  const jobOnZone = Boolean(runningJob && Number(runningJob.zone_id) === Number(row.zone?.id));
+  if (jobOnZone) return true;
+  if (!row.isIrrigating) return false;
+  if (!controllerWatering && !runningJob) return false;
+  return !isZoneTelemetryStale(row, runningJob, recentCompleted);
+}
+
+export function countIrrigationStatusRows(rows, options = {}) {
+  const { controllerWatering = false } = options;
   const counts = {
     irrigating: 0,
     idle: 0,
@@ -157,13 +168,7 @@ export function countIrrigationStatusRows(rows, options = {}) {
       counts.noData += 1;
       return;
     }
-    const jobOnZone = Boolean(runningJob && Number(runningJob.zone_id) === Number(row.zone?.id));
-    const watering = jobOnZone || (
-      row.isIrrigating
-      && (controllerWatering || Boolean(runningJob))
-      && !isZoneTelemetryStale(row, runningJob, recentCompleted)
-    );
-    if (watering) counts.irrigating += 1;
+    if (isZoneActuallyWatering(row, options)) counts.irrigating += 1;
     else counts.idle += 1;
   });
 

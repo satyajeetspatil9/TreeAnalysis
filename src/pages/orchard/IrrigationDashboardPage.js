@@ -53,7 +53,7 @@ import {
   formatVoltage,
   isMissingStatusTable,
   latestTimestamp,
-  isZoneTelemetryStale,
+  isZoneActuallyWatering,
   mergeZoneStatusRows,
   statusTableHint,
   zoneTelemetryAt,
@@ -411,10 +411,12 @@ function IrrigationDashboardPage() {
     [programJobs],
   );
   const activeZones = useMemo(
-    () => rows.filter((row) => (
-      row.isIrrigating && !isZoneTelemetryStale(row, runningJob, recentCompletedJobs)
-    )),
-    [rows, runningJob, recentCompletedJobs],
+    () => rows.filter((row) => isZoneActuallyWatering(row, {
+      runningJob,
+      recentCompleted: recentCompletedJobs,
+      controllerWatering: Boolean(controllerLive?.watering) && !controllerLive?.stale,
+    })),
+    [rows, runningJob, recentCompletedJobs, controllerLive],
   );
   const activeZone = activeZones[0] || null;
   const runningJobZone = useMemo(
@@ -425,13 +427,17 @@ function IrrigationDashboardPage() {
   );
   const liveZone = runningJobZone || activeZone;
   const hardwareLive = Boolean(controllerLive?.watering) && !controllerLive?.stale;
-  const counts = useMemo(
-    () => countIrrigationStatusRows(rows, {
+  const liveTruth = useMemo(
+    () => ({
       runningJob,
       recentCompleted: recentCompletedJobs,
       controllerWatering: hardwareLive,
     }),
-    [rows, runningJob, recentCompletedJobs, hardwareLive],
+    [runningJob, recentCompletedJobs, hardwareLive],
+  );
+  const counts = useMemo(
+    () => countIrrigationStatusRows(rows, liveTruth),
+    [rows, liveTruth],
   );
   const awaitingController = Boolean(runningJob) && !hardwareLive && !activeZone;
   const isLive = Boolean(hardwareLive || runningJob || activeZone);
@@ -473,9 +479,13 @@ function IrrigationDashboardPage() {
   useEffect(() => {
     if (!rows.length) return;
     if (controlZoneId && rows.some((row) => String(row.zone.id) === String(controlZoneId))) return;
-    const preferred = rows.find((row) => row.isIrrigating) || rows[0];
+    const preferred = rows.find((row) => isZoneActuallyWatering(row, {
+      runningJob,
+      recentCompleted: recentCompletedJobs,
+      controllerWatering: Boolean(controllerLive?.watering) && !controllerLive?.stale,
+    })) || rows[0];
     setControlZoneId(String(preferred.zone.id));
-  }, [rows, controlZoneId]);
+  }, [rows, controlZoneId, runningJob, recentCompletedJobs, controllerLive]);
 
   const sendCommand = async (row, command) => {
     if (!farm?.id || !row) return { error: 'Select a zone first.' };
@@ -486,7 +496,9 @@ function IrrigationDashboardPage() {
     if (!row) return;
     setCommanding(true);
     setMessage(null);
-    const others = rows.filter((item) => item.isIrrigating && item.zone.id !== row.zone.id);
+    const others = rows.filter((item) => (
+      isZoneActuallyWatering(item, liveTruth) && item.zone.id !== row.zone.id
+    ));
     for (const other of others) {
       const stopped = await sendCommand(other, 'stop');
       if (stopped.error) {
@@ -936,7 +948,7 @@ function IrrigationDashboardPage() {
                         <MenuItem key={row.zone.id} value={String(row.zone.id)}>
                           {row.zone.zone_code}
                           {row.zone.description ? ` — ${row.zone.description}` : ''}
-                          {row.isIrrigating ? ' (running now)' : ''}
+                          {isZoneActuallyWatering(row, liveTruth) ? ' (running now)' : ''}
                         </MenuItem>
                       ))}
                     </Select>
@@ -949,7 +961,7 @@ function IrrigationDashboardPage() {
                       color="info"
                       size="large"
                       startIcon={commanding ? <CircularProgress size={18} color="inherit" /> : <PlayArrowIcon />}
-                      disabled={!controlRow || commanding || controlRow.isIrrigating}
+                      disabled={!controlRow || commanding || isZoneActuallyWatering(controlRow, liveTruth)}
                       onClick={() => setConfirmStart(controlRow)}
                     >
                       Start watering
@@ -959,7 +971,7 @@ function IrrigationDashboardPage() {
                       color="error"
                       size="large"
                       startIcon={<StopIcon />}
-                      disabled={!controlRow || commanding || (!controlRow.isIrrigating && controlRow.status?.pending_command !== 'start')}
+                      disabled={!controlRow || commanding || (!isZoneActuallyWatering(controlRow, liveTruth) && controlRow.status?.pending_command !== 'start')}
                       onClick={() => stopWatering(controlRow)}
                     >
                       Stop watering
