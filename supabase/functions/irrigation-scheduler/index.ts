@@ -291,10 +291,18 @@ async function farmHasRain(supabase: Supabase, farmId: number) {
   }
 }
 
-function stepFieldsFor(step: Job, isFertigation: boolean, zone: Job | undefined) {
+function stepFieldsFor(step: Job, isFertigation: boolean, zone: Job | undefined, program?: Job) {
   const cap = capMinutesFor(step, zone);
   const duration = Number(step?.on_duration_minutes);
   const liters = Number(step?.target_liters);
+  const pre = isFertigation
+    ? Number(step?.pre_flush_minutes ?? program?.pre_flush_minutes) || 0
+    : 0;
+  const post = isFertigation
+    ? Number(step?.post_flush_minutes ?? program?.post_flush_minutes) || 0
+    : 0;
+  const flush = pre + post;
+  const maxDuration = cap != null ? cap + flush : null;
   return {
     program_step_id: step.id,
     zone_id: step.zone_id,
@@ -303,8 +311,51 @@ function stepFieldsFor(step: Job, isFertigation: boolean, zone: Job | undefined)
     on_duration_minutes: Number.isFinite(duration) && duration > 0
       ? Math.round(duration)
       : null,
-    max_duration_minutes: cap,
+    max_duration_minutes: maxDuration,
   };
+}
+
+function jobScheduledMs(job: Job) {
+  const raw = job.scheduled_for || job.started_at;
+  if (!raw) return 0;
+  const ms = new Date(String(raw)).getTime();
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function sequenceParts(job: Job, programs: Job[] | null) {
+  const program = job.program_id
+    ? (programs || []).find((p) => Number(p.id) === Number(job.program_id))
+    : undefined;
+  const fertigation = job.job_type === 'fertigation' || program?.program_type === 'fertigation';
+  const order = Number(program?.run_order);
+  return {
+    fertigation: fertigation ? 1 : 0,
+    runOrder: Number.isFinite(order) ? order : 9999,
+    id: Number(job.id) || 0,
+  };
+}
+
+function compareJobSequence(a: Job, b: Job, programs: Job[] | null) {
+  const pa = sequenceParts(a, programs);
+  const pb = sequenceParts(b, programs);
+  if (pa.fertigation !== pb.fertigation) return pa.fertigation - pb.fertigation;
+  if (pa.runOrder !== pb.runOrder) return pa.runOrder - pb.runOrder;
+  return pa.id - pb.id;
+}
+
+/** Keep a running job; otherwise run the current start-time wave in run_order. */
+function pickPrimary(startable: Job[], programs: Job[] | null) {
+  const manual = startable.find((job) => job.job_type === 'manual');
+  if (manual) return manual;
+  const running = startable.find((job) => job.status === 'running');
+  if (running) return running;
+  if (!startable.length) return null;
+  const latest = Math.max(...startable.map(jobScheduledMs));
+  const waveMs = 2 * 60 * 60 * 1000;
+  const wave = startable.filter((job) => latest - jobScheduledMs(job) <= waveMs);
+  const pool = (wave.length ? wave : startable).slice();
+  pool.sort((a, b) => compareJobSequence(a, b, programs));
+  return pool[0] || null;
 }
 
 function outageMinutesBetween(startedAt: string | null | undefined, endedAt: Date) {
@@ -651,7 +702,7 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
       || programSteps[0];
     if (current) {
       const currentZone = current.zone_id ? zonesById.get(Number(current.zone_id)) : undefined;
-      patchJob(job, stepFieldsFor(current, Boolean(isFertigation), currentZone));
+      patchJob(job, stepFieldsFor(current, Boolean(isFertigation), currentZone, program || undefined));
     }
 
     const wantedIds = [
@@ -696,7 +747,18 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
   const createdJobs: Job[] = [];
 
   if (programsMayRun) {
-    for (const program of programs || []) {
+    const orderedPrograms = [...(programs || [])].sort((a, b) => {
+      const fertA = a.program_type === 'fertigation' ? 1 : 0;
+      const fertB = b.program_type === 'fertigation' ? 1 : 0;
+      if (fertA !== fertB) return fertA - fertB;
+      const oa = Number(a.run_order);
+      const ob = Number(b.run_order);
+      const ra = Number.isFinite(oa) ? oa : 9999;
+      const rb = Number.isFinite(ob) ? ob : 9999;
+      if (ra !== rb) return ra - rb;
+      return Number(a.id) - Number(b.id);
+    });
+    for (const program of orderedPrograms) {
       const days = ((program.days_of_week || []) as number[]).map(Number);
       if (days.length && !days.includes(local.weekday)) continue;
       if (programHasOpenJob(Number(program.id))) continue;
@@ -743,7 +805,7 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
           scheduled_for: scheduledFor,
           created_at: now.toISOString(),
           updated_at: now.toISOString(),
-          ...stepFieldsFor(first, isFertigation, zone),
+          ...stepFieldsFor(first, isFertigation, zone, program),
         })
         .select('*')
         .single();
@@ -792,33 +854,21 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
     await refreshPlannedJob(job);
   }
 
-  const programOrder = new Map(
-    [...(programs || [])]
-      .sort((a, b) => (Number(a.run_order) || 0) - (Number(b.run_order) || 0) || Number(a.id) - Number(b.id))
-      .map((p, idx) => [Number(p.id), Number(p.run_order) || idx]),
-  );
-
-  const sortedOpen = allOpen.sort((a, b) => {
-    const manualA = a.job_type === 'manual' ? 0 : 1;
-    const manualB = b.job_type === 'manual' ? 0 : 1;
-    if (manualA !== manualB) return manualA - manualB;
-    const oa = programOrder.get(Number(a.program_id)) ?? 9999;
-    const ob = programOrder.get(Number(b.program_id)) ?? 9999;
-    if (oa !== ob) return oa - ob;
-    return Number(a.id) - Number(b.id);
-  });
-
   const isOpenJob = (job: Job) => OPEN_STATUSES.includes(String(job.status || ''));
-  const startable = sortedOpen.filter((j) => (
+  const startableOf = (jobs: Job[]) => jobs.filter((j) => (
     isOpenJob(j)
     && j.status !== 'paused_manual'
     && devicesForJob(j).length > 0
   ));
 
-  let primary = startable.find((j) => j.job_type === 'manual')
-    || startable.find((j) => j.status === 'running')
-    || startable[0]
-    || null;
+  const sortedOpen = allOpen.slice().sort((a, b) => {
+    const manualA = a.job_type === 'manual' ? 0 : 1;
+    const manualB = b.job_type === 'manual' ? 0 : 1;
+    if (manualA !== manualB) return manualA - manualB;
+    return compareJobSequence(a, b, programs || []);
+  });
+
+  let primary = pickPrimary(startableOf(sortedOpen), programs || []);
 
   for (const job of sortedOpen) {
     const program = job.program_id
@@ -895,11 +945,13 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
     const remainingMinutes = (() => {
       const limits = [effectiveDuration, cap].filter((v): v is number => v != null);
       if (!limits.length) return null;
-      return Math.max(1, Math.ceil(Math.min(...limits) - elapsed));
+      return Math.max(1, Math.ceil(Math.max(...limits) - elapsed));
     })();
     const hitLiters = target != null && delivered >= target;
     const hitDuration = effectiveDuration != null && elapsed >= effectiveDuration;
-    const hitCap = cap != null && elapsed >= cap;
+    const hitCap = cap != null
+      && elapsed >= cap
+      && (effectiveDuration == null || elapsed >= effectiveDuration);
 
     let fertigationPhase = 'full';
     if (isFertigationJob && (preFlush > 0 || postFlush > 0)) {
@@ -925,7 +977,7 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
 
       if (next) {
         const nextZone = next.zone_id ? zonesById.get(Number(next.zone_id)) : undefined;
-        const nextStepFields = stepFieldsFor(next, isFertigationJob, nextZone);
+        const nextStepFields = stepFieldsFor(next, isFertigationJob, nextZone, program);
 
         // Seamless motor continuity: keep motor running and switch valves
         const oldCodes = devicesForJob(job);
@@ -990,12 +1042,10 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
         stopJob(reason, 'completed');
         actions.push(`completed_job:${job.id}:${reason}`);
         if (primary && Number(job.id) === Number(primary.id)) {
-          primary = startable.find((j) => (
-            Number(j.id) !== Number(job.id)
-            && isOpenJob(j)
-            && j.status !== 'paused_manual'
-            && devicesForJob(j).length > 0
-          )) || null;
+          primary = pickPrimary(
+            startableOf(sortedOpen.filter((j) => Number(j.id) !== Number(job.id))),
+            programs || [],
+          );
         }
       }
       continue;

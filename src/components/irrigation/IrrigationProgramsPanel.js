@@ -339,7 +339,7 @@ function IrrigationProgramsPanel({
 
     // Schedule collision / overlap prevention
     const conflicts = findProgramScheduleConflicts({
-      program: form,
+      program: { ...form, program_type: programType },
       allPrograms: allFarmPrograms,
       zones,
       editingProgramId: editing?.id,
@@ -564,20 +564,16 @@ function IrrigationProgramsPanel({
     const idx = sorted.findIndex((p) => p.id === program.id);
     const swapWith = sorted[idx + direction];
     if (!swapWith) return;
-
-    const aOrder = Number(program.run_order) || idx + 1;
-    const bOrder = Number(swapWith.run_order) || idx + direction + 1;
-    const updates = [
+    const reordered = [...sorted];
+    reordered[idx] = swapWith;
+    reordered[idx + direction] = program;
+    const now = new Date().toISOString();
+    const results = await Promise.all(reordered.map((row, order) => (
       supabase.from('irrigation_programs').update({
-        run_order: bOrder,
-        updated_at: new Date().toISOString(),
-      }).eq('id', program.id),
-      supabase.from('irrigation_programs').update({
-        run_order: aOrder,
-        updated_at: new Date().toISOString(),
-      }).eq('id', swapWith.id),
-    ];
-    const results = await Promise.all(updates);
+        run_order: order,
+        updated_at: now,
+      }).eq('id', row.id)
+    )));
     const err = results.find((r) => r.error)?.error;
     if (err) {
       setMessage({

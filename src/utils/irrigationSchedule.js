@@ -1315,10 +1315,14 @@ export function findProgramScheduleConflicts({ program, allPrograms = [], zones 
     }
   }
 
-  // 2. Check overlap against all other active programs
+  // 2. Check overlap against other active programs. Same-type programs share one
+  // pump and run in run_order, so identical start times are a queue, not a clash.
   for (const other of allPrograms || []) {
     if (!other || other.is_active === false) continue;
     if (currentId && Number(other.id) === currentId) continue;
+    const thisType = program.program_type || 'water';
+    const otherType = other.program_type || 'water';
+    if (thisType === otherType) continue;
 
     let otherDays = [];
     if (Array.isArray(other.days_of_week)) {
