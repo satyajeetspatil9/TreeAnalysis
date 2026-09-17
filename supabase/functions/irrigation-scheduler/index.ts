@@ -498,14 +498,27 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
   );
 
   const executedStartTimesToday = (programId: number) => {
+    const program = (programs || []).find((p) => Number(p.id) === Number(programId));
+    const starts = program ? effectiveStartMinutes(program) : [];
     const jobs = jobsForProgramToday(programId);
     const executedSlots = new Set<string>();
     for (const j of jobs) {
-      if (!j.scheduled_for) continue;
-      const schedLocal = partsInTz(new Date(String(j.scheduled_for)), FARM_TZ);
-      if (schedLocal.dateKey === local.dateKey) {
-        executedSlots.add(schedLocal.hhmm);
+      if (!jobExecuted(j)) continue;
+      const raw = j.started_at || j.scheduled_for;
+      if (!raw) continue;
+      const localParts = partsInTz(new Date(String(raw)), FARM_TZ);
+      if (localParts.dateKey !== local.dateKey) continue;
+      const mins = timeToMinutes(localParts.hhmm);
+      let clock = localParts.hhmm;
+      let bestDiff = 24 * 60;
+      for (const startMin of starts) {
+        const diff = Math.abs(startMin - mins);
+        if (diff < bestDiff) {
+          bestDiff = diff;
+          clock = minutesToClock(startMin);
+        }
       }
+      executedSlots.add(bestDiff <= 90 ? clock : localParts.hhmm);
     }
     return executedSlots;
   };
@@ -517,12 +530,20 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
   const nextDueStartMin = (program: Job) => {
     if (programHasOpenJob(Number(program.id))) return null;
     const executedSlots = executedStartTimesToday(Number(program.id));
+    const executedJobs = jobsForProgramToday(Number(program.id)).filter(jobExecuted);
+    const lastRun = executedJobs.slice().sort((a, b) => (
+      new Date(String(latestExecutedAt(b) || 0)).getTime()
+      - new Date(String(latestExecutedAt(a) || 0)).getTime()
+    ))[0];
+    const editedAfterRun = lastRun ? programEditedAfterJob(program, lastRun) : false;
     const starts = effectiveStartMinutes(program).sort((a, b) => a - b);
     for (const m of starts) {
       const clock = minutesToClock(m);
-      if (nowMin >= m && !executedSlots.has(clock)) {
-        return m;
-      }
+      if (executedSlots.has(clock)) continue;
+      if (nowMin < m) continue;
+      // After a save, only a listed start that is still later today may run again.
+      if (editedAfterRun && m < nowMin) continue;
+      return m;
     }
     return null;
   };
@@ -689,6 +710,15 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
       }
 
       const scheduledFor = scheduledForOf(minutesToClock(dueMin));
+      const duplicateOpen = [...todayProgramJobs, ...createdJobs].some((j) => (
+        Number(j.program_id) === Number(program.id)
+        && String(j.scheduled_for || '') === scheduledFor
+        && OPEN_STATUSES.includes(String(j.status || ''))
+      ));
+      if (duplicateOpen) {
+        actions.push(`skip_duplicate:${program.id}:${scheduledFor}`);
+        continue;
+      }
 
       const programSteps = activeStepsOf(steps || [], Number(program.id));
       if (!programSteps.length) {
@@ -861,6 +891,12 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
       : null;
 
     const effectiveDuration = totalStepMinutes ?? duration;
+    const remainingLiters = target != null ? Math.max(0, target - delivered) : null;
+    const remainingMinutes = (() => {
+      const limits = [effectiveDuration, cap].filter((v): v is number => v != null);
+      if (!limits.length) return null;
+      return Math.max(1, Math.ceil(Math.min(...limits) - elapsed));
+    })();
     const hitLiters = target != null && delivered >= target;
     const hitDuration = effectiveDuration != null && elapsed >= effectiveDuration;
     const hitCap = cap != null && elapsed >= cap;
@@ -1003,6 +1039,27 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
           }
         }
       }
+
+      for (const code of codes) {
+        const device = (devices || []).find((d) => normalizeCode(d.device_code) === code);
+        if (isFertigationJob && device?.kind === 'fertigation' && fertigationPhase !== 'injecting') {
+          continue;
+        }
+        if (!believedOn(code) && !batch.hasPending(code, 'start')) {
+          const until: Until = {};
+          if (device?.kind === 'zone_valve' && remainingLiters != null) until.liters = remainingLiters;
+          if (remainingMinutes != null) until.minutes = remainingMinutes;
+          batch.cancelFor([code], 'stop');
+          batch.add(code, 'start', {
+            jobId: job.id,
+            zoneId: job.zone_id,
+            until,
+            role: device?.kind,
+            reason: 'lost_start_recover',
+          });
+          actions.push(`restart_lost:${job.id}:${code}`);
+        }
+      }
       continue;
     }
     if (job.status === 'paused_manual') continue;
@@ -1022,13 +1079,6 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
       actions.push(`skip_no_terminals:${job.id}`);
       continue;
     }
-
-    const remainingLiters = target != null ? Math.max(0, target - delivered) : null;
-    const remainingMinutes = (() => {
-      const limits = [effectiveDuration, cap].filter((v): v is number => v != null);
-      if (!limits.length) return null;
-      return Math.max(1, Math.ceil(Math.min(...limits) - elapsed));
-    })();
 
     const baseline = status?.total_discharge_liters != null
       ? Number(status.total_discharge_liters) - delivered

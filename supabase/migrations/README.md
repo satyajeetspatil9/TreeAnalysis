@@ -69,4 +69,5 @@
 -- 058_event_start_end_times.sql — start/end on irrigation and fertigation events
 -- 059_fertigation_injector_specs.sql — injector tank, fertilizer flow, and product
 -- 060_irrigation_scheduler_cron_auth.sql — cron Authorization header for scheduler
+-- 061_irrigation_advanced_programs.sql — 3-phase fertigation (pre/inject/post flush)
 -- =============================================================================

@@ -58,7 +58,7 @@ function OrchardBriefingPage() {
       <PageHeader
         section="Monitoring"
         title="Weekly briefing"
-        subtitle="Water, moisture, radar, soil, fertigation, climate, growth, and disease joined for this farm. Radar will not name a single clogged dripper."
+        subtitle="Last 7 days: water, moisture, radar, soil, fertigation, climate, growth, and disease joined for this farm. Radar will not name a single clogged dripper."
       />
 
       {!farm && (
@@ -79,8 +79,16 @@ function OrchardBriefingPage() {
             <Grid item><Chip color="warning" label={`${counts.radarDrier || 0} radar drier than usual`} /></Grid>
             <Grid item><Chip color="warning" variant="outlined" label={`${counts.probeLow || 0} probe low`} /></Grid>
             <Grid item><Chip variant="outlined" label={`${counts.zonesNoIrrigation || 0} zones with no irrigation event`} /></Grid>
-            <Grid item><Chip color="error" variant="outlined" label={`${counts.disease || 0} disease records`} /></Grid>
+            <Grid item><Chip color="error" variant="outlined" label={`${counts.disease || 0} trees with disease`} /></Grid>
             <Grid item><Chip label={`${formatNumber(counts.rainMm || 0, 1)} mm rain`} /></Grid>
+            {briefing.sprayAdvice && (
+              <Grid item>
+                <Chip
+                  color={briefing.sprayAdvice.type === 'SPRAY' ? 'warning' : 'success'}
+                  label={briefing.sprayAdvice.type === 'SPRAY' ? 'Do not spray' : 'Spray window'}
+                />
+              </Grid>
+            )}
           </Grid>
 
           <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>

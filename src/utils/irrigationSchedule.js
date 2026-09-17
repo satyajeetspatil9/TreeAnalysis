@@ -60,6 +60,9 @@ export function isMissingScheduleTable(error) {
 
 export function scheduleTableHint(message) {
   if (!message) return message;
+  if (/pre_flush_minutes|post_flush_minutes|fertigation_phase/.test(message)) {
+    return `${message} Run migration 061_irrigation_advanced_programs.sql in Supabase SQL Editor (3-phase fertigation).`;
+  }
   if (/skip_if_rain/.test(message) || /paused_manual/.test(message)) {
     return `${message} Run migration 052_irrigation_pause_and_skip_rain.sql in Supabase SQL Editor.`;
   }
@@ -162,7 +165,7 @@ export async function fetchZoneValveDeviceCode(farmId, zoneId) {
  * Every terminal a job drives, motors first so firmware that reads only the
  * first command still switches the pump on.
  */
-export async function fetchJobTerminalCodes(farmId, job) {
+export async function fetchJobTerminalCodes(farmId, job, { excludeKinds = [] } = {}) {
   if (!job) return [];
 
   const [{ data: jobDevices }, program] = await Promise.all([
@@ -189,8 +192,13 @@ export async function fetchJobTerminalCodes(farmId, job) {
       : Promise.resolve({ data: [] }),
   ]);
 
-  const motors = (devices || []).filter((d) => String(d.kind || '').includes('motor'));
-  const others = (devices || []).filter((d) => !String(d.kind || '').includes('motor') && d.kind !== 'zone_valve');
+  const skip = new Set((excludeKinds || []).map((kind) => String(kind)));
+  const motors = (devices || []).filter((d) => String(d.kind || '').includes('motor') && !skip.has(d.kind));
+  const others = (devices || []).filter((d) => (
+    !String(d.kind || '').includes('motor')
+    && d.kind !== 'zone_valve'
+    && !skip.has(d.kind)
+  ));
 
   return uniqueTerminalCodes([
     ...motors.map((d) => d.device_code),
@@ -517,6 +525,8 @@ export async function createAdHocVolumeJob({
   motorDeviceId = null,
   injectorDeviceIds = [],
   immediate = true,
+  preFlushMinutes = null,
+  postFlushMinutes = null,
 }) {
   const now = new Date().toISOString();
   const duration = onDurationMinutes != null && Number(onDurationMinutes) > 0
@@ -525,6 +535,14 @@ export async function createAdHocVolumeJob({
   const liters = targetLiters != null && Number(targetLiters) > 0
     ? Number(targetLiters)
     : null;
+  const isFertigation = jobType === 'fertigation';
+  const preFlush = isFertigation
+    ? (preFlushMinutes != null ? Number(preFlushMinutes) : 10)
+    : 0;
+  const postFlush = isFertigation
+    ? (postFlushMinutes != null ? Number(postFlushMinutes) : 10)
+    : 0;
+  const threePhase = isFertigation && (preFlush > 0 || postFlush > 0);
 
   if (immediate) {
     const paused = await pauseOpenIrrigationJobs(farmId, { reason: 'manual_override' });
@@ -539,29 +557,40 @@ export async function createAdHocVolumeJob({
     .eq('id', zoneId)
     .maybeSingle();
   const flow = zoneRow?.flow_rate_lph != null ? Number(zoneRow.flow_rate_lph) : null;
-  const capMinutes = duration
+  const capMinutes = (threePhase && duration
+    ? Math.max(1, Math.ceil(preFlush + duration + postFlush))
+    : duration)
     || (liters && flow && flow > 0 ? Math.max(1, Math.ceil((liters / flow) * 60 * 1.5)) : null);
 
-  const { data: job, error } = await supabase
+  const jobRow = {
+    farm_id: farmId,
+    zone_id: zoneId,
+    job_type: jobType,
+    status: 'planned',
+    target_liters: liters,
+    on_duration_minutes: duration,
+    max_duration_minutes: capMinutes,
+    duration_elapsed_minutes: 0,
+    liters_delivered: 0,
+    current_step_seq: 0,
+    window_mode: windowMode,
+    scheduled_for: now,
+    created_at: now,
+    updated_at: now,
+  };
+  if (threePhase) {
+    jobRow.fertigation_phase = preFlush > 0 ? 'pre_flush' : 'injecting';
+  }
+
+  let { data: job, error } = await supabase
     .from('irrigation_jobs')
-    .insert({
-      farm_id: farmId,
-      zone_id: zoneId,
-      job_type: jobType,
-      status: 'planned',
-      target_liters: liters,
-      on_duration_minutes: duration,
-      max_duration_minutes: capMinutes,
-      duration_elapsed_minutes: 0,
-      liters_delivered: 0,
-      current_step_seq: 0,
-      window_mode: windowMode,
-      scheduled_for: now,
-      created_at: now,
-      updated_at: now,
-    })
+    .insert(jobRow)
     .select('*')
     .single();
+  if (error && /fertigation_phase/.test(error.message || '')) {
+    delete jobRow.fertigation_phase;
+    ({ data: job, error } = await supabase.from('irrigation_jobs').insert(jobRow).select('*').single());
+  }
 
   if (error) return { error, job: null };
 
@@ -588,7 +617,11 @@ export async function createAdHocVolumeJob({
         .select('id, device_code, kind')
         .in('id', extraIds);
       const motors = (extraDevices || []).filter((d) => String(d.kind || '').includes('motor'));
-      const rest = (extraDevices || []).filter((d) => !String(d.kind || '').includes('motor'));
+      const rest = (extraDevices || []).filter((d) => {
+        if (String(d.kind || '').includes('motor')) return false;
+        if (threePhase && preFlush > 0 && d.kind === 'fertigation') return false;
+        return true;
+      });
       [...motors, ...rest].forEach((device) => {
         if (device.device_code) extraCodes.push(device.device_code);
       });
@@ -645,6 +678,7 @@ export async function createAdHocVolumeJob({
       status: 'running',
       started_at: now,
       updated_at: now,
+      ...(threePhase ? { fertigation_phase: preFlush > 0 ? 'pre_flush' : 'injecting' } : {}),
     }).eq('id', job.id);
     job.status = 'running';
     job.started_at = now;
@@ -725,6 +759,23 @@ export function jobElapsedMinutes(job, now = new Date()) {
   if (job?.status !== 'running' || !job?.started_at) return banked;
   const since = (now.getTime() - new Date(job.started_at).getTime()) / 60000;
   return banked + Math.max(0, since);
+}
+
+/** Scheduled run length including fertigation pre/post flush. */
+export function jobRunLimitMinutes(job) {
+  if (!job) return null;
+  const inject = Number(job.on_duration_minutes);
+  const cap = Number(job.max_duration_minutes);
+  const program = job.irrigation_programs || {};
+  const pre = Number(job.pre_flush_minutes ?? program.pre_flush_minutes) || 0;
+  const post = Number(job.post_flush_minutes ?? program.post_flush_minutes) || 0;
+  const isFertigation = job.job_type === 'fertigation' || program.program_type === 'fertigation';
+  if (isFertigation && (pre > 0 || post > 0) && inject > 0) {
+    return pre + inject + post;
+  }
+  if (Number.isFinite(inject) && inject > 0) return inject;
+  if (Number.isFinite(cap) && cap > 0) return cap;
+  return null;
 }
 
 /** Stop today's waiting job so a program edit can be picked up on the next scheduler pass. */
@@ -825,6 +876,12 @@ export async function applySavedProgramToRunningJob(farmId, programId) {
 
   const cap = capMinutesForStep(firstStep, zone);
   const duration = Number(firstStep.on_duration_minutes);
+  const preFlush = isFertigation ? (Number(program?.pre_flush_minutes) || 0) : 0;
+  const postFlush = isFertigation ? (Number(program?.post_flush_minutes) || 0) : 0;
+  const threePhase = isFertigation && (preFlush > 0 || postFlush > 0);
+  const totalMinutes = threePhase && Number.isFinite(duration) && duration > 0
+    ? preFlush + Math.round(duration) + postFlush
+    : cap;
   const patch = {
     program_step_id: firstStep.id ?? job.program_step_id ?? null,
     zone_id: Number(firstStep.zone_id),
@@ -835,7 +892,7 @@ export async function applySavedProgramToRunningJob(farmId, programId) {
     on_duration_minutes: isFertigation && Number.isFinite(duration) && duration > 0
       ? Math.round(duration)
       : null,
-    max_duration_minutes: cap,
+    max_duration_minutes: totalMinutes || cap,
     status: 'running',
     started_at: nowIso,
     completed_at: null,
@@ -844,10 +901,17 @@ export async function applySavedProgramToRunningJob(farmId, programId) {
     duration_elapsed_minutes: 0,
     updated_at: nowIso,
   };
+  if (threePhase) {
+    patch.fertigation_phase = preFlush > 0 ? 'pre_flush' : 'injecting';
+  }
 
   let { error: patchError } = await supabase.from('irrigation_jobs').update(patch).eq('id', job.id);
   if (patchError && /program_step_id/.test(patchError.message || '')) {
     delete patch.program_step_id;
+    ({ error: patchError } = await supabase.from('irrigation_jobs').update(patch).eq('id', job.id));
+  }
+  if (patchError && /fertigation_phase/.test(patchError.message || '')) {
+    delete patch.fertigation_phase;
     ({ error: patchError } = await supabase.from('irrigation_jobs').update(patch).eq('id', job.id));
   }
   if (patchError) return { applied: false, error: patchError };
@@ -884,7 +948,9 @@ export async function applySavedProgramToRunningJob(farmId, programId) {
   const updatedJob = { ...job, ...patch, program_id: programId };
   await pauseOpenIrrigationJobs(farmId, { exceptJobId: job.id, reason: 'program_edited' });
 
-  const startCodes = await fetchJobTerminalCodes(farmId, updatedJob);
+  const startCodes = await fetchJobTerminalCodes(farmId, updatedJob, {
+    excludeKinds: threePhase && preFlush > 0 ? ['fertigation'] : [],
+  });
   if (!startCodes.length) {
     return {
       applied: false,
@@ -933,12 +999,12 @@ export async function completeOverdueIrrigationJobs(farmId, jobs = []) {
   for (const job of jobs || []) {
     if (job.status !== 'running') continue;
     const elapsed = jobElapsedMinutes(job, now);
-    const duration = Number(job.on_duration_minutes);
+    const limit = jobRunLimitMinutes(job);
     const cap = Number(job.max_duration_minutes);
     const target = Number(job.target_liters);
     const delivered = Number(job.liters_delivered) || 0;
     const overdue = (
-      (Number.isFinite(duration) && duration > 0 && elapsed >= duration)
+      (limit != null && elapsed >= limit)
       || (Number.isFinite(cap) && cap > 0 && elapsed >= cap)
       || (Number.isFinite(target) && target > 0 && delivered >= target)
     );

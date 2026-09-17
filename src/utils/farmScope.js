@@ -1,5 +1,25 @@
 /** Resolve trees, rows, zones, and money records for the active farm. */
 
+export async function selectInChunks(
+  supabase,
+  table,
+  select,
+  column,
+  ids,
+  build = (query) => query,
+  chunkSize = 120,
+) {
+  if (!ids?.length) return { data: [], error: null };
+  const rows = [];
+  for (let i = 0; i < ids.length; i += chunkSize) {
+    const slice = ids.slice(i, i + chunkSize);
+    const { data, error } = await build(supabase.from(table).select(select).in(column, slice));
+    if (error) return { data: rows, error };
+    rows.push(...(data || []));
+  }
+  return { data: rows, error: null };
+}
+
 function addId(set, value) {
   if (value == null || value === '') return;
   set.add(value);
@@ -81,9 +101,14 @@ export async function loadFarmTrees(supabase, farmId, {
 } = {}) {
   const ids = await loadFarmTreeIds(supabase, farmId);
   if (!ids.length) return [];
-  let query = supabase.from('trees').select(select).in('id', ids);
-  if (activeOnly) query = query.eq('status', 'Active');
-  const { data, error } = await query;
+  const { data, error } = await selectInChunks(
+    supabase,
+    'trees',
+    select,
+    'id',
+    ids,
+    (query) => (activeOnly ? query.eq('status', 'Active') : query),
+  );
   if (error) throw error;
   return data || [];
 }
@@ -129,8 +154,8 @@ export function expenseMatchesFarm(expense, { farmId, zoneIdSet, treeIdSet, expe
   if (scope.type === 'farm') return Number(scope.id) === Number(farmId);
   if (scope.type === 'zone') return zoneIdSet.has(Number(scope.id));
   if (scope.type === 'tree') return treeIdSet.has(String(scope.id)) || treeIdSet.has(Number(scope.id));
-  // Legacy rows with free-text or empty notes are not farm-tagged.
-  return true;
+  // Untagged / free-text notes are not assumed to belong to this farm.
+  return false;
 }
 
 export async function loadFarmExpenses(supabase, farmId, {
@@ -140,23 +165,42 @@ export async function loadFarmExpenses(supabase, farmId, {
   select = '*',
   limit = 200,
 } = {}) {
-  let query = supabase.from('expenses').select(select).order('expense_date', { ascending: false }).limit(limit);
-  if (sinceDate) query = query.gte('expense_date', sinceDate);
-  const { data, error } = await query;
-  if (error) throw error;
-
   const zoneIdSet = new Set((zoneIds || []).map(Number));
   const treeIdSet = new Set((treeIds || []).flatMap((id) => [id, Number(id), String(id)]));
   const expenseIdSet = new Set();
   if (treeIds.length) {
-    const { data: allocs } = await supabase
-      .from('expense_allocations')
-      .select('expense_id')
-      .in('tree_id', treeIds);
-    (allocs || []).forEach((row) => expenseIdSet.add(Number(row.expense_id)));
+    const { data: allocs } = await selectInChunks(
+      supabase,
+      'expense_allocations',
+      'expense_id',
+      'tree_id',
+      treeIds,
+    );
+    (allocs.data || []).forEach((row) => expenseIdSet.add(Number(row.expense_id)));
   }
 
-  return (data || []).filter((row) => expenseMatchesFarm(row, {
+  const filters = [`notes.ilike.farm:${farmId}%`];
+  (zoneIds || []).slice(0, 40).forEach((id) => filters.push(`notes.ilike.zone:${id}%`));
+  (treeIds || []).slice(0, 40).forEach((id) => filters.push(`notes.ilike.tree:${id}%`));
+  if (expenseIdSet.size) {
+    [...expenseIdSet].slice(0, 80).forEach((id) => filters.push(`id.eq.${id}`));
+  }
+
+  let query = supabase.from('expenses').select(select).or(filters.join(',')).order('expense_date', { ascending: false }).limit(limit);
+  if (sinceDate) query = query.gte('expense_date', sinceDate);
+  const { data, error } = await query;
+  if (error) throw error;
+
+  const rows = [...(data || [])];
+  const have = new Set(rows.map((row) => Number(row.id)));
+  const missing = [...expenseIdSet].filter((id) => !have.has(Number(id)));
+  if (missing.length) {
+    const extra = await selectInChunks(supabase, 'expenses', select, 'id', missing);
+    if (extra.error) throw extra.error;
+    rows.push(...(extra.data || []));
+  }
+
+  return rows.filter((row) => expenseMatchesFarm(row, {
     farmId,
     zoneIdSet,
     treeIdSet,

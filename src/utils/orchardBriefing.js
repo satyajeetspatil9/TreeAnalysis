@@ -4,11 +4,14 @@ import { getRadarDisplayModel } from './satelliteMonsoon';
 import { loadCachedGpsAnalysis, parseCachedAnalysis } from './treeGpsSatelliteCache';
 import { formatFertilizerProductLines, kolkataDateKey } from './fertilizerEventMaintenance';
 import { resolveEventWaterLiters } from './irrigation';
-import { loadFarmTrees, loadFarmZoneIds } from './farmScope';
+import { loadFarmTrees, loadFarmZoneIds, selectInChunks } from './farmScope';
 import { getTreeDisplayId } from './formatters';
 import { MOISTURE_PERCENT_ADEQUATE_MIN, MOISTURE_PERCENT_ADEQUATE_MAX } from './soilSensorMoisture';
+import { extractSatelliteIndicators } from './satelliteMonitoring';
+import { analyzeRisks, resolveStage } from './farmClimateLogic';
+import { loadFarmClimateSnapshot } from './farmClimateData';
 
-export const BRIEFING_DAYS = 14;
+export const BRIEFING_DAYS = 7;
 
 export function briefingWindow(now = new Date(), days = BRIEFING_DAYS) {
   const end = new Date(now);
@@ -126,6 +129,8 @@ export function buildTreeVerdicts(treeSnap, { neighborLowShare = null } = {}) {
     });
   }
 
+  const rank = { error: 4, warning: 3, info: 2, success: 1 };
+  verdicts.sort((a, b) => (rank[b.severity] || 0) - (rank[a.severity] || 0));
   return verdicts;
 }
 
@@ -144,6 +149,18 @@ function summarizeClimate(weatherRows, window) {
     humidityPercent: last?.humidity_percent != null ? Number(last.humidity_percent) : null,
     lastAt: last?.observed_at || null,
   };
+}
+
+async function loadSprayAdvice(supabase, farm, trees) {
+  if (!farm?.id) return null;
+  try {
+    const snapshot = await loadFarmClimateSnapshot(supabase, farm, trees || [], 'Mango');
+    const stage = resolveStage('Mango', snapshot.gdd);
+    const warnings = analyzeRisks(snapshot.sensors, 'Mango', stage, snapshot.isOverMoisture3Days);
+    return warnings.find((w) => w.type === 'SPRAY' || w.type === 'SPRAY_WINDOW') || null;
+  } catch {
+    return null;
+  }
 }
 
 async function loadZoneEvents(supabase, zoneIds, window) {
@@ -183,17 +200,29 @@ async function loadZoneEvents(supabase, zoneIds, window) {
 }
 
 function satelliteFromCacheRow(row) {
-  if (!row) return { radar: {}, ndviLow: false, analysis: null };
+  if (!row) {
+    return {
+      radar: {},
+      ndviLow: false,
+      analysis: null,
+      radarOnly: false,
+      opticalHidden: false,
+      satelliteError: null,
+    };
+  }
   const analysis = parseCachedAnalysis(row.analysis);
-  const model = getRadarDisplayModel(
-    analysis,
-    parseCachedAnalysis(row.last_good_radar),
-    row.last_good_radar_week,
-  );
+  const lastGood = parseCachedAnalysis(row.last_good_radar);
+  const model = getRadarDisplayModel(analysis, lastGood, row.last_good_radar_week);
+  const indicators = extractSatelliteIndicators(analysis, lastGood, {
+    lastGoodRadarWeek: row.last_good_radar_week,
+  });
   return {
     analysis,
     radar: radarFlags(model),
-    ndviLow: ndviLooksLow(analysis),
+    ndviLow: indicators?.opticalHidden ? false : ndviLooksLow(analysis),
+    radarOnly: Boolean(indicators?.radarOnly),
+    opticalHidden: Boolean(indicators?.opticalHidden),
+    satelliteError: row.error_message || null,
     weekStart: row.week_start || null,
   };
 }
@@ -248,6 +277,9 @@ function buildTreeSnap({
     fertigationProducts: formatFertilizerProductLines(latestFertigation?.fertigation_products),
     radar: satellite.radar,
     ndviLow: satellite.ndviLow,
+    radarOnly: satellite.radarOnly,
+    opticalHidden: satellite.opticalHidden,
+    satelliteError: satellite.satelliteError || null,
     satelliteWeek: satellite.weekStart,
     nutrientLows: getLowNutrientsFromObservation(soil),
     growth: latestGrowth,
@@ -356,7 +388,10 @@ export async function loadTreeWeekBriefing(supabase, { farmId, tree }) {
   }
 
   snap.verdicts = buildTreeVerdicts(snap, { neighborLowShare });
-  snap.satelliteError = satelliteCache.error || null;
+  snap.satelliteError = satelliteCache.error || satellite.satelliteError || null;
+  snap.sprayAdvice = farmId
+    ? await loadSprayAdvice(supabase, { id: farmId }, [tree])
+    : null;
   return snap;
 }
 
@@ -381,10 +416,11 @@ export async function loadFarmWeekBriefing(supabase, farmId) {
     { data: zones },
     zoneEvents,
     { data: weather },
-    { data: soilRows },
-    { data: diseaseRows },
-    { data: growthRows },
+    soilResult,
+    diseaseResult,
+    growthResult,
     cacheResult,
+    sprayAdvice,
   ] = await Promise.all([
     supabase.from('irrigation_zones').select('id, zone_code, flow_rate_lph').eq('farm_id', farmId).order('zone_code'),
     loadZoneEvents(supabase, zoneIds, window),
@@ -396,37 +432,53 @@ export async function loadFarmWeekBriefing(supabase, farmId) {
       .order('observed_at', { ascending: false })
       .limit(40),
     treeIds.length
-      ? supabase
-        .from('soil_observations')
-        .select('tree_id, moisture_percent, ph, ec, nitrogen, phosphorus, potassium, observed_at')
-        .in('tree_id', treeIds)
-        .order('observed_at', { ascending: false })
-        .limit(800)
+      ? selectInChunks(
+        supabase,
+        'soil_observations',
+        'tree_id, moisture_percent, ph, ec, nitrogen, phosphorus, potassium, observed_at',
+        'tree_id',
+        treeIds,
+        (query) => query.order('observed_at', { ascending: false }).limit(360),
+      )
       : Promise.resolve({ data: [] }),
     treeIds.length
-      ? supabase
-        .from('disease_observations')
-        .select('id, tree_id, problem_type, severity, observed_at, trees(tree_positions(position_code))')
-        .in('tree_id', treeIds)
-        .gte('observed_at', window.startDate)
-        .order('observed_at', { ascending: false })
-        .limit(100)
+      ? selectInChunks(
+        supabase,
+        'disease_observations',
+        'id, tree_id, problem_type, severity, observed_at, trees(tree_positions(position_code))',
+        'tree_id',
+        treeIds,
+        (query) => query.gte('observed_at', window.startDate).order('observed_at', { ascending: false }).limit(80),
+      )
       : Promise.resolve({ data: [] }),
     treeIds.length
-      ? supabase
-        .from('tree_growth')
-        .select('tree_id, height_cm, measurement_date')
-        .in('tree_id', treeIds)
-        .order('measurement_date', { ascending: false })
-        .limit(400)
+      ? selectInChunks(
+        supabase,
+        'tree_growth',
+        'tree_id, height_cm, measurement_date',
+        'tree_id',
+        treeIds,
+        (query) => query.order('measurement_date', { ascending: false }).limit(240),
+      )
       : Promise.resolve({ data: [] }),
     positionIds.length
-      ? supabase
-        .from('tree_gps_satellite_cache')
-        .select('position_id, analysis, last_good_radar, last_good_radar_week, week_start')
-        .in('position_id', positionIds)
+      ? selectInChunks(
+        supabase,
+        'tree_gps_satellite_cache',
+        'position_id, analysis, last_good_radar, last_good_radar_week, week_start, error_message',
+        'position_id',
+        positionIds,
+      )
       : Promise.resolve({ data: [] }),
+    loadSprayAdvice(supabase, { id: farmId }, trees),
   ]);
+  if (soilResult.error) throw soilResult.error;
+  if (diseaseResult.error) throw diseaseResult.error;
+  if (growthResult.error) throw growthResult.error;
+  if (cacheResult.error) throw cacheResult.error;
+  const soilRows = soilResult.data;
+  const diseaseRows = diseaseResult.data;
+  const growthRows = growthResult.data;
 
   const climate = summarizeClimate(weather, window);
   const soilByTree = getLatestObservationByTree(soilRows);
@@ -519,7 +571,7 @@ export async function loadFarmWeekBriefing(supabase, farmId) {
     const dryMiss = snap.verdicts.some((v) => v.work === 'irrigate');
     const diseaseWet = snap.verdicts.some((v) => v.work === 'disease');
     const radarDryLow = snap.radar?.drierThanUsual && snap.moistureStatus?.status === 'low';
-    return dripper || dryMiss || diseaseWet || radarDryLow || snap.diseaseThisWeek;
+    return dripper || dryMiss || diseaseWet || radarDryLow;
   }).slice(0, 40);
 
   const workList = [];
@@ -536,6 +588,11 @@ export async function loadFarmWeekBriefing(supabase, farmId) {
   if (snaps.some((s) => s.verdicts.some((v) => v.work === 'fertilizer'))) {
     workList.push('Fertigate only where moisture is not high; some trees still show low nutrients after fertigation.');
   }
+  if (sprayAdvice?.type === 'SPRAY') {
+    workList.push(sprayAdvice.message || 'Do not spray today — check Climate.');
+  } else if (sprayAdvice?.type === 'SPRAY_WINDOW') {
+    workList.push(sprayAdvice.message || 'Spray window is open — see Climate.');
+  }
   if (!workList.length) {
     workList.push('No urgent conflicts. Keep weekly emitter walks; radar will not show a single clogged dripper.');
   }
@@ -545,7 +602,7 @@ export async function loadFarmWeekBriefing(supabase, farmId) {
     radarDrier: snaps.filter((s) => s.radar?.drierThanUsual).length,
     probeLow: snaps.filter((s) => s.moistureStatus?.status === 'low').length,
     zonesNoIrrigation: zoneRows.filter((z) => z.treeCount > 0 && z.irrigationCount === 0).length,
-    disease: (diseaseRows || []).length,
+    disease: snaps.filter((s) => s.diseaseThisWeek).length,
     rainMm: climate.rainMm,
   };
 
@@ -557,5 +614,6 @@ export async function loadFarmWeekBriefing(supabase, farmId) {
     exceptions,
     workList,
     trees: snaps.length,
+    sprayAdvice,
   };
 }

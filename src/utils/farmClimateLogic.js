@@ -38,6 +38,8 @@ export const analyzeRisks = (sensorData, crop, stageInput = null, isHighMoisture
 
   const stage = stageInput ? stageInput.trim().toLowerCase() : '';
   const cropName = crop.trim().toLowerCase();
+  const moistureKnown = soilMoisture != null && Number.isFinite(Number(soilMoisture));
+  const moisture = moistureKnown ? Number(soilMoisture) : null;
 
   if (temp >= 38) {
     warnings.push({
@@ -61,10 +63,10 @@ export const analyzeRisks = (sensorData, crop, stageInput = null, isHighMoisture
 
   const isFog = rh > 90 && lux < 2000 && leafWetness >= 4;
 
-  if (windSpeed > 10 || rain > 0 || isFog || temp > 35) {
+  if (windSpeed > 10 || (rain != null && rain > 0) || isFog || temp > 35) {
     const reasons = [];
     if (windSpeed > 10) reasons.push('High wind');
-    if (rain > 0) reasons.push('Rain detected');
+    if (rain != null && rain > 0) reasons.push('Rain detected');
     if (isFog) reasons.push('Fog');
     if (temp > 35) reasons.push('High Temp');
 
@@ -108,7 +110,7 @@ export const analyzeRisks = (sensorData, crop, stageInput = null, isHighMoisture
     }
   }
 
-  if (soilMoisture < 20) {
+  if (moisture != null && moisture < 20) {
     warnings.push({
       type: 'IRRIGATION',
       level: 'HIGH',
@@ -116,7 +118,7 @@ export const analyzeRisks = (sensorData, crop, stageInput = null, isHighMoisture
     });
   }
 
-  if (soilMoisture > 75 && isHighMoistureDays) {
+  if (moisture != null && moisture > 75 && isHighMoistureDays) {
     warnings.push({
       type: 'ROOT_STRESS',
       level: 'HIGH',
@@ -164,13 +166,13 @@ export const analyzeRisks = (sensorData, crop, stageInput = null, isHighMoisture
     }
 
     if (stage.includes('vegetative')) {
-      if (soilMoisture < 50) {
+      if (moisture != null && moisture < 50) {
         warnings.push({
           type: 'IRRIGATION',
           level: 'HIGH',
           message: 'Soil moisture low (< 50%) for Vegetative stage.',
         });
-      } else if (soilMoisture > 75) {
+      } else if (moisture != null && moisture > 75) {
         warnings.push({
           type: 'IRRIGATION',
           level: 'HIGH',
@@ -178,7 +180,7 @@ export const analyzeRisks = (sensorData, crop, stageInput = null, isHighMoisture
         });
       }
     } else if (stage.includes('flowering') || stage.includes('flower')) {
-      if (soilMoisture > 60) {
+      if (moisture != null && moisture > 60) {
         warnings.push({
           type: 'IRRIGATION',
           level: 'HIGH',
@@ -186,7 +188,7 @@ export const analyzeRisks = (sensorData, crop, stageInput = null, isHighMoisture
         });
       }
     } else if (stage.includes('fruit set') || stage.includes('fruit')) {
-      if (soilMoisture < 50) {
+      if (moisture != null && moisture < 50) {
         warnings.push({
           type: 'IRRIGATION',
           level: 'HIGH',
@@ -194,7 +196,7 @@ export const analyzeRisks = (sensorData, crop, stageInput = null, isHighMoisture
         });
       }
     } else if (stage.includes('maturity')) {
-      if (soilMoisture > 60) {
+      if (moisture != null && moisture > 60) {
         warnings.push({
           type: 'IRRIGATION',
           level: 'HIGH',
@@ -215,7 +217,7 @@ export const analyzeRisks = (sensorData, crop, stageInput = null, isHighMoisture
       }
     }
 
-    if (temp >= 28 && temp <= 35 && rh >= 60 && rh <= 80 && soilMoisture > 80) {
+    if (temp >= 28 && temp <= 35 && rh >= 60 && rh <= 80 && moisture != null && moisture > 80) {
       warnings.push({
         type: 'PEST',
         level: 'HIGH',
@@ -232,13 +234,13 @@ export const analyzeRisks = (sensorData, crop, stageInput = null, isHighMoisture
     }
 
     if (stage.includes('vegetative')) {
-      if (soilMoisture < 55) {
+      if (moisture != null && moisture < 55) {
         warnings.push({
           type: 'IRRIGATION',
           level: 'HIGH',
           message: 'Soil moisture low (< 55%) for Vegetative stage.',
         });
-      } else if (soilMoisture > 65) {
+      } else if (moisture != null && moisture > 65) {
         warnings.push({
           type: 'IRRIGATION',
           level: 'HIGH',
@@ -246,13 +248,13 @@ export const analyzeRisks = (sensorData, crop, stageInput = null, isHighMoisture
         });
       }
     } else if (stage.includes('flowering')) {
-      if (soilMoisture < 45) {
+      if (moisture != null && moisture < 45) {
         warnings.push({
           type: 'IRRIGATION',
           level: 'HIGH',
           message: 'Soil moisture low (< 45%) for Flowering stage.',
         });
-      } else if (soilMoisture > 55) {
+      } else if (moisture != null && moisture > 55) {
         warnings.push({
           type: 'IRRIGATION',
           level: 'HIGH',
@@ -260,13 +262,13 @@ export const analyzeRisks = (sensorData, crop, stageInput = null, isHighMoisture
         });
       }
     } else if (stage.includes('nut')) {
-      if (soilMoisture < 60) {
+      if (moisture != null && moisture < 60) {
         warnings.push({
           type: 'IRRIGATION',
           level: 'HIGH',
           message: 'Soil moisture low (< 60%) for Nut Set stage.',
         });
-      } else if (soilMoisture > 70) {
+      } else if (moisture != null && moisture > 70) {
         warnings.push({
           type: 'IRRIGATION',
           level: 'HIGH',
@@ -274,13 +276,13 @@ export const analyzeRisks = (sensorData, crop, stageInput = null, isHighMoisture
         });
       }
     } else if (stage.includes('maturity')) {
-      if (soilMoisture < 40) {
+      if (moisture != null && moisture < 40) {
         warnings.push({
           type: 'IRRIGATION',
           level: 'HIGH',
           message: 'Soil moisture low (< 40%) for Maturity stage.',
         });
-      } else if (soilMoisture > 50) {
+      } else if (moisture != null && moisture > 50) {
         warnings.push({
           type: 'IRRIGATION',
           level: 'HIGH',

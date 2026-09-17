@@ -90,9 +90,6 @@ function mergeSensors(...parts) {
       if (part[key] != null && merged[key] == null) merged[key] = part[key];
     });
   });
-  Object.keys(merged).forEach((key) => {
-    if (merged[key] == null) merged[key] = 0;
-  });
   return merged;
 }
 
@@ -141,11 +138,15 @@ export async function loadFarmClimateSnapshot(supabase, farm, trees = [], crop =
       .limit(400)
     : Promise.resolve({ data: [] });
 
-  const soilQuery = supabase
-    .from('soil_observations')
-    .select('moisture_percent, observed_at, temperature_c')
-    .order('observed_at', { ascending: false })
-    .limit(20);
+  const treeIds = (trees || []).map((tree) => tree.id).filter(Boolean);
+  const soilQuery = treeIds.length
+    ? supabase
+      .from('soil_observations')
+      .select('moisture_percent, observed_at, temperature_c, tree_id')
+      .in('tree_id', treeIds.slice(0, 150))
+      .order('observed_at', { ascending: false })
+      .limit(40)
+    : Promise.resolve({ data: [] });
 
   const sensorQuery = farm?.id
     ? supabase

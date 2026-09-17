@@ -5,7 +5,7 @@ import {
 } from '@mui/material';
 import { supabase } from '../supabaseClient';
 import { getTreeDisplayId, formatDate } from '../utils/formatters';
-import { fetchTreeByPositionCode, getIrrigationZoneCode } from '../utils/schema';
+import { fetchTreeByPositionCode, getIrrigationZoneCode, getTreeFarmId } from '../utils/schema';
 import HealthIndicator from '../components/common/HealthIndicator';
 import ReplaceTreeDialog from '../components/trees/ReplaceTreeDialog';
 import OverviewTab from '../components/tree-dashboard/OverviewTab';
@@ -20,6 +20,7 @@ import YieldTab from '../components/tree-dashboard/YieldTab';
 import HistoryTab from '../components/tree-dashboard/HistoryTab';
 import SatelliteTab from '../components/tree-dashboard/SatelliteTab';
 import { treeDashboardTabIndex } from '../utils/treeDashboard';
+import { useFarm } from '../hooks/useFarm';
 
 const TAB_LABELS = [
   'Overview', 'Soil', 'Irrigation', 'Fertilizer',
@@ -30,6 +31,7 @@ function TreeDashboard() {
   const { treeId } = useParams();
   const [searchParams] = useSearchParams();
   const tabParam = searchParams.get('tab');
+  const { farm, farms, setFarm } = useFarm();
   const [tab, setTab] = useState(() => treeDashboardTabIndex(tabParam));
   const [tree, setTree] = useState(null);
   const [instances, setInstances] = useState([]);
@@ -61,6 +63,15 @@ function TreeDashboard() {
     setTab(treeDashboardTabIndex(tabParam));
   }, [tabParam, treeId]);
 
+  useEffect(() => {
+    if (!tree) return;
+    const treeFarmId = getTreeFarmId(tree);
+    if (!treeFarmId || !farm) return;
+    if (Number(treeFarmId) === Number(farm.id)) return;
+    const match = (farms || []).find((row) => Number(row.id) === Number(treeFarmId));
+    if (match) setFarm(match);
+  }, [tree, farm, farms, setFarm]);
+
   if (loading) {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', mt: 8 }}>
@@ -74,6 +85,9 @@ function TreeDashboard() {
   }
 
   const zoneCode = getIrrigationZoneCode(tree);
+  const treeFarmId = getTreeFarmId(tree);
+  const farmMismatch = treeFarmId && farm && Number(treeFarmId) !== Number(farm.id)
+    && !(farms || []).some((row) => Number(row.id) === Number(treeFarmId));
   const hasActiveInstance = instances.some((t) => t.status === 'Active');
   const showPlantButton = !hasActiveInstance;
 
@@ -114,6 +128,11 @@ function TreeDashboard() {
       {!hasActiveInstance && (
         <Alert severity="warning" sx={{ mb: 2 }}>
           No active tree at this position. Showing the latest instance. Plant a new tree to resume live tracking.
+        </Alert>
+      )}
+      {farmMismatch && (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          This tree is not on the selected farm. Switch farms in the header, or open it from that farm’s tree list.
         </Alert>
       )}
 

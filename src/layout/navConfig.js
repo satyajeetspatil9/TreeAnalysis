@@ -56,7 +56,7 @@ export const navSections = [
     title: 'Monitoring',
     icon: MonitorHeartIcon,
     items: [
-      { label: 'Weekly briefing', path: '/monitoring/briefing', icon: SummarizeIcon, description: 'Joined week: water, moisture, radar, soil, climate, growth, disease' },
+      { label: 'Weekly briefing', path: '/monitoring/briefing', icon: SummarizeIcon, description: 'Last 7 days: water, moisture, radar, soil, climate, growth, disease' },
       { label: 'Soil', path: '/monitoring/soil', icon: GrassIcon, description: 'Soil observations' },
       { label: 'Moisture', path: '/monitoring/moisture', icon: OpacityIcon, description: 'Latest moisture by tree' },
       { label: 'Irrigation', path: '/irrigation/events', icon: EventIcon, description: 'Watering events' },

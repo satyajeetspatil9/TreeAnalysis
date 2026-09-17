@@ -345,10 +345,12 @@ function IrrigationProgramsPanel({
       start_times: form.start_times.filter(Boolean).map((t) => `${timeToInputValue(t)}:00`),
       motor_device_ids: form.motor_device_ids,
       skip_if_rain: programType === 'fertigation' ? false : Boolean(form.skip_if_rain),
-      pre_flush_minutes: programType === 'fertigation' ? (Number(form.pre_flush_minutes) || 0) : 0,
-      post_flush_minutes: programType === 'fertigation' ? (Number(form.post_flush_minutes) || 0) : 0,
       updated_at: new Date().toISOString(),
     };
+    if (programType === 'fertigation') {
+      payload.pre_flush_minutes = Number(form.pre_flush_minutes) || 0;
+      payload.post_flush_minutes = Number(form.post_flush_minutes) || 0;
+    }
 
     let programId = editing?.id;
     if (editing) {
@@ -356,11 +358,6 @@ function IrrigationProgramsPanel({
         .from('irrigation_programs')
         .update(payload)
         .eq('id', editing.id);
-      if (error && /pre_flush_minutes|post_flush_minutes/.test(error.message || '')) {
-        delete payload.pre_flush_minutes;
-        delete payload.post_flush_minutes;
-        ({ error } = await supabase.from('irrigation_programs').update(payload).eq('id', editing.id));
-      }
       if (error) {
         if (String(error.message || '').includes('run_order')) {
           setMessage({ type: 'warning', text: 'Run migration 041_irrigation_program_run_order.sql, then try again.' });
@@ -378,15 +375,6 @@ function IrrigationProgramsPanel({
         .insert({ ...payload, created_at: new Date().toISOString() })
         .select('id')
         .single();
-      if (error && /pre_flush_minutes|post_flush_minutes/.test(error.message || '')) {
-        delete payload.pre_flush_minutes;
-        delete payload.post_flush_minutes;
-        ({ data, error } = await supabase
-          .from('irrigation_programs')
-          .insert({ ...payload, created_at: new Date().toISOString() })
-          .select('id')
-          .single());
-      }
       if (error) {
         if (String(error.message || '').includes('run_order')) {
           setMessage({ type: 'warning', text: 'Run migration 041_irrigation_program_run_order.sql, then try again.' });
@@ -413,11 +401,26 @@ function IrrigationProgramsPanel({
             ? Number(s.on_duration_minutes)
             : (est ?? null),
           is_active: s.is_active !== false,
+          ...(programType === 'fertigation'
+            ? {
+              pre_flush_minutes: s.pre_flush_minutes === '' || s.pre_flush_minutes == null
+                ? null
+                : Number(s.pre_flush_minutes),
+              post_flush_minutes: s.post_flush_minutes === '' || s.post_flush_minutes == null
+                ? null
+                : Number(s.post_flush_minutes),
+            }
+            : {}),
         };
       });
 
     if (stepRows.length) {
-      const { error: stepError } = await supabase.from('irrigation_program_steps').insert(stepRows);
+      let { error: stepError } = await supabase.from('irrigation_program_steps').insert(stepRows);
+      if (stepError && /pre_flush_minutes|post_flush_minutes/.test(stepError.message || '')) {
+        setMessage({ type: 'error', text: scheduleTableHint(stepError.message) });
+        setSaving(false);
+        return;
+      }
       if (stepError) {
         setMessage({ type: 'error', text: scheduleTableHint(stepError.message) });
         setSaving(false);
@@ -608,6 +611,8 @@ function IrrigationProgramsPanel({
       immediate: true,
       motorDeviceId: Number(jobForm.motor_id),
       injectorDeviceIds: isFertigation && jobForm.injector_id ? [Number(jobForm.injector_id)] : [],
+      preFlushMinutes: isFertigation ? 10 : 0,
+      postFlushMinutes: isFertigation ? 10 : 0,
     });
     setCreatingJob(false);
     if (error) {

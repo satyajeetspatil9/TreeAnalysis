@@ -100,6 +100,21 @@ function OverviewTab({ tree, zoneCode }) {
             Moisture, satellite, soil, irrigation, fertigation, climate, growth, and disease for this tree in one story.
             Radar is a ground patch, not proof this emitter opened.
           </Typography>
+          {briefing.sprayAdvice && (
+            <Alert
+              severity={briefing.sprayAdvice.type === 'SPRAY' ? 'warning' : 'success'}
+              sx={{ mb: 1 }}
+            >
+              {briefing.sprayAdvice.message}
+              {' '}
+              <Button size="small" component={RouterLink} to="/orchard/climate">Climate</Button>
+            </Alert>
+          )}
+          {briefing.satelliteError && (
+            <Alert severity="warning" sx={{ mb: 1 }}>
+              Satellite cache error: {briefing.satelliteError}
+            </Alert>
+          )}
           {briefing.verdicts?.map((item) => (
             <Alert key={item.text} severity={item.severity === 'success' ? 'success' : item.severity} sx={{ mb: 1 }}>
               {item.text}
@@ -138,6 +153,13 @@ function OverviewTab({ tree, zoneCode }) {
                 Radar {briefing.radar?.wetnessLabel || '—'}
                 {briefing.radar?.anomalyLabel ? ` · ${briefing.radar.anomalyLabel}` : ''}
                 {briefing.radar?.fromPriorWeek ? ' (earlier pass)' : ''}
+              </Typography>
+              <Typography variant="body2">
+                {briefing.opticalHidden
+                  ? 'NDVI hidden — optical is cloudy; radar only this week'
+                  : briefing.ndviLow
+                    ? 'Canopy greenness (NDVI) looks low'
+                    : 'Canopy greenness (NDVI) not flagged low'}
               </Typography>
               <Button size="small" component={RouterLink} to="?tab=soil">Soil</Button>
               <Button size="small" component={RouterLink} to="?tab=satellite">Satellite</Button>

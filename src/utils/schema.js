@@ -12,7 +12,7 @@ export const POSITION_WITH_LOT = `
   lots (
     name,
     section_id,
-    sections ( id, name ),
+    sections ( id, name, phases ( farm_id ) ),
     lot_rows ( row_id, rows ( id, name, section_id, sections ( id, name ) ) )
   )
 `;
@@ -39,7 +39,7 @@ export const TREE_LIST_SELECT = `
     lots (
       name,
       section_id,
-      sections ( id, name ),
+      sections ( id, name, phases ( farm_id ) ),
       lot_rows ( row_id, rows ( id, name, section_id, sections ( id, name ) ) )
     )
   ),
@@ -82,6 +82,12 @@ export function getIrrigationZoneCode(tree) {
 export function getIrrigationZoneId(tree) {
   const link = getActiveIrrigationLink(tree);
   return link?.zone_id || link?.irrigation_zones?.id || null;
+}
+
+export function getTreeFarmId(tree) {
+  return tree?.tree_positions?.lots?.sections?.phases?.farm_id
+    ?? tree?.tree_positions?.lots?.farm_id
+    ?? null;
 }
 
 export function getTreeGps(tree) {

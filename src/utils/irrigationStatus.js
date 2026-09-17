@@ -118,10 +118,11 @@ export function mergeZoneStatusRows(zones, statusRows) {
 
 /** Controller can keep is_irrigating true after Start now has already finished. */
 export function isZoneTelemetryStale(row, runningJob, recentCompleted) {
-  if (runningJob) return false;
   if (!row?.isIrrigating) return true;
-  if (row.status?.pending_command === 'stop') return true;
   const zoneId = Number(row.zone?.id);
+  const jobOnThisZone = runningJob && Number(runningJob.zone_id) === zoneId;
+  if (jobOnThisZone) return false;
+  if (row.status?.pending_command === 'stop') return true;
   const done = (recentCompleted || []).find((job) => (
     Number(job.zone_id) === zoneId && job.completed_at
   ));

@@ -68,6 +68,8 @@ import {
   fetchPowerStatus,
   formatEstimatedDuration,
   jobElapsedMinutes,
+  jobRunLimitMinutes,
+  completeOverdueIrrigationJobs,
   pauseIrrigationJob,
   powerStatusLabel,
   scheduleTableHint,
@@ -231,7 +233,7 @@ function IrrigationDashboardPage() {
         .limit(50),
       supabase
         .from('irrigation_jobs')
-        .select('id, zone_id, job_type, program_id, status, started_at, duration_elapsed_minutes, on_duration_minutes, max_duration_minutes, target_liters, liters_delivered, fertigation_phase, irrigation_programs(name, program_type)')
+        .select('id, zone_id, job_type, program_id, status, started_at, duration_elapsed_minutes, on_duration_minutes, max_duration_minutes, target_liters, liters_delivered, fertigation_phase, irrigation_programs(name, program_type, pre_flush_minutes, post_flush_minutes)')
         .eq('farm_id', farm.id)
         .in('job_type', ['water', 'fertigation', 'manual'])
         .in('status', OPEN_JOB_STATUSES),
@@ -258,6 +260,13 @@ function IrrigationDashboardPage() {
         .in('job_type', ['water', 'fertigation', 'manual'])
         .in('status', OPEN_JOB_STATUSES);
       jobRows = fallbackJobs.data;
+    }
+    if (farm.id && (jobRows || []).length) {
+      const { completedIds } = await completeOverdueIrrigationJobs(farm.id, jobRows);
+      if (completedIds?.length) {
+        const done = new Set(completedIds.map(Number));
+        jobRows = (jobRows || []).filter((job) => !done.has(Number(job.id)));
+      }
     }
     setQueueCommands(queueRows || []);
     setProgramJobs(jobRows || []);
@@ -323,7 +332,7 @@ function IrrigationDashboardPage() {
   useEffect(() => {
     const running = (programJobs || []).find((job) => job.status === 'running');
     if (!farm?.id || !running) return undefined;
-    const limit = Number(running.on_duration_minutes) || Number(running.max_duration_minutes);
+    const limit = jobRunLimitMinutes(running);
     if (!(limit > 0)) return undefined;
     const remainMs = Math.max(0, (limit - jobElapsedMinutes(running, new Date())) * 60000);
     const timerId = window.setTimeout(() => {
@@ -402,12 +411,15 @@ function IrrigationDashboardPage() {
     [rows, runningJob],
   );
   const liveZone = runningJobZone || activeZone;
-  const isLive = Boolean(runningJob || activeZone);
+  const awaitingController = Boolean(runningJob) && !activeZone;
+  const isLive = Boolean(activeZone || runningJob);
   const isFertigating = Boolean(runningJob && !isWaterMonitoringJob(runningJob));
   const liveStartedAt = activeZone?.status?.started_at || runningJob?.started_at || null;
   const liveHeadline = !isLive
     ? 'No watering'
-    : (isFertigating ? 'Fertigating now' : 'Watering now');
+    : awaitingController
+      ? 'Job running — awaiting controller'
+      : (isFertigating ? 'Fertigating now' : 'Watering now');
   const liveZoneCode = liveZone?.zone?.zone_code || null;
   const controlRow = useMemo(
     () => rows.find((row) => String(row.zone.id) === String(controlZoneId)) || rows[0] || null,
@@ -587,8 +599,12 @@ function IrrigationDashboardPage() {
                       </Typography>
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1, flexWrap: 'wrap' }}>
                         <Chip
-                          color="info"
-                          label={liveZoneCode ? `Running zone: ${liveZoneCode}` : 'Program running'}
+                          color={awaitingController ? 'warning' : 'info'}
+                          label={
+                            awaitingController
+                              ? (liveZoneCode ? `Waiting on ${liveZoneCode}` : 'Waiting on controller')
+                              : (liveZoneCode ? `Running zone: ${liveZoneCode}` : 'Program running')
+                          }
                           sx={{ fontWeight: 800, fontSize: '1rem', height: 36 }}
                         />
                         {liveZone?.zone?.description && (

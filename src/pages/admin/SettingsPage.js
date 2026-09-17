@@ -715,6 +715,21 @@ function SettingsPage() {
         ))}
       </Paper>
 
+      <Paper sx={{ p: 3, mb: 3 }} variant="outlined">
+        <Typography variant="h6" gutterBottom>Irrigation SQL (037–061)</Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+          Run these in Supabase SQL Editor in order if a feature is missing. Web deploys do not apply SQL.
+          After 061, redeploy <code>irrigation-scheduler</code>.
+        </Typography>
+        <Typography variant="body2" component="div">
+          037 zone status · 038 zone commands · 039 schedule control · 040 scheduler cron ·
+          041 run order · 042 device I/O · 043 job duration · 044 event notes · 045 power / per pin ·
+          046 power day shift · 047 controller outage times · 052 pause and skip rain ·
+          053 fertigation events · 056 program products · 058 event start/end ·
+          059 injector specs · 060 scheduler cron auth · <strong>061 3-phase fertigation (flush)</strong>
+        </Typography>
+      </Paper>
+
       <Button variant="outlined" color="error" onClick={signOut}>Sign Out</Button>
 
       <Dialog open={Boolean(newIngestKey)} onClose={() => setNewIngestKey(null)} maxWidth="sm" fullWidth>

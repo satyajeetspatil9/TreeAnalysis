@@ -29,6 +29,10 @@ Omit `farm_id` to process all farms.
 3. `045_irrigation_power_and_per_pin.sql`
 4. `046_irrigation_power_day_shift.sql`
 5. `047_irrigation_controller_outage_times.sql`
+6. `052_irrigation_pause_and_skip_rain.sql`
+7. `058_event_start_end_times.sql`
+8. `060_irrigation_scheduler_cron_auth.sql`
+9. `061_irrigation_advanced_programs.sql` — 3-phase fertigation (required for flush)
 6. Insert/update cron settings:
 
 ```sql
@@ -57,8 +61,13 @@ flushes batched writes. A minute with nothing to do performs no writes at all.
   `outage_ended_at − outage_started_at` from the controller, not the time we received the POST.
 - If mains drops while a program is running, that job's duration/cap grows by that same
   outage length and remaining programs today shift by it.
-- Creation no longer waits for the farm to be free. A program due at its (shifted) start
-  gets its job then and waits its turn.
+- A program that already **started** today is not created again for that start.
+  Cancelled (including rain-skip) jobs do not occupy the slot, so 06:00 can retry
+  if rain stops. After you save an edit, only a listed start that is still later
+  today may run; past starts wait until the next scheduled day.
+- Fertigation uses migration **061** (`pre_flush_minutes`, `post_flush_minutes`,
+  `fertigation_phase`): water only, then injectors, then post-flush. If a running
+  job’s valves/motors look off after an outage, the next tick re-issues start.
 - Only one job holds the pump: manual first, then the running job, then `run_order`.
 - Enqueues **one command per terminal**, each with its own `until`. The metered zone valve
   gets `liters`; motors and injectors get `minutes`. Motors are queued first so firmware

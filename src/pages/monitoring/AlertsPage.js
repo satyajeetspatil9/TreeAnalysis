@@ -14,7 +14,7 @@ import {
   isSoilNutrientAlert,
   refreshSoilNutrientAlerts,
 } from '../../utils/soilAlerts';
-import { filterByTreeIds, loadFarmTreeIds } from '../../utils/farmScope';
+import { filterByTreeIds, loadFarmTreeIds, selectInChunks } from '../../utils/farmScope';
 
 function AlertsPage() {
   const { farm } = useFarm();
@@ -28,27 +28,42 @@ function AlertsPage() {
       return;
     }
     const treeIds = await loadFarmTreeIds(supabase, farm.id);
-    const { data: soilObservations } = await supabase
-      .from('soil_observations')
-      .select('*, trees(tree_positions(position_code))')
-      .order('observed_at', { ascending: false })
-      .limit(500);
+    if (!treeIds.length) {
+      setAlerts([]);
+      return;
+    }
+    const { data: soilObservations } = await selectInChunks(
+      supabase,
+      'soil_observations',
+      '*, trees(tree_positions(position_code))',
+      'tree_id',
+      treeIds,
+      (query) => query.order('observed_at', { ascending: false }).limit(80),
+    );
 
     await refreshSoilNutrientAlerts(supabase);
 
-    let query = supabase
-      .from('tree_alerts')
-      .select('*, trees(tree_positions(position_code))')
-      .order('alert_date', { ascending: false })
-      .limit(100);
-
-    if (statusFilter !== 'All') {
-      query = query.eq('status', statusFilter);
+    let alertsRows = [];
+    const { data: alertData, error: alertError } = await selectInChunks(
+      supabase,
+      'tree_alerts',
+      '*, trees(tree_positions(position_code))',
+      'tree_id',
+      treeIds,
+      (query) => {
+        let next = query.order('alert_date', { ascending: false }).limit(40);
+        if (statusFilter !== 'All') next = next.eq('status', statusFilter);
+        return next;
+      },
+    );
+    if (alertError) {
+      alertsRows = [];
+    } else {
+      alertsRows = alertData || [];
     }
 
-    const { data } = await query;
     const farmSoil = filterByTreeIds(soilObservations || [], treeIds);
-    const farmAlerts = filterByTreeIds(data || [], treeIds);
+    const farmAlerts = filterByTreeIds(alertsRows, treeIds);
 
     if (statusFilter === 'Open') {
       setAlerts(buildOpenActionAlerts(farmAlerts, farmSoil));
