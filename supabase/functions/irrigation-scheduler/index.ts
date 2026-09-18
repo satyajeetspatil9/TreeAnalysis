@@ -707,6 +707,28 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
     return uniqueTerminals(ordered.map((d) => d?.device_code));
   };
 
+  const injectorCodesFor = (job: Job) => {
+    const ids = new Set<number>();
+    (jobDevices || []).forEach((jd) => {
+      if (Number(jd.job_id) === Number(job.id) && jd.device_id != null) {
+        ids.add(Number(jd.device_id));
+      }
+    });
+    if (job.program_id) {
+      (programDevices || []).forEach((row) => {
+        if (Number(row.program_id) === Number(job.program_id) && row.device_id != null) {
+          ids.add(Number(row.device_id));
+        }
+      });
+    }
+    return uniqueTerminals(
+      [...ids]
+        .map((id) => devicesById.get(id))
+        .filter((device) => device?.kind === 'fertigation')
+        .map((device) => device?.device_code),
+    );
+  };
+
   const refreshPlannedJob = async (job: Job) => {
     if (job.status !== 'planned' || job.started_at || !job.program_id) return;
     const program = (programs || []).find((p) => Number(p.id) === Number(job.program_id));
@@ -1024,16 +1046,23 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
           next.zone_id && Number(d.zone_id) === Number(next.zone_id) && d.kind === 'zone_valve'
         ));
         const nextValveCode = normalizeCode(nextValve?.device_code);
+        const nextInjectUntil = durationNext != null && durationNext > 0
+          ? durationNext
+          : null;
 
         for (const code of newCodes) {
           const device = (devices || []).find((d) => normalizeCode(d.device_code) === code);
-          const until: Until = {};
-          if (code === nextValveCode && targetNext != null) until.liters = targetNext;
-          if (totalNextDuration != null) until.minutes = totalNextDuration;
-          else if (capNext != null) until.minutes = capNext;
-
           if (isFertigationJob && device?.kind === 'fertigation' && nextPre > 0) {
             continue;
+          }
+          const until: Until = {};
+          if (code === nextValveCode && targetNext != null) until.liters = targetNext;
+          if (isFertigationJob && device?.kind === 'fertigation') {
+            if (nextInjectUntil != null) until.minutes = nextInjectUntil;
+          } else if (totalNextDuration != null) {
+            until.minutes = totalNextDuration;
+          } else if (capNext != null) {
+            until.minutes = capNext;
           }
 
           batch.cancelFor([code], 'stop');
@@ -1072,39 +1101,34 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
 
     if (job.status === 'running') {
       // Manage 3-phase fertigation injector start/stop while running
+      const remainingInject = Math.max(0, Math.ceil((preFlush + injectionMinutes) - elapsed));
       if (isFertigationJob && (preFlush > 0 || postFlush > 0)) {
         patchJob(job, { fertigation_phase: fertigationPhase });
-        const injectorCodes = (programDevices || [])
-          .filter((d) => Number(d.program_id) === Number(job.program_id))
-          .map((d) => devicesById.get(Number(d.device_id))?.device_code)
-          .map(normalizeCode)
-          .filter(isTerminal);
+        const injectorCodes = injectorCodesFor(job);
 
         if (fertigationPhase === 'injecting') {
-          const remainingInject = Math.max(1, Math.ceil((preFlush + injectionMinutes) - elapsed));
           for (const injCode of injectorCodes) {
             if (!batch.hasPending(injCode, 'start') && !believedOn(injCode)) {
               batch.cancelFor([injCode], 'stop');
               batch.add(injCode, 'start', {
                 jobId: job.id,
                 zoneId: job.zone_id,
-                until: { minutes: remainingInject },
+                until: { minutes: Math.max(1, remainingInject) },
                 role: 'fertigation',
               });
-              actions.push(`fertigation_inject_start:${job.id}:${injCode}:${remainingInject}m`);
+              actions.push(`fertigation_inject_start:${job.id}:${injCode}:${Math.max(1, remainingInject)}m`);
             }
           }
-        } else if (fertigationPhase === 'post_flush') {
+        } else {
           for (const injCode of injectorCodes) {
-            if (believedOn(injCode) || batch.hasPending(injCode, 'start')) {
-              batch.cancelFor([injCode], 'start');
-              batch.add(injCode, 'stop', {
-                jobId: job.id,
-                zoneId: job.zone_id,
-                reason: 'post_flush_reached',
-              });
-              actions.push(`fertigation_inject_stop:${job.id}:${injCode}`);
-            }
+            if (batch.hasPending(injCode, 'stop') && !batch.hasPending(injCode, 'start')) continue;
+            batch.cancelFor([injCode], 'start');
+            batch.add(injCode, 'stop', {
+              jobId: job.id,
+              zoneId: job.zone_id,
+              reason: fertigationPhase === 'pre_flush' ? 'pre_flush' : 'post_flush_reached',
+            });
+            actions.push(`fertigation_inject_stop:${job.id}:${injCode}:${fertigationPhase}`);
           }
         }
       }
@@ -1117,7 +1141,11 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
         if (!believedOn(code) && !batch.hasPending(code, 'start')) {
           const until: Until = {};
           if (device?.kind === 'zone_valve' && remainingLiters != null) until.liters = remainingLiters;
-          if (remainingMinutes != null) until.minutes = remainingMinutes;
+          if (isFertigationJob && device?.kind === 'fertigation') {
+            until.minutes = Math.max(1, remainingInject);
+          } else if (remainingMinutes != null) {
+            until.minutes = remainingMinutes;
+          }
           batch.cancelFor([code], 'stop');
           batch.add(code, 'start', {
             jobId: job.id,
@@ -1169,7 +1197,11 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
       }
       const until: Until = {};
       if (device?.kind === 'zone_valve' && remainingLiters != null) until.liters = remainingLiters;
-      if (remainingMinutes != null) until.minutes = remainingMinutes;
+      if (isFertigationJob && device?.kind === 'fertigation') {
+        until.minutes = Math.max(1, injectionMinutes);
+      } else if (remainingMinutes != null) {
+        until.minutes = remainingMinutes;
+      }
 
       batch.add(code, 'start', {
         jobId: job.id,

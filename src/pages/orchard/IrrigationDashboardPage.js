@@ -73,6 +73,8 @@ import {
   jobRunLimitMinutes,
   completeOverdueIrrigationJobs,
   completeRunningIrrigationJob,
+  fertigationPhaseOf,
+  stopFertigationInjectorsForJob,
   pauseIrrigationJob,
   powerStatusLabel,
   scheduleTableHint,
@@ -271,6 +273,12 @@ function IrrigationDashboardPage() {
       if (completedIds?.length) {
         const done = new Set(completedIds.map(Number));
         jobRows = (jobRows || []).filter((job) => !done.has(Number(job.id)));
+      }
+      for (const job of jobRows || []) {
+        const phase = fertigationPhaseOf(job);
+        if (phase === 'post_flush' || phase === 'pre_flush') {
+          await stopFertigationInjectorsForJob(farm.id, job);
+        }
       }
     }
     setQueueCommands(queueRows || []);

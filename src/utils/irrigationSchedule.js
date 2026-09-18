@@ -209,6 +209,46 @@ export async function fetchJobTerminalCodes(farmId, job, { excludeKinds = [] } =
   ]);
 }
 
+export async function fetchJobInjectorCodes(farmId, job) {
+  if (!job) return [];
+  const [{ data: jobDevices }, { data: programDevices }] = await Promise.all([
+    supabase.from('irrigation_job_devices').select('device_id').eq('job_id', job.id),
+    job.program_id
+      ? supabase.from('irrigation_program_devices').select('device_id').eq('program_id', job.program_id)
+      : Promise.resolve({ data: [] }),
+  ]);
+  const ids = [...new Set([
+    ...(jobDevices || []).map((row) => Number(row.device_id)),
+    ...(programDevices || []).map((row) => Number(row.device_id)),
+  ].filter((id) => Number.isFinite(id) && id > 0))];
+  if (!ids.length) return [];
+  const { data: devices } = await supabase
+    .from('irrigation_devices')
+    .select('device_code, kind')
+    .eq('farm_id', farmId)
+    .in('id', ids);
+  return uniqueTerminalCodes(
+    (devices || [])
+      .filter((device) => device.kind === 'fertigation')
+      .map((device) => device.device_code),
+  );
+}
+
+/** Stop fertilizer injectors so post-rinse is water only. */
+export async function stopFertigationInjectorsForJob(farmId, job) {
+  const codes = await fetchJobInjectorCodes(farmId, job);
+  if (!codes.length) return { error: null };
+  await cancelPendingCommandsForCodes(farmId, codes);
+  return enqueueIrrigationCommand({
+    farmId,
+    deviceCodes: codes,
+    action: 'stop',
+    jobId: job.id,
+    zoneId: job.zone_id,
+    payload: { reason: 'post_flush_reached', role: 'fertigation' },
+  });
+}
+
 /**
  * One command per terminal, each with its own stop rule. Terminals in the same
  * job no longer share an `until`, so a valve on litres and a motor on minutes
@@ -761,6 +801,21 @@ export function jobElapsedMinutes(job, now = new Date()) {
   if (job?.status !== 'running' || !job?.started_at) return banked;
   const since = (now.getTime() - new Date(job.started_at).getTime()) / 60000;
   return banked + Math.max(0, since);
+}
+
+export function fertigationPhaseOf(job, now = new Date()) {
+  if (!job) return null;
+  const program = job.irrigation_programs || {};
+  const isFertigation = job.job_type === 'fertigation' || program.program_type === 'fertigation';
+  if (!isFertigation) return null;
+  const pre = Number(job.pre_flush_minutes ?? program.pre_flush_minutes) || 0;
+  const post = Number(job.post_flush_minutes ?? program.post_flush_minutes) || 0;
+  const inject = Number(job.on_duration_minutes) || 0;
+  if (!(pre > 0 || post > 0)) return job.fertigation_phase || 'full';
+  const elapsed = jobElapsedMinutes(job, now);
+  if (elapsed < pre) return 'pre_flush';
+  if (elapsed < pre + inject) return 'injecting';
+  return 'post_flush';
 }
 
 /** Scheduled run length including fertigation pre/post flush. */
