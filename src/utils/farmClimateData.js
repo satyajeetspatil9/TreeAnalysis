@@ -5,6 +5,7 @@ import {
   fetchOpenMeteoCurrent,
   fetchOpenMeteoForecast,
   forecastDaysFromDaily,
+  splitPastAndNextDays,
   gddFromDailySeries,
 } from './farmClimateApi';
 import { getTreeGps } from './schema';
@@ -175,6 +176,7 @@ export async function loadFarmClimateSnapshot(supabase, farm, trees = [], crop =
 
   let meteoCurrent = null;
   let forecast = [];
+  let pastDays = [];
   let archiveGdd = 0;
   let meteoError = null;
 
@@ -186,7 +188,9 @@ export async function loadFarmClimateSnapshot(supabase, farm, trees = [], crop =
         fetchOpenMeteoArchive(gps.latitude, gps.longitude, seasonStart, today),
       ]);
       meteoCurrent = currentPayload?.current || null;
-      forecast = forecastDaysFromDaily(forecastPayload?.daily);
+      const split = splitPastAndNextDays(forecastPayload?.daily);
+      pastDays = split.pastDays;
+      forecast = split.forecast.length ? split.forecast : forecastDaysFromDaily(forecastPayload?.daily);
       archiveGdd = gddFromDailySeries(archivePayload?.daily);
     } catch (err) {
       meteoError = err.message;
@@ -219,6 +223,7 @@ export async function loadFarmClimateSnapshot(supabase, farm, trees = [], crop =
     gps,
     seasonStart,
     forecast,
+    pastDays,
     source: hasLocal && hasMeteo
       ? 'Farm logs + Open-Meteo'
       : hasLocal

@@ -34,6 +34,33 @@ import { dailyGddFromSensors, loadFarmClimateSnapshot } from '../../utils/farmCl
 import { createClimateWorkItem } from '../../utils/climateWork';
 import { formatDate, formatNumber } from '../../utils/formatters';
 
+function ClimateWeekStrip({ title, days }) {
+  if (!days?.length) return null;
+  return (
+    <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
+      <Typography variant="subtitle2" sx={{ mb: 1 }}>{title}</Typography>
+      <Grid container spacing={1}>
+        {days.map((day) => (
+          <Grid item xs={6} sm={3} md={true} key={day.date} sx={{ flex: { md: 1 } }}>
+            <Typography variant="caption" color="text.secondary" display="block">
+              {formatDate(day.date)}
+            </Typography>
+            <Typography variant="body2" fontWeight={600}>
+              {formatNumber(day.tmax, 0)}° / {formatNumber(day.tmin, 0)}°
+            </Typography>
+            <Typography variant="caption" display="block">
+              Rain {formatNumber(day.rain, 1)} mm
+            </Typography>
+            <Typography variant="caption" display="block">
+              Wind {formatNumber(day.wind, 0)} km/h
+            </Typography>
+          </Grid>
+        ))}
+      </Grid>
+    </Paper>
+  );
+}
+
 function formatValue(val) {
   if (val == null || val === '') return '—';
   if (typeof val === 'number') return val.toFixed(1);
@@ -115,7 +142,7 @@ function FarmClimatePage() {
       <PageHeader
         section="Orchard"
         title="Farm climate"
-        subtitle="This orchard’s weather, soil, Open-Meteo forecast, and GDD stage — then turn advisories into work."
+        subtitle="This orchard’s weather, soil, last 7 days, Open-Meteo forecast, and GDD stage — then turn advisories into work."
         action={(
           <Button
             variant="outlined"
@@ -261,29 +288,8 @@ function FarmClimatePage() {
               />
             </Grid>
           </Grid>
-          {snapshot?.forecast?.length > 0 && (
-            <Paper variant="outlined" sx={{ p: 2 }}>
-              <Typography variant="subtitle2" sx={{ mb: 1 }}>Next 7 days (Open-Meteo)</Typography>
-              <Grid container spacing={1}>
-                {snapshot.forecast.map((day) => (
-                  <Grid item xs={6} sm={3} md={true} key={day.date} sx={{ flex: { md: 1 } }}>
-                    <Typography variant="caption" color="text.secondary" display="block">
-                      {formatDate(day.date)}
-                    </Typography>
-                    <Typography variant="body2" fontWeight={600}>
-                      {formatNumber(day.tmax, 0)}° / {formatNumber(day.tmin, 0)}°
-                    </Typography>
-                    <Typography variant="caption" display="block">
-                      Rain {formatNumber(day.rain, 1)} mm
-                    </Typography>
-                    <Typography variant="caption" display="block">
-                      Wind {formatNumber(day.wind, 0)} km/h
-                    </Typography>
-                  </Grid>
-                ))}
-              </Grid>
-            </Paper>
-          )}
+          <ClimateWeekStrip title="Last 7 days (Open-Meteo)" days={snapshot?.pastDays} />
+          <ClimateWeekStrip title="Next 7 days (Open-Meteo)" days={snapshot?.forecast} />
         </Grid>
         <Grid item xs={12} lg={4}>
           <RiskPanel

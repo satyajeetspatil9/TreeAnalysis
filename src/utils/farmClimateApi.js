@@ -39,6 +39,7 @@ export async function fetchOpenMeteoForecast(latitude, longitude) {
       'wind_speed_10m_max',
     ].join(','),
     forecast_days: '7',
+    past_days: '7',
     wind_speed_unit: 'kmh',
     timezone: 'Asia/Kolkata',
   });
@@ -82,4 +83,17 @@ export function forecastDaysFromDaily(daily) {
     rain: daily.precipitation_sum?.[i] ?? null,
     wind: daily.wind_speed_10m_max?.[i] ?? null,
   }));
+}
+
+export function todayIstDateKey(fromDate = new Date()) {
+  return fromDate.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+}
+
+/** Split Open-Meteo daily (past_days + forecast_days) into last 7 and next 7. */
+export function splitPastAndNextDays(daily, today = todayIstDateKey()) {
+  const days = forecastDaysFromDaily(daily);
+  return {
+    pastDays: days.filter((day) => day.date < today).slice(-7),
+    forecast: days.filter((day) => day.date >= today).slice(0, 7),
+  };
 }
