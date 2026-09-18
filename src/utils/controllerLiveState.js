@@ -99,8 +99,9 @@ export function compareProgramAndControllerTimes({
   now = new Date(),
 } = {}) {
   const history = live?.history || [];
-  const watering = Boolean(live?.watering);
   const { startRow, stopRow } = lastRunFromHistory(history);
+  const jobDone = Boolean(parseTime(job?.completed_at));
+  const liveWatering = Boolean(live?.watering);
 
   let controllerStart = parseIstClockOnDate(
     live?.startedAt,
@@ -109,19 +110,21 @@ export function compareProgramAndControllerTimes({
   controllerStart = rowTime(startRow) || controllerStart;
 
   let controllerEnd = null;
-  let controllerEnded = !watering;
+  let controllerEnded = !liveWatering || jobDone;
   const runMinutes = Number(startRow?.durationMin);
-  if (watering) {
+
+  if (liveWatering && !jobDone) {
     controllerEnd = live?.minutesLeft != null
       ? addMinutes(now, live.minutesLeft)
       : addMinutes(controllerStart, live?.durationMin || runMinutes);
+    controllerEnded = false;
   } else {
     controllerEnd = rowTime(stopRow);
-    if (!controllerEnd && runMinutes > 0) {
+    if (!controllerEnd && !liveWatering && runMinutes > 0) {
       controllerEnd = addMinutes(controllerStart, runMinutes);
     }
-    if (!controllerEnd && Number(live?.durationMin) > 0) {
-      controllerEnd = addMinutes(controllerStart, live.durationMin);
+    if (liveWatering && jobDone) {
+      controllerEnded = Boolean(controllerEnd);
     }
   }
 
