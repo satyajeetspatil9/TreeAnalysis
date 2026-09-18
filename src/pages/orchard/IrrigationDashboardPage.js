@@ -58,7 +58,7 @@ import {
   statusTableHint,
   zoneTelemetryAt,
 } from '../../utils/irrigationStatus';
-import { isWaterMonitoringJob } from '../../utils/irrigation';
+import { isWaterMonitoringJob, resolveLiveWaterUsedLiters } from '../../utils/irrigation';
 import { compareProgramAndControllerTimes, controllerConfirmsStarted, controllerHeadline, fetchControllerLiveState } from '../../utils/controllerLiveState';
 import {
   OPEN_JOB_STATUSES,
@@ -72,6 +72,7 @@ import {
   jobElapsedMinutes,
   jobRunLimitMinutes,
   completeOverdueIrrigationJobs,
+  completeRunningIrrigationJob,
   pauseIrrigationJob,
   powerStatusLabel,
   scheduleTableHint,
@@ -477,6 +478,22 @@ function IrrigationDashboardPage() {
     power?.reported_at,
     runningJob?.started_at,
   );
+  const waterUsed = useMemo(() => {
+    const startedMs = liveStartedAt ? new Date(liveStartedAt).getTime() : null;
+    const elapsedFromClock = Number.isFinite(startedMs)
+      ? Math.max(0, (nowMs - startedMs) / 60000)
+      : 0;
+    const elapsedMinutes = runningJob
+      ? jobElapsedMinutes(runningJob, new Date(nowMs))
+      : elapsedFromClock;
+    return resolveLiveWaterUsedLiters({
+      totalDischargeLiters: liveRow?.status?.total_discharge_liters
+        ?? controlRow?.status?.total_discharge_liters,
+      jobLitersDelivered: runningJob?.liters_delivered,
+      flowRateLph: liveRow?.zone?.flow_rate_lph ?? controlRow?.zone?.flow_rate_lph,
+      elapsedMinutes: isLive ? elapsedMinutes : 0,
+    });
+  }, [liveStartedAt, nowMs, runningJob, liveRow, controlRow, isLive]);
 
   useEffect(() => {
     if (!rows.length) return;
@@ -527,6 +544,14 @@ function IrrigationDashboardPage() {
     setCommanding(true);
     setMessage(null);
     const stopped = await sendCommand(row, 'stop');
+    if (!stopped.error && runningJob && Number(runningJob.zone_id) === Number(row.zone.id)) {
+      const finished = await completeRunningIrrigationJob(runningJob);
+      if (finished.error) {
+        setCommanding(false);
+        setMessage({ type: 'error', text: finished.error.message || String(finished.error) });
+        return;
+      }
+    }
     setCommanding(false);
     if (stopped.error) {
       setMessage({ type: 'error', text: stopped.error });
@@ -839,11 +864,8 @@ function IrrigationDashboardPage() {
                 </Grid>
                 <Grid item xs={6} sm={4} md={3}>
                   <MetricTile
-                    label="Water used"
-                    value={formatTotalDischarge(
-                      liveRow?.status?.total_discharge_liters
-                        ?? controlRow?.status?.total_discharge_liters,
-                    )}
+                    label={waterUsed.estimated ? 'Water used (est.)' : 'Water used'}
+                    value={formatTotalDischarge(waterUsed.liters)}
                   />
                 </Grid>
                 <Grid item xs={6} sm={4} md={3}>
@@ -860,9 +882,11 @@ function IrrigationDashboardPage() {
                   <MetricTile
                     label="Device"
                     value={
-                      liveRow?.status?.device_code
-                        || controlRow?.status?.device_code
-                        || '—'
+                      (controllerLive?.onChannels || []).length
+                        ? controllerLive.onChannels.join(', ')
+                        : (liveRow?.status?.device_code
+                          || controlRow?.status?.device_code
+                          || '—')
                     }
                   />
                 </Grid>

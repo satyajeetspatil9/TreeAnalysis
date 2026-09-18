@@ -1,5 +1,5 @@
 import { formatNumber } from './formatters';
-import { fertigationJobNotesKey, kolkataDateKey, parseFertigationJobIdFromNotes, eventTimesFromJob, attachJobTimesToEvents } from './fertilizerEventMaintenance';
+import { fertigationJobNotesKey, jobMonitoringDurationMinutes, kolkataDateKey, parseFertigationJobIdFromNotes, eventTimesFromJob, attachJobTimesToEvents } from './fertilizerEventMaintenance';
 
 export function isWaterMonitoringJob(job) {
   if (!job) return false;
@@ -14,6 +14,22 @@ export function calcIrrigationWaterLiters(flowRateLph, durationMinutes) {
   const minutes = Number(durationMinutes);
   if (!flow || !minutes) return null;
   return (flow * minutes) / 60;
+}
+
+/** Live water used: meter/job liters if > 0, else zone flow × elapsed. */
+export function resolveLiveWaterUsedLiters({
+  totalDischargeLiters,
+  jobLitersDelivered,
+  flowRateLph,
+  elapsedMinutes,
+} = {}) {
+  const meter = Number(totalDischargeLiters);
+  if (Number.isFinite(meter) && meter > 0) return { liters: meter, estimated: false };
+  const delivered = Number(jobLitersDelivered);
+  if (Number.isFinite(delivered) && delivered > 0) return { liters: delivered, estimated: false };
+  const estimated = calcIrrigationWaterLiters(flowRateLph, elapsedMinutes);
+  if (estimated != null && estimated > 0) return { liters: estimated, estimated: true };
+  return { liters: null, estimated: false };
 }
 
 export function formatWaterLiters(liters) {
@@ -235,6 +251,57 @@ function missingTimeColumns(error) {
   return /started_at|ended_at/.test(error?.message || '');
 }
 
+export async function recordWaterMonitoringEventFromJob(supabase, job, { flowRateLph } = {}) {
+  if (!job?.zone_id || !isWaterMonitoringJob(job)) return { created: false, error: null };
+  const notes = fertigationJobNotesKey(job);
+  const { data: existing } = await supabase
+    .from('irrigation_events')
+    .select('id')
+    .eq('notes', notes)
+    .maybeSingle();
+  if (existing?.id) return { created: false, error: null };
+
+  let flow = flowRateLph != null ? Number(flowRateLph) : null;
+  if (!(flow > 0) && job.zone_id) {
+    const { data: zone } = await supabase
+      .from('irrigation_zones')
+      .select('flow_rate_lph')
+      .eq('id', job.zone_id)
+      .maybeSingle();
+    flow = zone?.flow_rate_lph != null ? Number(zone.flow_rate_lph) : null;
+  }
+
+  const duration = jobMonitoringDurationMinutes(job);
+  const delivered = Number(job.liters_delivered) || 0;
+  const estimated = calcIrrigationWaterLiters(flow, duration);
+  const liters = delivered > 0 ? delivered : estimated;
+  const eventDate = kolkataDateKey(job.completed_at || job.started_at || job.updated_at);
+  if (!eventDate) return { created: false, error: null };
+
+  const times = eventTimesFromJob(job, job.updated_at);
+  const payload = {
+    zone_id: job.zone_id,
+    event_date: eventDate,
+    duration_minutes: Math.max(1, Math.round(duration || 1)),
+    water_liters: liters > 0 ? liters : null,
+    flow_rate_lph: flow > 0 ? flow : null,
+    notes,
+    started_at: times.started_at,
+    ended_at: times.ended_at,
+  };
+  let { error } = await supabase.from('irrigation_events').insert(payload);
+  if (error && /notes/.test(error.message || '')) {
+    delete payload.notes;
+    ({ error } = await supabase.from('irrigation_events').insert(payload));
+  }
+  if (error && missingTimeColumns(error)) {
+    delete payload.started_at;
+    delete payload.ended_at;
+    ({ error } = await supabase.from('irrigation_events').insert(payload));
+  }
+  return { created: !error, error: error || null };
+}
+
 /** Write missing irrigation_events for completed water jobs so Monitoring can list them. */
 export async function syncCompletedIrrigationJobs(supabase, { farmId, zoneIds }) {
   let events = await loadFarmIrrigationEvents(supabase, zoneIds);
@@ -321,32 +388,12 @@ export async function syncCompletedIrrigationJobs(supabase, { farmId, zoneIds })
   for (const job of waterJobs) {
     const notes = fertigationJobNotesKey(job);
     if (notedKeys.has(notes) || notedJobIds.has(Number(job.id))) continue;
-    const duration = Number(job.duration_elapsed_minutes) || Number(job.on_duration_minutes) || 0;
-    const liters = Number(job.liters_delivered) || 0;
-    const eventDate = kolkataDateKey(job.completed_at || job.started_at || job.updated_at);
-    if (!eventDate || !job.zone_id) continue;
-
-    const times = eventTimesFromJob(job, job.updated_at);
-    const payload = {
-      zone_id: job.zone_id,
-      event_date: eventDate,
-      duration_minutes: Math.max(1, Math.round(duration || 1)),
-      water_liters: liters > 0 ? liters : null,
-      notes,
-      started_at: times.started_at,
-      ended_at: times.ended_at,
-    };
-    let { error: insertError } = await supabase.from('irrigation_events').insert(payload);
-    if (insertError && /notes/.test(insertError.message || '')) {
-      delete payload.notes;
-      ({ error: insertError } = await supabase.from('irrigation_events').insert(payload));
+    const result = await recordWaterMonitoringEventFromJob(supabase, job);
+    if (result.created) {
+      created += 1;
+      notedKeys.add(notes);
+      notedJobIds.add(Number(job.id));
     }
-    if (insertError && missingTimeColumns(insertError)) {
-      delete payload.started_at;
-      delete payload.ended_at;
-      ({ error: insertError } = await supabase.from('irrigation_events').insert(payload));
-    }
-    if (!insertError) created += 1;
   }
 
   if (created) {

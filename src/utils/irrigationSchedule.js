@@ -1,5 +1,7 @@
 import { supabase } from '../supabaseClient';
 import { sendIrrigationCommandPayload } from './irrigationStatus';
+import { isWaterMonitoringJob, recordWaterMonitoringEventFromJob } from './irrigation';
+import { recordFertigationMonitoringEventFromJob } from './fertilizerEventMaintenance';
 
 export const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -989,6 +991,38 @@ export async function applySavedProgramToRunningJob(farmId, programId) {
   return { applied: true, error: null, job: updatedJob };
 }
 
+async function writeCompletedJobMonitoring(job) {
+  if (!job) return;
+  if (isWaterMonitoringJob(job)) {
+    await recordWaterMonitoringEventFromJob(supabase, job);
+    return;
+  }
+  await recordFertigationMonitoringEventFromJob(supabase, job);
+}
+
+/** Finish a running Start now / program job and log it on Irrigation or Fertigation monitoring. */
+export async function completeRunningIrrigationJob(job) {
+  if (!job?.id || job.status !== 'running') return { error: null };
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const elapsed = jobElapsedMinutes(job, now);
+  const { error } = await supabase.from('irrigation_jobs').update({
+    status: 'completed',
+    completed_at: nowIso,
+    duration_elapsed_minutes: Number(elapsed.toFixed(2)),
+    liters_baseline: null,
+    updated_at: nowIso,
+  }).eq('id', job.id);
+  if (error) return { error };
+  await writeCompletedJobMonitoring({
+    ...job,
+    status: 'completed',
+    completed_at: nowIso,
+    duration_elapsed_minutes: elapsed,
+  });
+  return { error: null };
+}
+
 /** Finish a Start now / program job whose minutes or liters are already done. */
 export async function completeOverdueIrrigationJobs(farmId, jobs = []) {
   if (!farmId) return { completedIds: [] };
@@ -1039,6 +1073,12 @@ export async function completeOverdueIrrigationJobs(farmId, jobs = []) {
       updated_at: nowIso,
     }).eq('id', job.id);
     completedIds.push(job.id);
+    await writeCompletedJobMonitoring({
+      ...job,
+      status: 'completed',
+      completed_at: nowIso,
+      duration_elapsed_minutes: elapsed,
+    });
   }
 
   return { completedIds };

@@ -21,6 +21,20 @@ export function fertigationJobNotesKey(job) {
   return `irrigation_job:${job.id}:seq:${job.current_step_seq ?? 0}`;
 }
 
+/** Minutes a finished job actually ran (elapsed, listed duration, or start/end clock). */
+export function jobMonitoringDurationMinutes(job, now = new Date()) {
+  const elapsed = Number(job?.duration_elapsed_minutes);
+  if (Number.isFinite(elapsed) && elapsed > 0) return elapsed;
+  const listed = Number(job?.on_duration_minutes);
+  if (Number.isFinite(listed) && listed > 0) return listed;
+  const start = job?.started_at ? new Date(job.started_at).getTime() : NaN;
+  const end = job?.completed_at ? new Date(job.completed_at).getTime() : now.getTime();
+  if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
+    return (end - start) / 60000;
+  }
+  return 1;
+}
+
 export function parseFertigationJobIdFromNotes(notes) {
   const match = String(notes || '').match(/^irrigation_job:(\d+)/);
   return match ? Number(match[1]) : null;
@@ -263,6 +277,78 @@ function missingTimeColumns(error) {
   return /started_at|ended_at/.test(error?.message || '');
 }
 
+export async function recordFertigationMonitoringEventFromJob(supabase, job, { flowRateLph } = {}) {
+  if (!job?.zone_id) return { created: false, error: null, eventId: null };
+  if (job.job_type !== 'fertigation' && job.irrigation_programs?.program_type !== 'fertigation') {
+    return { created: false, error: null, eventId: null };
+  }
+
+  const notes = fertigationJobNotesKey(job);
+  const { data: existing } = await supabase
+    .from('fertigation_events')
+    .select('id')
+    .eq('notes', notes)
+    .maybeSingle();
+  if (existing?.id) {
+    return { created: false, error: null, eventId: Number(existing.id) };
+  }
+
+  let flow = flowRateLph != null ? Number(flowRateLph) : null;
+  if (!(flow > 0) && job.zone_id) {
+    const { data: zone } = await supabase
+      .from('irrigation_zones')
+      .select('flow_rate_lph')
+      .eq('id', job.zone_id)
+      .maybeSingle();
+    flow = zone?.flow_rate_lph != null ? Number(zone.flow_rate_lph) : null;
+  }
+
+  const duration = jobMonitoringDurationMinutes(job);
+  const delivered = Number(job.liters_delivered) || 0;
+  const estimated = flow > 0 && duration > 0 ? (flow * duration) / 60 : null;
+  const liters = delivered > 0 ? delivered : estimated;
+  const eventDate = kolkataDateKey(job.completed_at || job.started_at || job.updated_at);
+  if (!eventDate) return { created: false, error: null, eventId: null };
+
+  const times = eventTimesFromJob(job, job.updated_at);
+  const payload = {
+    zone_id: job.zone_id,
+    event_date: eventDate,
+    duration_minutes: Math.max(1, Math.round(duration || 1)),
+    water_liters: liters > 0 ? liters : null,
+    notes,
+    started_at: times.started_at,
+    ended_at: times.ended_at,
+  };
+  let { data: inserted, error } = await supabase
+    .from('fertigation_events')
+    .insert(payload)
+    .select('id')
+    .single();
+  if (error && /notes/.test(error.message || '')) {
+    delete payload.notes;
+    ({ data: inserted, error } = await supabase.from('fertigation_events').insert(payload).select('id').single());
+  }
+  if (error && missingTimeColumns(error)) {
+    delete payload.started_at;
+    delete payload.ended_at;
+    ({ data: inserted, error } = await supabase.from('fertigation_events').insert(payload).select('id').single());
+  }
+  if (error) return { created: false, error, eventId: null };
+
+  const eventId = inserted?.id ? Number(inserted.id) : null;
+  if (eventId) {
+    await copyProgramProductsOntoEvent(supabase, {
+      eventId,
+      programId: job.program_id,
+      jobId: job.id,
+      existingEvents: [],
+      durationMinutes: payload.duration_minutes,
+    });
+  }
+  return { created: true, error: null, eventId };
+}
+
 /** Write missing fertigation_events for completed fertigation jobs so Monitoring can list them. */
 export async function syncCompletedFertigationJobs(supabase, { farmId, zoneIds }) {
   let events = await loadFarmFertigationEvents(supabase, zoneIds);
@@ -303,56 +389,11 @@ export async function syncCompletedFertigationJobs(supabase, { farmId, zoneIds }
   for (const job of fertigationJobs) {
     const notes = fertigationJobNotesKey(job);
     if (notedKeys.has(notes)) continue;
-    const duration = Number(job.duration_elapsed_minutes) || Number(job.on_duration_minutes) || 0;
-    const liters = Number(job.liters_delivered) || 0;
-    const eventDate = kolkataDateKey(job.completed_at || job.started_at || job.updated_at);
-    if (!eventDate || !job.zone_id) continue;
-
-    const times = eventTimesFromJob(job, job.updated_at);
-    const payload = {
-      zone_id: job.zone_id,
-      event_date: eventDate,
-      duration_minutes: Math.max(1, Math.round(duration || 1)),
-      water_liters: liters > 0 ? liters : null,
-      notes,
-      started_at: times.started_at,
-      ended_at: times.ended_at,
-    };
-    let { data: inserted, error: insertError } = await supabase
-      .from('fertigation_events')
-      .insert(payload)
-      .select('id')
-      .single();
-    if (insertError && /notes/.test(insertError.message || '')) {
-      delete payload.notes;
-      ({ data: inserted, error: insertError } = await supabase
-        .from('fertigation_events')
-        .insert(payload)
-        .select('id')
-        .single());
-    }
-    if (insertError && missingTimeColumns(insertError)) {
-      delete payload.started_at;
-      delete payload.ended_at;
-      ({ data: inserted, error: insertError } = await supabase
-        .from('fertigation_events')
-        .insert(payload)
-        .select('id')
-        .single());
-    }
-    if (!insertError) {
+    const result = await recordFertigationMonitoringEventFromJob(supabase, job);
+    if (result.error) productError = result.error;
+    if (result.created) {
       created += 1;
       notedKeys.add(notes);
-      if (inserted?.id) {
-        const copied = await copyProgramProductsOntoEvent(supabase, {
-          eventId: inserted.id,
-          programId: job.program_id,
-          jobId: job.id,
-          existingEvents: events,
-          durationMinutes: payload.duration_minutes,
-        });
-        if (copied.error) productError = copied.error;
-      }
     }
   }
 

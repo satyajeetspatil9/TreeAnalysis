@@ -1298,7 +1298,12 @@ async function recordWaterIrrigationEvent(
   const flow = zone?.flow_rate_lph != null ? Number(zone.flow_rate_lph) : null;
   let duration = elapsed;
   if (!(duration > 0) && liters > 0 && flow && flow > 0) duration = (liters / flow) * 60;
-  if (!(duration > 0) && !(liters > 0)) return;
+  if (!(duration > 0) && job.started_at) {
+    const start = new Date(job.started_at).getTime();
+    const end = new Date((job.completed_at as string | undefined) || now.toISOString()).getTime();
+    if (Number.isFinite(start) && end > start) duration = (end - start) / 60000;
+  }
+  if (!(duration > 0)) duration = 1;
 
   const waterLiters = liters > 0
     ? liters

@@ -224,7 +224,7 @@ export function sendIrrigationCommandPayload(farmId, row, command) {
     start_indicator: isStart,
     stop_indicator: !isStart,
     current_discharge_lpm: isStart ? existing.current_discharge_lpm ?? null : existing.current_discharge_lpm ?? null,
-    total_discharge_liters: isStart ? existing.total_discharge_liters ?? 0 : existing.total_discharge_liters ?? null,
+    total_discharge_liters: existing.total_discharge_liters ?? null,
     device_code: existing.device_code ?? null,
     reported_at: now,
     updated_at: now,
