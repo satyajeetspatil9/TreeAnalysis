@@ -1,5 +1,5 @@
 export function programMatchesController(program, devices, live) {
-  if (!live?.onChannels?.length || !program) return false;
+  if (!controllerConfirmsStarted(live) || !live?.onChannels?.length || !program) return false;
   const on = new Set(live.onChannels.map((code) => String(code).toUpperCase()));
   const codes = new Set();
   const byId = new Map((devices || []).map((device) => [Number(device.id), device]));
@@ -26,6 +26,16 @@ export function controllerHeadline(live) {
   const raw = String(live?.heroState || '').trim();
   if (!raw) return live?.watering ? 'Watering now' : 'No watering';
   return raw.charAt(0) + raw.slice(1).toLowerCase();
+}
+
+/** Turso live row is a current start: Wi-Fi up, snapshot fresh, and watering/pins/started. */
+export function controllerConfirmsStarted(live) {
+  if (!live || live.stale || live.wifiOnline === false) return false;
+  const hero = String(live.heroState || '').toUpperCase();
+  const pinsOn = Array.isArray(live.onChannels) && live.onChannels.length > 0;
+  const watering = Boolean(live.watering) || hero.includes('WATERING') || hero.includes('ENDING') || pinsOn;
+  if (!watering) return false;
+  return Boolean(live.startedAt || pinsOn || hero.includes('WATERING') || hero.includes('ENDING'));
 }
 
 function parseTime(value) {

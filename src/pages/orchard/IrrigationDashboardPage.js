@@ -59,7 +59,7 @@ import {
   zoneTelemetryAt,
 } from '../../utils/irrigationStatus';
 import { isWaterMonitoringJob } from '../../utils/irrigation';
-import { compareProgramAndControllerTimes, controllerHeadline, fetchControllerLiveState } from '../../utils/controllerLiveState';
+import { compareProgramAndControllerTimes, controllerConfirmsStarted, controllerHeadline, fetchControllerLiveState } from '../../utils/controllerLiveState';
 import {
   OPEN_JOB_STATUSES,
   buildCommandQueueSampleJson,
@@ -410,13 +410,14 @@ function IrrigationDashboardPage() {
     () => (programJobs || []).find((job) => job.status === 'running') || null,
     [programJobs],
   );
+  const hardwareLive = controllerConfirmsStarted(controllerLive);
   const activeZones = useMemo(
     () => rows.filter((row) => isZoneActuallyWatering(row, {
       runningJob,
       recentCompleted: recentCompletedJobs,
-      controllerWatering: Boolean(controllerLive?.watering) && !controllerLive?.stale,
+      controllerWatering: hardwareLive,
     })),
-    [rows, runningJob, recentCompletedJobs, controllerLive],
+    [rows, runningJob, recentCompletedJobs, hardwareLive],
   );
   const activeZone = activeZones[0] || null;
   const runningJobZone = useMemo(
@@ -426,7 +427,6 @@ function IrrigationDashboardPage() {
     [rows, runningJob],
   );
   const liveZone = runningJobZone || activeZone;
-  const hardwareLive = Boolean(controllerLive?.watering) && !controllerLive?.stale;
   const liveTruth = useMemo(
     () => ({
       runningJob,
@@ -439,17 +439,19 @@ function IrrigationDashboardPage() {
     () => countIrrigationStatusRows(rows, liveTruth),
     [rows, liveTruth],
   );
-  const awaitingController = Boolean(runningJob) && !hardwareLive && !activeZone;
-  const isLive = Boolean(hardwareLive || runningJob || activeZone);
+  const pendingStart = Boolean(
+    runningJob
+    || rows.some((row) => row.status?.pending_command === 'start'),
+  );
+  const awaitingController = pendingStart && !hardwareLive;
+  const isLive = Boolean(hardwareLive || awaitingController);
   const isFertigating = Boolean(runningJob && !isWaterMonitoringJob(runningJob));
   const liveStartedAt = activeZone?.status?.started_at || runningJob?.started_at || null;
   const liveHeadline = hardwareLive
     ? controllerHeadline(controllerLive)
-    : !isLive
-      ? 'No watering'
-      : awaitingController
-        ? 'Job running — awaiting controller'
-        : (isFertigating ? 'Fertigating now' : 'Watering now');
+    : awaitingController
+      ? (runningJob ? 'Job running — awaiting controller' : 'Awaiting controller')
+      : 'No watering';
   const liveZoneCode = controllerLive?.heroZone
     || liveZone?.zone?.zone_code
     || null;
@@ -482,10 +484,10 @@ function IrrigationDashboardPage() {
     const preferred = rows.find((row) => isZoneActuallyWatering(row, {
       runningJob,
       recentCompleted: recentCompletedJobs,
-      controllerWatering: Boolean(controllerLive?.watering) && !controllerLive?.stale,
-    })) || rows[0];
+      controllerWatering: hardwareLive,
+    })) || runningJobZone || rows[0];
     setControlZoneId(String(preferred.zone.id));
-  }, [rows, controlZoneId, runningJob, recentCompletedJobs, controllerLive]);
+  }, [rows, controlZoneId, runningJob, recentCompletedJobs, hardwareLive, runningJobZone]);
 
   const sendCommand = async (row, command) => {
     if (!farm?.id || !row) return { error: 'Select a zone first.' };
@@ -625,12 +627,22 @@ function IrrigationDashboardPage() {
                 p: { xs: 2, sm: 3 },
                 mb: 3,
                 border: '2px solid',
-                borderColor: isLive ? theme.palette.info.main : alpha(theme.palette.success.main, 0.5),
+                borderColor: awaitingController
+                  ? theme.palette.warning.main
+                  : isLive
+                    ? theme.palette.info.main
+                    : alpha(theme.palette.success.main, 0.5),
                 borderLeftWidth: 10,
-                borderLeftColor: isLive ? theme.palette.info.dark : theme.palette.success.main,
-                bgcolor: isLive
-                  ? alpha(theme.palette.info.main, 0.12)
-                  : alpha(theme.palette.success.main, 0.08),
+                borderLeftColor: awaitingController
+                  ? theme.palette.warning.dark
+                  : isLive
+                    ? theme.palette.info.dark
+                    : theme.palette.success.main,
+                bgcolor: awaitingController
+                  ? alpha(theme.palette.warning.main, 0.12)
+                  : isLive
+                    ? alpha(theme.palette.info.main, 0.12)
+                    : alpha(theme.palette.success.main, 0.08),
               })}
               variant="outlined"
             >
@@ -642,7 +654,7 @@ function IrrigationDashboardPage() {
                   {isLive ? (
                     <>
                       <Typography variant="h4" fontWeight={800} sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-                        <WaterDropIcon color="info" fontSize="large" />
+                        <WaterDropIcon color={awaitingController ? 'warning' : 'info'} fontSize="large" />
                         {liveHeadline}
                       </Typography>
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1, flexWrap: 'wrap' }}>
@@ -885,7 +897,7 @@ function IrrigationDashboardPage() {
                   offLabel="Pump stop off"
                   color="error"
                 />
-                {isLive && (
+                {hardwareLive && (
                   <Chip
                     color="info"
                     variant="outlined"
@@ -894,7 +906,14 @@ function IrrigationDashboardPage() {
                       : `Status: ${isFertigating ? 'fertigating' : 'watering'}`}
                   />
                 )}
-                {!isLive && (
+                {awaitingController && (
+                  <Chip
+                    color="warning"
+                    variant="outlined"
+                    label={liveZoneCode ? `Status: awaiting ${liveZoneCode}` : 'Status: awaiting controller'}
+                  />
+                )}
+                {!hardwareLive && !awaitingController && (
                   <Chip color="success" variant="outlined" label="Status: idle" />
                 )}
               </Box>
