@@ -6,7 +6,7 @@ import { useFarm } from '../../hooks/useFarm';
 import { formatDate, formatNumber, formatNumberSmart } from '../../utils/formatters';
 import { formatWaterLiters } from '../../utils/irrigation';
 import { evaluateSoilStandard, getSoilStandard, soilStatusBadgeSx, soilStatusColor } from '../../utils/soil';
-import { loadTreeWeekBriefing } from '../../utils/orchardBriefing';
+import { loadTreeSprayAdvice, loadTreeWeekBriefing } from '../../utils/orchardBriefing';
 import HealthIndicator from '../common/HealthIndicator';
 
 function SummaryCard({ label, value, status, to }) {
@@ -50,11 +50,18 @@ function OverviewTab({ tree, zoneCode }) {
       setError(null);
       try {
         const snap = await loadTreeWeekBriefing(supabase, { farmId: farm?.id, tree });
-        if (!cancelled) setBriefing(snap);
+        if (cancelled) return;
+        setBriefing(snap);
+        setLoading(false);
+        const sprayAdvice = await loadTreeSprayAdvice(supabase, { farmId: farm?.id, tree });
+        if (!cancelled && sprayAdvice) {
+          setBriefing((current) => (current ? { ...current, sprayAdvice } : current));
+        }
       } catch (err) {
-        if (!cancelled) setError(err.message);
-      } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setError(err.message);
+          setLoading(false);
+        }
       }
     }
     load();

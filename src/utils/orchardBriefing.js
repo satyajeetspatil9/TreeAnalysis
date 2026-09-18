@@ -151,16 +151,30 @@ function summarizeClimate(weatherRows, window) {
   };
 }
 
-async function loadSprayAdvice(supabase, farm, trees) {
+async function loadSprayAdvice(supabase, farm, trees, climateOptions = {}) {
   if (!farm?.id) return null;
   try {
-    const snapshot = await loadFarmClimateSnapshot(supabase, farm, trees || [], 'Mango');
+    const snapshot = await loadFarmClimateSnapshot(
+      supabase,
+      farm,
+      trees || [],
+      'Mango',
+      climateOptions,
+    );
     const stage = resolveStage('Mango', snapshot.gdd);
     const warnings = analyzeRisks(snapshot.sensors, 'Mango', stage, snapshot.isOverMoisture3Days);
     return warnings.find((w) => w.type === 'SPRAY' || w.type === 'SPRAY_WINDOW') || null;
   } catch {
     return null;
   }
+}
+
+export async function loadTreeSprayAdvice(supabase, { farmId, tree }) {
+  if (!farmId) return null;
+  return loadSprayAdvice(supabase, { id: farmId }, tree ? [tree] : [], {
+    includeForecast: false,
+    includeArchive: false,
+  });
 }
 
 async function loadZoneEvents(supabase, zoneIds, window) {
@@ -303,6 +317,7 @@ export async function loadTreeWeekBriefing(supabase, { farmId, tree }) {
     { data: weather },
     { data: growthRows },
     { data: diseaseRows },
+    { data: zoneLinks },
   ] = await Promise.all([
     supabase
       .from('soil_observations')
@@ -338,6 +353,14 @@ export async function loadTreeWeekBriefing(supabase, { farmId, tree }) {
       .eq('tree_id', tree.id)
       .order('observed_at', { ascending: false })
       .limit(10),
+    farmId && zoneId
+      ? supabase
+        .from('tree_irrigation_zones')
+        .select('tree_id')
+        .eq('zone_id', zoneId)
+        .is('end_date', null)
+        .limit(80)
+      : Promise.resolve({ data: [] }),
   ]);
 
   const satellite = satelliteFromCacheRow(satelliteCache.cache || {
@@ -362,36 +385,28 @@ export async function loadTreeWeekBriefing(supabase, { farmId, tree }) {
   });
 
   let neighborLowShare = null;
-  if (farmId && zoneId) {
-    const { data: links } = await supabase
-      .from('tree_irrigation_zones')
-      .select('tree_id')
-      .eq('zone_id', zoneId)
-      .is('end_date', null)
-      .limit(80);
-    const neighborIds = (links || []).map((row) => row.tree_id).filter((id) => Number(id) !== Number(tree.id));
-    if (neighborIds.length) {
-      const { data: neighborSoil } = await supabase
-        .from('soil_observations')
-        .select('tree_id, moisture_percent, observed_at')
-        .in('tree_id', neighborIds)
-        .order('observed_at', { ascending: false })
-        .limit(200);
-      const latest = getLatestObservationByTree(neighborSoil);
-      const statuses = Object.values(latest)
-        .map((obs) => moistureBand(obs.moisture_percent).status)
-        .filter((status) => status && status !== 'unknown');
-      if (statuses.length) {
-        neighborLowShare = statuses.filter((status) => status === 'low').length / statuses.length;
-      }
+  const neighborIds = (zoneLinks || [])
+    .map((row) => row.tree_id)
+    .filter((id) => Number(id) !== Number(tree.id));
+  if (neighborIds.length) {
+    const { data: neighborSoil } = await supabase
+      .from('soil_observations')
+      .select('tree_id, moisture_percent, observed_at')
+      .in('tree_id', neighborIds)
+      .order('observed_at', { ascending: false })
+      .limit(200);
+    const latest = getLatestObservationByTree(neighborSoil);
+    const statuses = Object.values(latest)
+      .map((obs) => moistureBand(obs.moisture_percent).status)
+      .filter((status) => status && status !== 'unknown');
+    if (statuses.length) {
+      neighborLowShare = statuses.filter((status) => status === 'low').length / statuses.length;
     }
   }
 
   snap.verdicts = buildTreeVerdicts(snap, { neighborLowShare });
   snap.satelliteError = satelliteCache.error || satellite.satelliteError || null;
-  snap.sprayAdvice = farmId
-    ? await loadSprayAdvice(supabase, { id: farmId }, [tree])
-    : null;
+  snap.sprayAdvice = null;
   return snap;
 }
 

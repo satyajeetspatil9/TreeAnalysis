@@ -122,7 +122,9 @@ function highMoistureThreeDays(soilRows) {
   return days.slice(0, 3).length >= 3 && days.slice(0, 3).every((m) => m > 75);
 }
 
-export async function loadFarmClimateSnapshot(supabase, farm, trees = [], crop = 'Mango') {
+export async function loadFarmClimateSnapshot(supabase, farm, trees = [], crop = 'Mango', options = {}) {
+  const includeForecast = options.includeForecast !== false;
+  const includeArchive = options.includeArchive !== false;
   const gps = farmGpsFromSources(farm, trees);
   const storedStart = farm?.gdd_season_start;
   const seasonStart = storedStart && !String(storedStart).endsWith('-01-01')
@@ -184,14 +186,20 @@ export async function loadFarmClimateSnapshot(supabase, farm, trees = [], crop =
     try {
       const [currentPayload, forecastPayload, archivePayload] = await Promise.all([
         fetchOpenMeteoCurrent(gps.latitude, gps.longitude),
-        fetchOpenMeteoForecast(gps.latitude, gps.longitude),
-        fetchOpenMeteoArchive(gps.latitude, gps.longitude, seasonStart, today),
+        includeForecast
+          ? fetchOpenMeteoForecast(gps.latitude, gps.longitude)
+          : Promise.resolve(null),
+        includeArchive
+          ? fetchOpenMeteoArchive(gps.latitude, gps.longitude, seasonStart, today)
+          : Promise.resolve(null),
       ]);
       meteoCurrent = currentPayload?.current || null;
-      const split = splitPastAndNextDays(forecastPayload?.daily);
-      pastDays = split.pastDays;
-      forecast = split.forecast.length ? split.forecast : forecastDaysFromDaily(forecastPayload?.daily);
-      archiveGdd = gddFromDailySeries(archivePayload?.daily);
+      if (forecastPayload?.daily) {
+        const split = splitPastAndNextDays(forecastPayload.daily);
+        pastDays = split.pastDays;
+        forecast = split.forecast.length ? split.forecast : forecastDaysFromDaily(forecastPayload.daily);
+      }
+      archiveGdd = includeArchive ? gddFromDailySeries(archivePayload?.daily) : 0;
     } catch (err) {
       meteoError = err.message;
     }
