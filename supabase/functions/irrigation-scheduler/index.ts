@@ -328,6 +328,82 @@ function startUntilExpired(row: QueueRow | undefined, now: Date) {
   return now.getTime() >= startMs + minutes * 60000 + 15000;
 }
 
+function tursoPipelineUrl(raw: string) {
+  let url = String(raw || '').trim();
+  if (!url) return '';
+  if (url.startsWith('libsql://')) url = `https://${url.slice(9)}`;
+  else if (!url.startsWith('http://') && !url.startsWith('https://')) url = `https://${url}`;
+  if (url.endsWith('/v2/pipeline')) return url;
+  if (url.endsWith('/')) return `${url}v2/pipeline`;
+  return `${url}/v2/pipeline`;
+}
+
+function tursoCellValue(cell: unknown) {
+  if (cell == null) return null;
+  if (typeof cell !== 'object') return cell;
+  const item = cell as { type?: string; value?: unknown };
+  if (item.type === 'null') return null;
+  if (item.type === 'integer' || item.type === 'float') {
+    const n = Number(item.value);
+    return Number.isFinite(n) ? n : null;
+  }
+  return item.value ?? null;
+}
+
+function pinIndexFromCode(code: string) {
+  const text = String(code || '').trim().toUpperCase();
+  if (!/^Y[0-7]$/.test(text)) return null;
+  return Number(text.slice(1));
+}
+
+/** Turso y0_on..y7_on for this controller, or null if unset/unreachable. */
+async function fetchTursoPinOn(): Promise<Record<string, boolean> | null> {
+  const tursoUrl = Deno.env.get('TURSO_DATABASE_URL') || '';
+  const tursoToken = Deno.env.get('TURSO_AUTH_TOKEN') || '';
+  if (!tursoUrl || !tursoToken || tursoUrl.includes('YOUR_ORG') || tursoToken.includes('YOUR_TURSO')) {
+    return null;
+  }
+  const url = tursoPipelineUrl(tursoUrl);
+  if (!url) return null;
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${tursoToken}`,
+      },
+      body: JSON.stringify({
+        requests: [
+          { type: 'execute', stmt: { sql: 'SELECT * FROM lilygo_live_state WHERE id = 1 LIMIT 1' } },
+          { type: 'close' },
+        ],
+      }),
+    });
+    const payload = await response.json() as Record<string, unknown>;
+    if (!response.ok) return null;
+    const results = (payload.results || []) as Array<Record<string, unknown>>;
+    const exec = results.find((item) => (
+      item.type === 'ok'
+      && (item.response as Record<string, unknown> | undefined)?.type === 'execute'
+    ));
+    const result = (exec?.response as Record<string, unknown> | undefined)?.result as Record<string, unknown> | undefined;
+    const cols = (result?.cols || []) as Array<{ name?: string }>;
+    const row = ((result?.rows || []) as unknown[][])[0];
+    if (!cols.length || !row) return null;
+    const mapped: Record<string, unknown> = {};
+    cols.forEach((col, index) => {
+      if (col?.name) mapped[col.name] = tursoCellValue(row[index]);
+    });
+    const on: Record<string, boolean> = {};
+    for (let i = 0; i < 8; i += 1) {
+      on[`Y${i}`] = Number(mapped[`y${i}_on`]) === 1;
+    }
+    return on;
+  } catch {
+    return null;
+  }
+}
+
 function jobScheduledMs(job: Job) {
   const raw = job.scheduled_for || job.started_at;
   if (!raw) return 0;
@@ -430,7 +506,12 @@ function programEditedAfterJob(program: Job, job: Job) {
 // Main per-farm pass
 // ---------------------------------------------------------------------------
 
-async function processFarm(supabase: Supabase, farmId: number, now: Date) {
+async function processFarm(
+  supabase: Supabase,
+  farmId: number,
+  now: Date,
+  tursoPinOn: Record<string, boolean> | null = null,
+) {
   const local = partsInTz(now, FARM_TZ);
   const nowMin = timeToMinutes(local.timeStr);
   const dayStart = `${local.dateKey}T00:00:00+05:30`;
@@ -507,8 +588,8 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
     markClock();
   }
 
-  // A pin is believed on only if its last acked command was a start that
-  // survived the most recent power transition.
+  // Pin truth: Turso yN_on when available, else last acked START that has not
+  // expired from queue created_at.
   const lastAckedByCode = new Map<string, QueueRow>();
   for (const row of (recentQueue || []) as QueueRow[]) {
     if (row.status !== 'acked') continue;
@@ -516,7 +597,7 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
       if (!lastAckedByCode.has(code)) lastAckedByCode.set(code, row);
     }
   }
-  const believedOn = (code: string) => {
+  const believedOnFromQueue = (code: string) => {
     const last = lastAckedByCode.get(code);
     if (!last || last.action !== 'start') return false;
     if (powerChangedAt && new Date(last.created_at) < powerChangedAt) return false;
@@ -524,11 +605,23 @@ async function processFarm(supabase: Supabase, farmId: number, now: Date) {
     return true;
   };
 
+  const believedOn = (code: string) => {
+    const idx = pinIndexFromCode(code);
+    if (tursoPinOn && idx != null) return tursoPinOn[`Y${idx}`] === true;
+    return believedOnFromQueue(code);
+  };
+
   const hardwareFinishedFor = (codes: string[]) => (
     codes.length > 0
     && codes.every((code) => {
       if (batch.hasPending(code, 'start')) return false;
       const last = lastAckedByCode.get(code);
+      const idx = pinIndexFromCode(code);
+      if (tursoPinOn && idx != null) {
+        if (tursoPinOn[`Y${idx}`] === true) return false;
+        if (!last) return false;
+        return last.action === 'start' || last.action === 'stop';
+      }
       if (!last) return false;
       if (last.action === 'stop') return true;
       return startUntilExpired(last, now);
@@ -1597,9 +1690,10 @@ Deno.serve(async (req) => {
   }
 
   const results = [];
+  const tursoPinOn = await fetchTursoPinOn();
   for (const farmId of farmIds) {
     try {
-      results.push(await processFarm(supabase, farmId, now));
+      results.push(await processFarm(supabase, farmId, now, tursoPinOn));
     } catch (err) {
       results.push({ farmId, error: String(err) });
     }

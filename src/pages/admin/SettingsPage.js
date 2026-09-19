@@ -721,8 +721,8 @@ function SettingsPage() {
           Run these in Supabase SQL Editor in order if a feature is missing. Web deploys do not apply SQL.
           After 061, redeploy irrigation-scheduler. After 063, redeploy ingest-irrigation-status
           and controller-live-state. Controller Y0–Y7 come from Turso
-          lilygo_live_state (TreeESP32Controller). Deploy controller-live-state and set
-          Edge secrets TURSO_DATABASE_URL and TURSO_AUTH_TOKEN. Now uses GET last-seen for
+          lilygo_live_state (TreeESP32Controller). Set TURSO_DATABASE_URL and TURSO_AUTH_TOKEN
+          on controller-live-state and irrigation-scheduler. Now uses GET last-seen for
           controller liveness, not a 15s Turso heartbeat.
         </Typography>
         <Typography variant="body2" component="div">
