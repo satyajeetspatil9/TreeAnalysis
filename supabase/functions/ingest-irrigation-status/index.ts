@@ -400,9 +400,21 @@ Deno.serve(async (req) => {
       return jsonResponse({ error: work.error.message }, 500);
     }
 
+    const now = new Date().toISOString();
+    const withPoll = await supabase
+      .from('farm_ingest_keys')
+      .update({ last_used_at: now, last_poll_at: now })
+      .eq('id', keyRow.id);
+    if (withPoll.error) {
+      await supabase
+        .from('farm_ingest_keys')
+        .update({ last_used_at: now })
+        .eq('id', keyRow.id);
+    }
+
     return jsonResponse({
       ok: true,
-      updated_at: new Date().toISOString(),
+      updated_at: now,
       power_present: work.power ? work.power.power_present !== false : true,
       power_reported_at: work.power?.reported_at ?? null,
       outage_started_at: work.power?.outage_started_at ?? null,

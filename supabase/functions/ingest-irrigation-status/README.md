@@ -1,6 +1,6 @@
 # ingest-irrigation-status
 
-POST live irrigation controller readings and mains power. GET pending commands.
+GET pending commands. Each GET stamps `farm_ingest_keys.last_poll_at` (and `last_used_at`) so Now can tell a live idle controller from a dead one without Turso heartbeats.
 
 The controller acts only on **device codes** (terminals `X0`–`X8` inputs, `Y0`–`Y8` outputs).
 `zone_code` is display only and must never be used to pick a pin.

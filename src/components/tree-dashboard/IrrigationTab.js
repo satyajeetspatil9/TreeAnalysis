@@ -120,7 +120,7 @@ function IrrigationTab({ tree, zoneCode }) {
         return;
       }
       const [live, jobResult] = await Promise.all([
-        fetchControllerLiveState(supabase),
+        fetchControllerLiveState(supabase, { farmId: farm?.id }),
         farm?.id
           ? supabase
             .from('irrigation_jobs')
@@ -133,7 +133,7 @@ function IrrigationTab({ tree, zoneCode }) {
           : Promise.resolve({ data: [] }),
       ]);
       if (cancelled) return;
-      setControllerLive(live);
+      setControllerLive(live?.live || null);
       const jobs = jobResult.data || [];
       const running = jobs.find((job) => job.status === 'running') || jobs.find((job) => OPEN_JOB_STATUSES.includes(job.status));
       setTimingJob(running || jobs[0] || null);

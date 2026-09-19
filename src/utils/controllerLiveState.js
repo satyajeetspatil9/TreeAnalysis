@@ -28,14 +28,34 @@ export function controllerHeadline(live) {
   return raw.charAt(0) + raw.slice(1).toLowerCase();
 }
 
-/** Turso live row is a current start: Wi-Fi up, snapshot fresh, and watering/pins/started. */
+/** Turso live row is a current start: snapshot is polling, and watering/pins/started. */
 export function controllerConfirmsStarted(live) {
-  if (!live || live.stale || live.wifiOnline === false) return false;
+  if (!live || live.stale) return false;
   const hero = String(live.heroState || '').toUpperCase();
   const pinsOn = Array.isArray(live.onChannels) && live.onChannels.length > 0;
   const watering = Boolean(live.watering) || hero.includes('WATERING') || hero.includes('ENDING') || pinsOn;
   if (!watering) return false;
   return Boolean(live.startedAt || pinsOn || hero.includes('WATERING') || hero.includes('ENDING'));
+}
+
+export function controllerMinutesLeft(live, now = new Date()) {
+  if (!live) return null;
+  const hero = String(live.heroState || '').toUpperCase();
+  const pinsOn = Array.isArray(live.onChannels) && live.onChannels.length > 0;
+  const watering = Boolean(live.watering) || hero.includes('WATERING') || hero.includes('ENDING') || pinsOn;
+  if (!watering) return null;
+  const duration = Number(live.durationMin);
+  if (Number.isFinite(duration) && duration > 0) {
+    const start = parseIstClockOnDate(live.startedAt, live.updatedAtIst);
+    const epoch = Number(live.updatedEpoch);
+    const startMs = start?.getTime()
+      || (epoch > 1_600_000_000 ? epoch * 1000 : null);
+    if (startMs) {
+      return Math.max(0, duration - (now.getTime() - startMs) / 60000);
+    }
+  }
+  const stored = Number(live.minutesLeft);
+  return Number.isFinite(stored) ? stored : null;
 }
 
 function parseTime(value) {
@@ -124,8 +144,9 @@ export function compareProgramAndControllerTimes({
   const runMinutes = Number(startRow?.durationMin);
 
   if (liveWatering && !jobDone) {
-    controllerEnd = live?.minutesLeft != null
-      ? addMinutes(now, live.minutesLeft)
+    const minutesLeft = controllerMinutesLeft(live, now);
+    controllerEnd = minutesLeft != null
+      ? addMinutes(now, minutesLeft)
       : addMinutes(controllerStart, live?.durationMin || runMinutes);
     controllerEnded = false;
   } else {
@@ -159,7 +180,7 @@ export function compareProgramAndControllerTimes({
   };
 }
 
-export async function fetchControllerLiveState(supabaseClient) {
+export async function fetchControllerLiveState(supabaseClient, { farmId } = {}) {
   const base = process.env.REACT_APP_SUPABASE_URL;
   const anon = process.env.REACT_APP_SUPABASE_ANON_KEY;
   if (!base || !anon) {
@@ -167,8 +188,10 @@ export async function fetchControllerLiveState(supabaseClient) {
   }
   const { data: sessionData } = await supabaseClient.auth.getSession();
   const token = sessionData?.session?.access_token || anon;
+  const url = new URL(`${base.replace(/\/$/, '')}/functions/v1/controller-live-state`);
+  if (farmId) url.searchParams.set('farm_id', String(farmId));
   try {
-    const response = await fetch(`${base.replace(/\/$/, '')}/functions/v1/controller-live-state`, {
+    const response = await fetch(url.toString(), {
       headers: {
         Authorization: `Bearer ${token}`,
         apikey: anon,

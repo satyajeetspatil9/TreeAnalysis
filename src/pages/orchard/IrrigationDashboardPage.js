@@ -59,7 +59,7 @@ import {
   zoneTelemetryAt,
 } from '../../utils/irrigationStatus';
 import { isWaterMonitoringJob, resolveLiveWaterUsedLiters } from '../../utils/irrigation';
-import { compareProgramAndControllerTimes, controllerConfirmsStarted, controllerHeadline, fetchControllerLiveState } from '../../utils/controllerLiveState';
+import { compareProgramAndControllerTimes, controllerConfirmsStarted, controllerHeadline, controllerMinutesLeft, fetchControllerLiveState } from '../../utils/controllerLiveState';
 import {
   OPEN_JOB_STATUSES,
   buildCommandQueueSampleJson,
@@ -256,7 +256,7 @@ function IrrigationDashboardPage() {
         .eq('status', 'completed')
         .order('completed_at', { ascending: false })
         .limit(20),
-      fetchControllerLiveState(supabase),
+      fetchControllerLiveState(supabase, { farmId: farm.id }),
     ]);
     let jobRows = jobsResult.data;
     if (jobsResult.error) {
@@ -420,6 +420,7 @@ function IrrigationDashboardPage() {
     [programJobs],
   );
   const hardwareLive = controllerConfirmsStarted(controllerLive);
+  const controllerMinutes = controllerMinutesLeft(controllerLive, new Date(nowMs));
   const activeZones = useMemo(
     () => rows.filter((row) => isZoneActuallyWatering(row, {
       runningJob,
@@ -709,7 +710,7 @@ function IrrigationDashboardPage() {
                           <Chip
                             color="secondary"
                             variant="outlined"
-                            label={`Controller ${controllerLive.heroChannel}${controllerLive.minutesLeft != null ? ` · ${Number(controllerLive.minutesLeft).toFixed(0)} min left` : ''}`}
+                            label={`Controller ${controllerLive.heroChannel}${controllerMinutes != null ? ` · ${Number(controllerMinutes).toFixed(0)} min left` : ''}`}
                             sx={{ fontWeight: 700 }}
                           />
                         )}
@@ -774,13 +775,13 @@ function IrrigationDashboardPage() {
                   {controllerLive && (
                     <Chip
                       variant="outlined"
-                      color={controllerLive.stale ? 'warning' : (controllerLive.wifiOnline ? 'success' : 'default')}
+                      color={controllerLive.stale ? 'warning' : 'success'}
                       label={
                         controllerLive.stale
-                          ? 'Controller snapshot stale'
+                          ? 'Controller not polling'
                           : (controllerLive.wifiOnline
                             ? `Controller Wi-Fi ${controllerLive.wifiIp || 'on'}`
-                            : 'Controller offline')
+                            : 'Controller polling')
                       }
                     />
                   )}

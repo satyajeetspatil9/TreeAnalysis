@@ -1,3 +1,5 @@
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-api-key, apikey, content-type',
@@ -73,7 +75,42 @@ function historyFromRow(row: Record<string, unknown>) {
   };
 }
 
-function liveFromRow(row: Record<string, unknown> | null) {
+function remainingMinutes(
+  durationMin: unknown,
+  startedAt: unknown,
+  updatedAtIst: unknown,
+  updatedEpoch: number,
+  nowMs = Date.now(),
+) {
+  const duration = Number(durationMin);
+  if (!(duration > 0)) return null;
+  const clock = String(startedAt || '').trim();
+  const day = String(updatedAtIst || '').slice(0, 10);
+  let startMs: number | null = null;
+  if (/^\d{1,2}:\d{2}$/.test(clock) && /^\d{4}-\d{2}-\d{2}$/.test(day)) {
+    const [hh, mm] = clock.split(':').map(Number);
+    const date = new Date(`${day}T${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}:00+05:30`);
+    if (!Number.isNaN(date.getTime())) startMs = date.getTime();
+  }
+  if (startMs == null && updatedEpoch > 1_600_000_000) {
+    startMs = updatedEpoch * 1000;
+  }
+  if (startMs == null) return null;
+  return Math.max(0, duration - (nowMs - startMs) / 60000);
+}
+
+function isControllerStale(watering: boolean, lastPollAt: string | null, tursoAgeSec: number | null) {
+  if (lastPollAt) {
+    const pollAgeSec = (Date.now() - new Date(lastPollAt).getTime()) / 1000;
+    if (Number.isFinite(pollAgeSec)) {
+      return watering ? pollAgeSec > 45 : pollAgeSec > 180;
+    }
+  }
+  if (watering) return Number.isFinite(tursoAgeSec) && Number(tursoAgeSec) > 90;
+  return false;
+}
+
+function liveFromRow(row: Record<string, unknown> | null, lastPollAt: string | null = null) {
   if (!row) return null;
   const onChannels: string[] = [];
   for (let i = 0; i < 8; i += 1) {
@@ -85,17 +122,26 @@ function liveFromRow(row: Record<string, unknown> | null) {
   const ageSec = updatedEpoch > 1_600_000_000
     ? Math.max(0, Math.floor(Date.now() / 1000) - updatedEpoch)
     : Number(row.last_poll_age_sec);
+  const durationMin = row.hero_duration_min ?? null;
+  const startedAt = row.hero_started_at || null;
+  const computedLeft = watering
+    ? remainingMinutes(durationMin, startedAt, row.updated_at_ist, updatedEpoch)
+    : null;
+  const duration = Number(durationMin);
+  const progressPct = computedLeft != null && duration > 0
+    ? Math.max(0, Math.min(100, (1 - computedLeft / duration) * 100))
+    : row.hero_progress_pct ?? null;
   return {
     watering,
-    stale: Number.isFinite(ageSec) && ageSec > 90,
+    stale: isControllerStale(watering, lastPollAt, Number.isFinite(ageSec) ? ageSec : null),
     onChannels,
     heroState: row.hero_state || null,
     heroChannel: row.hero_channel || null,
     heroZone: row.hero_zone || null,
-    minutesLeft: row.hero_minutes_left ?? null,
-    durationMin: row.hero_duration_min ?? null,
-    progressPct: row.hero_progress_pct ?? null,
-    startedAt: row.hero_started_at || null,
+    minutesLeft: computedLeft ?? row.hero_minutes_left ?? null,
+    durationMin,
+    progressPct,
+    startedAt,
     runningValvesCount: Number(row.running_valves_count) || onChannels.length,
     lastStoppedChannel: row.last_stopped_channel || null,
     lastStopReason: row.last_stop_reason || null,
@@ -108,6 +154,8 @@ function liveFromRow(row: Record<string, unknown> | null) {
     updatedAtIst: row.updated_at_ist || null,
     clockTime: row.clock_time || null,
     lastPollAgeSec: row.last_poll_age_sec ?? null,
+    lastPollAt,
+    updatedEpoch: updatedEpoch > 0 ? updatedEpoch : null,
     ageSec: Number.isFinite(ageSec) ? ageSec : null,
     history: [] as ReturnType<typeof historyFromRow>[],
   };
@@ -129,6 +177,62 @@ Deno.serve(async (req) => {
       configured: false,
       error: 'Set TURSO_DATABASE_URL and TURSO_AUTH_TOKEN on the Edge Function (same values as TreeESP32Controller).',
     });
+  }
+
+  let lastPollAt: string | null = null;
+  const farmId = Number(new URL(req.url).searchParams.get('farm_id'));
+  const supabaseUrl = Deno.env.get('SUPABASE_URL') || '';
+  const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
+  const anonKey = Deno.env.get('SUPABASE_ANON_KEY') || '';
+  if (Number.isFinite(farmId) && farmId > 0 && supabaseUrl && serviceKey) {
+    try {
+      const authHeader = req.headers.get('Authorization') ?? '';
+      if (anonKey && authHeader) {
+        const userClient = createClient(supabaseUrl, anonKey, {
+          global: { headers: { Authorization: authHeader } },
+        });
+        const { data: farmRow } = await userClient
+          .from('farms')
+          .select('id')
+          .eq('id', farmId)
+          .maybeSingle();
+        if (farmRow) {
+          const admin = createClient(supabaseUrl, serviceKey);
+          let { data: keyRows, error: keyError } = await admin
+            .from('farm_ingest_keys')
+            .select('last_poll_at, last_used_at')
+            .eq('farm_id', farmId)
+            .is('revoked_at', null);
+          if (keyError) {
+            const fallback = await admin
+              .from('farm_ingest_keys')
+              .select('last_used_at')
+              .eq('farm_id', farmId)
+              .is('revoked_at', null);
+            keyRows = fallback.data;
+            keyError = fallback.error;
+          }
+          if (!keyError && keyRows?.length) {
+            const pollAt = keyRows
+              .map((row) => row.last_poll_at)
+              .filter(Boolean)
+              .map((value) => new Date(String(value)).getTime())
+              .filter((ms) => Number.isFinite(ms));
+            const usedAt = keyRows
+              .map((row) => row.last_used_at)
+              .filter(Boolean)
+              .map((value) => new Date(String(value)).getTime())
+              .filter((ms) => Number.isFinite(ms));
+            const times = pollAt.length ? pollAt : usedAt;
+            if (times.length) {
+              lastPollAt = new Date(Math.max(...times)).toISOString();
+            }
+          }
+        }
+      }
+    } catch {
+      lastPollAt = null;
+    }
   }
 
   const url = pipelineUrl(tursoUrl);
@@ -166,7 +270,7 @@ Deno.serve(async (req) => {
       }, 502);
     }
     const execs = executeResults(payload);
-    const live = liveFromRow(objectsFromResult(execs[0])[0] || null);
+    const live = liveFromRow(objectsFromResult(execs[0])[0] || null, lastPollAt);
     if (live) {
       live.history = objectsFromResult(execs[1]).map(historyFromRow);
     }
