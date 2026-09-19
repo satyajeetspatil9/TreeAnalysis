@@ -794,7 +794,7 @@ function IrrigationDashboardPage() {
               {controllerLive?.onChannels && (
                 <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75, mb: 1.5 }}>
                   {['Y0', 'Y1', 'Y2', 'Y3', 'Y4', 'Y5', 'Y6', 'Y7'].map((code) => {
-                    const on = controllerLive.onChannels.includes(code);
+                    const on = hardwareLive && (controllerLive.onChannels || []).includes(code);
                     return (
                       <Chip
                         key={code}
@@ -890,11 +890,9 @@ function IrrigationDashboardPage() {
                   <MetricTile
                     label="Device"
                     value={
-                      (controllerLive?.onChannels || []).length
+                      hardwareLive && (controllerLive?.onChannels || []).length
                         ? controllerLive.onChannels.join(', ')
-                        : (liveRow?.status?.device_code
-                          || controlRow?.status?.device_code
-                          || '—')
+                        : '—'
                     }
                   />
                 </Grid>
